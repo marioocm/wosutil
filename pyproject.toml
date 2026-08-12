@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wosutil"
+version = "1.0.0"
+description = "Python automation tool for Whiteout Survival using Android emulators (MuMu, BlueStacks, LDPlayer)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+dependencies = [
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "typing-extensions>=4.0.0",
+    "psutil>=5.9.0",
+    "pyperclip>=1.8.0",
+    "pytesseract>=0.3.10"
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.11.0",
+    "mypy>=1.15.0",
+    "pytest>=7.0.0",
+    "pyinstaller>=6.15.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[project.scripts]
+wosutil = "wosutil.gui.gui_main:run_gui"
+template-creator = "wosutil.template_creator:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 200
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "D"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+warn_unused_configs = true
+disable_error_code = "assignment"
+
+[[tool.mypy.overrides]]
+module = "PIL.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "pytesseract"
+ignore_errors = true
+
+[tool.ruff.format]
+quote-style = "double"
