@@ -49,7 +49,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "D"]
 convention = "google"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.12"
 ignore_missing_imports = true
 warn_unused_configs = true
 disable_error_code = "assignment"
