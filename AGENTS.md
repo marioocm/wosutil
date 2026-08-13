@@ -32,3 +32,36 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - Full check (required after changes): run all three above
 - Build: `python -m build`
 - Build exe: `.\scripts\build.ps1` (needs 7-Zip; produces `dist\WosUtil.exe` with bundled Tesseract)
+
+## Git workflow
+The project follows GitHub Flow: `main` is always stable and ready to use; all work happens on short-lived branches merged via Pull Requests (squash merge, branch deleted after merge).
+
+### Branch naming
+Prefix branches by change type:
+- `feat/` — new functionality
+- `fix/` — bug fixes
+- `docs/` — documentation only (AGENTS.md, README, comments)
+- `refactor/` — code changes that add no feature and fix no bug
+- `test/` — tests only
+- `ci/` — CI/CD, GitHub Actions, build tooling
+
+### Commit message convention (Conventional Commits)
+Format: `<type>(<scope optional>): <short description in imperative mood>` (first line ≤ 72 chars, no trailing period).
+
+Types: `feat`, `fix`, `docs`, `refactor`, `style`, `test`, `chore`, `ci`.
+
+Rules:
+- Always write the description in English, in imperative mood ("add X", not "added X" or "X added").
+- Keep commits atomic: one logical change per commit; split unrelated changes (e.g. `fix:` + `style:`) into separate commits.
+- Add a body (blank line after header) only when the "why" matters; never restate the "how".
+- Reference issues in the footer when applicable (`Closes #123`).
+
+### Process
+1. Before starting, update `main`: `git checkout main && git pull origin main`.
+2. Create the branch: `git checkout -b <type>/<short-description>` (e.g. `feat/export-json`).
+3. Commit in small increments using the conventions above.
+4. Push the branch and open a Pull Request (even for solo work: it runs CI checks and forces a self-review of the diff).
+5. Merge via squash, then delete the remote and local branches.
+
+### CI
+`.github/workflows/ci.yml` runs ruff, mypy and pytest on every push/PR. Agents must ensure checks pass before pushing; never merge a PR with failing checks.
