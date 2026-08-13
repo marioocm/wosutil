@@ -350,6 +350,7 @@ class MultiInstanceToolController:
                 # Opening phase (emulator start, ADB, game launch): the GUI shows
                 # "Opening..." until the game is ready to run tasks.
                 pm.opening_state = True
+
                 # Use retry operation for emulator startup
                 def start_emulator():
                     running = self.multi_instance_manager._is_instance_running(index)

@@ -524,7 +524,7 @@ def _glyph_iou(a: np.ndarray, b: np.ndarray) -> float:
     """Intersection-over-union of two normalized binary glyphs."""
     inter = np.logical_and(a > 128, b > 128).sum()
     union = np.logical_or(a > 128, b > 128).sum()
-    return inter / max(1, union)
+    return inter / max(1, int(union))
 
 
 def _middle_fill_ratio(cell: np.ndarray, region: str) -> float:
@@ -537,7 +537,7 @@ def _middle_fill_ratio(cell: np.ndarray, region: str) -> float:
     band = mask[int(h * 0.35) : int(h * 0.65), :]
     total = band.sum()
     side = band[:, : max(1, int(w * 0.3))] if region == "left" else band[:, -max(1, int(w * 0.3)) :]
-    return side.sum() / max(1, total)
+    return side.sum() / max(1, int(total))
 
 
 def _classify_native_glyph(norm: np.ndarray) -> Optional[str]:

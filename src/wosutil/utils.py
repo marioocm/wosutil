@@ -248,7 +248,7 @@ def run_process_robust(command: list, timeout: int = 30):
     Returns:
         subprocess.CompletedProcess or None if the command timed out.
     """
-    creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
             process = subprocess.Popen(
