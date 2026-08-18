@@ -110,12 +110,6 @@ TEMPLATE_PATHS = {
     # Heroes
     "hero_recruit_screen": os.path.join(TEMPLATES_DIR, "city", "heroes", "recruit", "hero_recruit_screen.png"),
     "free_hero_chest": os.path.join(TEMPLATES_DIR, "city", "heroes", "recruit", "free_hero_chest.png"),
-    # Side menu
-    "sidemenu_island": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_island.png"),
-    "sidemenu_research": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_research.png"),
-    "sidemenu_tundra_trek": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_tundra_trek.png"),
-    "sidemenu_pet_adventure": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_pet_adventure.png"),
-    "sidemenu_infantry": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_infantry.png"),
     # Island
     "life_essence": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "island", "life_essence.png"),
     # Train camp
@@ -124,7 +118,6 @@ TEMPLATE_PATHS = {
     "train_troop_promote": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "train_camp", "train_troop_promote.png"),
     # Tundra trek
     "tundra_trek_free_supplies": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "tundra_trek", "tundra_trek_free_supplies.png"),
-    "tundra_trek_idle_button": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "tundra_trek", "tundra_trek_idle_button.png"),
     "tundra_trek_idle_end_button": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "tundra_trek", "tundra_trek_idle_end_button.png"),
     # Profile
     "storehouse_claim_stamina": os.path.join(TEMPLATES_DIR, "city", "profile", "storehouse_claim_stamina.png"),
@@ -207,6 +200,8 @@ ROI = {
     "city": (614, 1178, 70, 53),
     "world": (627, 1175, 46, 55),
     "tech_thumb": (58, 322, 510, 958),
+    "sidemenu": (0, 173, 484, 759),
+    "shop_tabs": (0, 1195, 719, 85),
     "sidemenu_icons": (17, 342, 58, 517),
     "bottom_right_side_icons": (589, 673, 129, 431),
     "island_life_essence": (0, 63, 633, 1041),
@@ -223,6 +218,7 @@ ROI = {
     "kill_beast_timer": (501, 1138, 118, 29),
     "send_march_screen": (0, 0, 236, 91),
     "tundra_trek_supplies_timer": (520, 587, 112, 33),
+    "tundra_trek_idle": (526, 1126, 194, 154),
     "pet_adventure_screen": (0, 0, 595, 80),
     "pet_skill_screen": (354, 0, 364, 231),
     "pet_skill_buttons": (0, 163, 717, 651),

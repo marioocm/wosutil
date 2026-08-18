@@ -345,8 +345,50 @@ def click_on(coordinate_name, instance_index, delay=CLICK_DELAY):
         return False
 
 
-def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index):
+def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index, steps=8):
+    """Scrolls while keeping the finger pressed at the end point.
+
+    ``adb input swipe`` always lifts the finger at the end, so the list keeps
+    gliding (fling) after release. This helper sends a continuous gesture with
+    ``input motionevent`` (DOWN -> several MOVEs -> hold -> UP): the finger
+    reaches the end, stays still for ``hold_end_ms`` and only then lifts, which
+    makes the release velocity zero and stops the scroll exactly where expected.
+
+    On Android versions without ``motionevent`` the command fails and a slow
+    swipe followed by a press at the end point is used as a fallback.
+
+    Args:
+        start_x (int): Starting X coordinate.
+        start_y (int): Starting Y coordinate.
+        end_x (int): Ending X coordinate.
+        end_y (int): Ending Y coordinate.
+        duration_ms (int): Approximate duration of the scroll in milliseconds.
+        hold_end_ms (int): Milliseconds the finger stays pressed at the end point.
+        instance_index (int): Emulator instance index.
+        steps (int): Number of intermediate movement events.
+    """
+    down = ["shell", "input", "motionevent", "DOWN", str(start_x), str(start_y)]
+    result = execute_adb_command(down, instance_index)
+    if result is None or result.returncode != 0:
+        log_message("input motionevent not supported, falling back to swipe + press at the end point.", level="warning")
+        execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms + hold_end_ms)], instance_index)
+        execute_adb_command(["shell", "input", "swipe", str(end_x), str(end_y), str(end_x), str(end_y), str(hold_end_ms)], instance_index)
+        return
+    for i in range(1, steps + 1):
+        mx = start_x + (end_x - start_x) * i // steps
+        my = start_y + (end_y - start_y) * i // steps
+        execute_adb_command(["shell", "input", "motionevent", "MOVE", str(mx), str(my)], instance_index)
+        time.sleep(duration_ms / steps / 1000.0)
+    time.sleep(hold_end_ms / 1000.0)
+    execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
+
+
+def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, hold_end_ms=0):
     """Performs a scroll gesture on the emulator screen.
+
+    When ``hold_end_ms`` is greater than zero the finger is kept still at the
+    end point before lifting, which stops the scrolling momentum instead of
+    letting the list keep gliding after the finger is released.
 
     Args:
         start_x (int): Starting X coordinate.
@@ -355,8 +397,12 @@ def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index):
         end_y (int): Ending Y coordinate.
         duration_ms (int): Duration of the scroll in milliseconds.
         instance_index (int): Emulator instance index.
+        hold_end_ms (int): Extra milliseconds to hold the finger at the end point (0 to skip).
     """
     log_message(f"Performing scroll from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration_ms}ms", level="info")
+    if hold_end_ms > 0:
+        _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index)
+        return
     execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms)], instance_index)
 
 

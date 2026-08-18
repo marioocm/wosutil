@@ -16,8 +16,13 @@ from wosutil.tool.tasks.task_helpers import (
     KILL_BEAST_MARCH_SCROLL_START,
     click_first_found_template,
     click_on_template,
+    click_on_text,
     ensure_hero_recruit_screen,
     go_hero_recruit_screen,
+    go_pet_adventure,
+    go_sidemenu_city,
+    go_sidemenu_daily,
+    go_tundra_trek,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
     kill_beast,
@@ -258,6 +263,119 @@ class TestGoHeroRecruitScreen(unittest.TestCase):
         self.click_on.assert_not_called()
 
 
+class TestGoSidemenuTab(unittest.TestCase):
+    """Test cases for the side menu tab selectors."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_sidemenu"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.go_sidemenu, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu.return_value = True
+        self.get_roi.return_value = (0, 173, 484, 759)
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_go_sidemenu_city_clicks_city_tab(self):
+        """The City tab selector opens the side menu and clicks 'City'."""
+        self.assertTrue(go_sidemenu_city(0))
+        self.go_sidemenu.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("City", 0, roi=(0, 173, 484, 759), delay=1.0)
+
+    def test_go_sidemenu_daily_clicks_daily_tab(self):
+        """The Daily tab selector opens the side menu and clicks 'Daily'."""
+        self.assertTrue(go_sidemenu_daily(0))
+        self.go_sidemenu.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("Daily", 0, roi=(0, 173, 484, 759), delay=1.0)
+
+    def test_returns_false_when_side_menu_not_opened(self):
+        """The selectors fail when the side menu cannot be opened."""
+        self.go_sidemenu.return_value = False
+        self.assertFalse(go_sidemenu_city(0))
+        self.assertFalse(go_sidemenu_daily(0))
+        self.click_text.assert_not_called()
+
+    def test_returns_false_when_tab_missing(self):
+        """The selectors fail when the tab text is not found."""
+        self.click_text.return_value = False
+        self.assertFalse(go_sidemenu_city(0))
+        self.assertFalse(go_sidemenu_daily(0))
+
+
+class TestGoTundraTrek(unittest.TestCase):
+    """Test cases for navigating to the tundra trek screen."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu_daily.return_value = True
+        self.get_roi.return_value = (0, 173, 484, 759)
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_navigates_through_daily_tab_and_entry(self):
+        """The Daily tab is opened and the Tundra Trek entry is clicked by text."""
+        self.assertTrue(go_tundra_trek(0))
+        self.go_sidemenu_daily.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("Tundra Trek", 0, roi=(0, 173, 484, 759), delay=1.0)
+
+    def test_returns_false_when_daily_tab_not_reached(self):
+        """Navigation fails when the Daily tab cannot be reached."""
+        self.go_sidemenu_daily.return_value = False
+        self.assertFalse(go_tundra_trek(0))
+        self.click_text.assert_not_called()
+
+    def test_returns_false_when_entry_missing(self):
+        """Navigation fails when the Tundra Trek entry is not found."""
+        self.click_text.return_value = False
+        self.assertFalse(go_tundra_trek(0))
+
+
+class TestGoPetAdventure(unittest.TestCase):
+    """Test cases for navigating to the pet adventure screen."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu_daily.return_value = True
+        self.get_roi.return_value = (0, 173, 484, 759)
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_navigates_through_daily_tab_and_pet_entry(self):
+        """The Daily tab is opened and the lowest Pet Adventure entry is clicked by text."""
+        self.assertTrue(go_pet_adventure(0))
+        self.go_sidemenu_daily.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("Pet Adventure", 0, roi=(0, 173, 484, 759), delay=1.0, last=True)
+
+    def test_returns_false_when_daily_tab_not_reached(self):
+        """Navigation fails when the Daily tab cannot be reached."""
+        self.go_sidemenu_daily.return_value = False
+        self.assertFalse(go_pet_adventure(0))
+        self.click_text.assert_not_called()
+
+    def test_returns_false_when_pet_entry_missing(self):
+        """Navigation fails when the Pet Adventure entry is not found."""
+        self.click_text.return_value = False
+        self.assertFalse(go_pet_adventure(0))
+
+
 class TestClickOnTemplate(unittest.TestCase):
     """Test cases for the generic find and click template helper."""
 
@@ -355,6 +473,63 @@ class TestClickFirstFoundTemplate(unittest.TestCase):
         self.take_screenshot.return_value = None
         self.assertIsNone(click_first_found_template(0, ["a", "b"]))
         self.click_template.assert_not_called()
+
+
+class TestClickOnText(unittest.TestCase):
+    """Test cases for the text-based find and click helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.find_text_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.take_screenshot, self.delete_temp_screenshot, self.find_center, self.click_coords = self.mocks
+        self.take_screenshot.return_value = "/tmp/shot.png"
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_clicks_text_center(self):
+        """The center of the found text is clicked."""
+        self.find_center.return_value = (True, (50, 60))
+        self.assertTrue(click_on_text("Tundra Trek", 0, delay=1.5))
+        self.find_center.assert_called_once_with("/tmp/shot.png", "Tundra Trek", roi=None, instance_index=0, debug_label="click_text_Tundra Trek", last=False)
+        self.click_coords.assert_called_once_with(50, 60, 0, delay=1.5)
+
+    def test_clicks_lowest_occurrence_when_last(self):
+        """The last flag asks for the lowest occurrence of the text."""
+        self.find_center.return_value = (True, (10, 20))
+        self.assertTrue(click_on_text("Pet Adventure", 0, last=True))
+        self.find_center.assert_called_once_with("/tmp/shot.png", "Pet Adventure", roi=None, instance_index=0, debug_label="click_text_Pet Adventure", last=True)
+        self.click_coords.assert_called_once_with(10, 20, 0, delay=CLICK_DELAY)
+
+    def test_returns_false_when_not_found(self):
+        """No click happens when the text is not found."""
+        self.find_center.return_value = (False, None)
+        self.assertFalse(click_on_text("Missing", 0))
+        self.click_coords.assert_not_called()
+
+    def test_returns_false_without_screenshot(self):
+        """No click happens when a screenshot cannot be taken."""
+        self.take_screenshot.return_value = None
+        self.assertFalse(click_on_text("City", 0))
+        self.find_center.assert_not_called()
+
+    def test_reuses_provided_screenshot(self):
+        """A provided screenshot is reused and not deleted."""
+        self.find_center.return_value = (True, (10, 20))
+        self.assertTrue(click_on_text("City", 0, screenshot_path="/tmp/existing.png"))
+        self.take_screenshot.assert_not_called()
+        self.delete_temp_screenshot.assert_not_called()
+        self.click_coords.assert_called_once_with(10, 20, 0, delay=CLICK_DELAY)
+
+    def test_deletes_owned_screenshot(self):
+        """The screenshot captured by the helper is deleted afterwards."""
+        self.find_center.return_value = (True, (10, 20))
+        self.assertTrue(click_on_text("City", 0))
+        self.delete_temp_screenshot.assert_called_once_with("/tmp/shot.png")
 
 
 class TestIsGameOnScreen(unittest.TestCase):

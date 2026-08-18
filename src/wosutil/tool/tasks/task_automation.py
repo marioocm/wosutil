@@ -11,6 +11,7 @@ from wosutil.emulator.emulator_manager import (
     delete_temp_screenshot,
     long_press_on_coordinates,
     press_android_back_button,
+    scroll_screen,
     take_screenshot,
 )
 from wosutil.emulator.image_utils import (
@@ -28,6 +29,7 @@ from wosutil.tool.tasks.task_helpers import (
     _train_troop_camp,
     click_first_found_template,
     click_on_template,
+    click_on_text,
     detect_pet_adventure_chests,
     do_intel_exploration,
     end_tundra_trek_idle_if_active,
@@ -40,8 +42,8 @@ from wosutil.tool.tasks.task_helpers import (
     go_pet_adventure,
     go_pet_skill,
     go_shop,
-    go_sidemenu,
-    go_sidemenu_scrolled,
+    go_sidemenu_city,
+    go_sidemenu_daily,
     go_tundra_trek,
     is_game_on_intel_screen,
     is_game_on_pet_adventure_screen,
@@ -159,11 +161,14 @@ def claim_island_idle(instance_index):
         bool: True if successful, False otherwise.
     """
     log_message("Attempting to claim island idle income...", level="info")
-    if not go_sidemenu_scrolled(instance_index):
+    if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_template("sidemenu_island", instance_index, roi=get_roi("sidemenu_icons"), delay=4):
-        log_message("Island icon NOT found in side menu. Aborting.", level="warning")
+    scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=500)
+    time.sleep(1.0)
+
+    if not click_on_text("Tree", instance_index, roi=get_roi("sidemenu"), delay=4):
+        log_message("Tree entry NOT found in side menu. Aborting.", level="warning")
         return False
 
     click_on_coordinates(100, 70, instance_index)
@@ -432,7 +437,7 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
     """Claims resources and VIP from the nomadic shop.
 
     1. Ensures the main city screen is active.
-    2. Navigates to the shop using go_shop.
+    2. Navigates to the shop using go_shop and clicks the Nomadic tab.
     3. Searches for nomadic shop resources and VIP.
     4. Clicks on found resources and VIP.
     5. Continues searching until no more resources are found.
@@ -450,6 +455,10 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
     """
     log_message("Attempting to claim nomadic shop resources and VIP...", level="info")
     if not go_shop(instance_index):
+        return False, 10 * 60 * 60
+
+    if not click_on_text("Nomadic", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
+        log_message("Nomadic shop tab NOT found. Aborting.", level="warning")
         return False, 10 * 60 * 60
 
     # Define the resources to search for
@@ -516,7 +525,7 @@ def claim_mystery_shop(instance_index):
     """Claims redeemable items from the mystery shop.
 
     1. Ensures the main city screen is active.
-    2. Navigates to the shop using go_shop and opens the mystery shop tab.
+    2. Navigates to the shop using go_shop and clicks the Mystery tab.
     3. Searches the items ROI for redeemable objects (free items always,
        widgets depending on the user preference) and clicks them.
     4. Continues searching until no more items are found.
@@ -535,7 +544,9 @@ def claim_mystery_shop(instance_index):
     if not go_shop(instance_index):
         return False, 10 * 60 * 60
 
-    click_on_coordinates(302, 1247, instance_index, delay=1.0)
+    if not click_on_text("Mystery", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
+        log_message("Mystery shop tab NOT found. Aborting.", level="warning")
+        return False, 10 * 60 * 60
 
     items_roi = (0, 375, 710, 817)
     refresh_roi = (403, 146, 317, 343)
@@ -672,7 +683,7 @@ def start_tundra_trek_idle(instance_index):
 
     1. Ensures the main city screen is active.
     2. Navigates to the tundra trek via the side menu.
-    3. Searches for the 'tundra_trek_idle_button' template and clicks it.
+    3. Searches for the 'Idle' text in the idle button ROI and clicks it.
 
     Returns:
         bool: True if the idle button was clicked, False otherwise.
@@ -683,7 +694,7 @@ def start_tundra_trek_idle(instance_index):
 
     end_tundra_trek_idle_if_active(instance_index)
 
-    if not click_on_template("tundra_trek_idle_button", instance_index):
+    if not click_on_text("Idle", instance_index, roi=get_roi("tundra_trek_idle")):
         log_message("Tundra trek idle button NOT found.", level="warning")
         return False
 
@@ -937,7 +948,8 @@ def train_troops(instance_index):
     """Trains and promotes troops in the 3 troop camps.
 
     1. Ensures the main city screen and opens the side menu.
-    2. Clicks the infantry camp icon and opens the train troop screen.
+    2. Selects the City tab and clicks the Infantry entry by text, then opens
+       the train troop screen.
     3. Runs the camp flow for the infantry (default) camp, then switches to the
        other two camps using their bottom tabs.
     4. Reschedules with the shortest readable training timer, or 6 hours when
@@ -946,11 +958,11 @@ def train_troops(instance_index):
     Returns (True/False, reschedule_seconds).
     """
     log_message("Attempting to promote or train troops...", level="info")
-    if not go_sidemenu(instance_index):
+    if not go_sidemenu_city(instance_index):
         return False, 6 * 60 * 60
 
-    if not click_on_template("sidemenu_infantry", instance_index, roi=get_roi("sidemenu_icons"), delay=3):
-        log_message("Infantry camp icon NOT found in side menu. Aborting.", level="warning")
+    if not click_on_text("Infantry", instance_index, roi=get_roi("sidemenu"), delay=3):
+        log_message("Infantry camp entry NOT found in side menu. Aborting.", level="warning")
         return False, 6 * 60 * 60
 
     for _ in range(4):

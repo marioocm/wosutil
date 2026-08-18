@@ -35,6 +35,7 @@ from wosutil.emulator.image_utils import (
     find_multiple_templates,
     find_template_center_on_screen,
     find_template_on_screen,
+    find_text_center_on_screen,
     read_screen_time,
 )
 from wosutil.preferences import get_kill_beast_march_assignment
@@ -238,6 +239,48 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
             delete_temp_screenshot(screenshot_path)
 
 
+def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False):
+    """Takes a screenshot and clicks the center of the given text if found.
+
+    Text-based counterpart of :func:`click_on_template` for menus whose
+    entries kept their labels but moved around, e.g. the side menu.
+
+    Args:
+        text (str): Text to search for and click, e.g. 'Tundra Trek'.
+        instance_index (int): Emulator instance index.
+        roi (tuple, optional): Region of interest (x, y, w, h).
+        delay (float): Delay after the click.
+        screenshot_path (str, optional): Reuse an already taken screenshot
+            instead of capturing a new one. Only valid when the caller can
+            guarantee no screen change has happened since the capture (that is,
+            no click between captures).
+        last (bool): When True click the lowest occurrence of the text instead
+            of the first one.
+
+    Returns:
+        bool: True if the text was found and clicked, False otherwise.
+    """
+    owned_screenshot = screenshot_path is None
+    if screenshot_path is None:
+        screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        log_message(f"Could not get a screenshot to click on '{text}'.", level="error")
+        return False
+
+    try:
+        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi, instance_index=instance_index, debug_label=f"click_text_{text}", last=last)
+        if not found or not center:
+            return False
+
+        cx, cy = center
+        click_on_coordinates(cx, cy, instance_index, delay=delay)
+        log_message(f"Text '{text}' found, clicking at ({cx}, {cy}).", level="success")
+        return True
+    finally:
+        if owned_screenshot:
+            delete_temp_screenshot(screenshot_path)
+
+
 def is_game_on_screen(instance_index, template_name, roi_name=None, screenshot_path=None, threshold=SCREEN_CHECK_THRESHOLD):
     """Checks if the game is on the screen identified by a template and ROI.
 
@@ -381,19 +424,37 @@ def go_sidemenu(instance_index):
     return True
 
 
-def go_sidemenu_scrolled(instance_index):
-    """Opens the side menu and scrolls it down to reveal the lower icons.
+def go_sidemenu_city(instance_index):
+    """Opens the side menu and selects the City tab.
 
     Args:
         instance_index (int): Emulator instance index.
 
     Returns:
-        bool: True if the side menu was opened, False otherwise.
+        bool: True if the side menu opened and the City tab was clicked, False otherwise.
     """
     if not go_sidemenu(instance_index):
         return False
-    scroll_screen(13, 500, 13, 0, 200, instance_index)
-    time.sleep(1.0)
+    if not click_on_text("City", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+        log_message("City tab NOT found in side menu. Aborting.", level="warning")
+        return False
+    return True
+
+
+def go_sidemenu_daily(instance_index):
+    """Opens the side menu and selects the Daily tab.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True if the side menu opened and the Daily tab was clicked, False otherwise.
+    """
+    if not go_sidemenu(instance_index):
+        return False
+    if not click_on_text("Daily", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+        log_message("Daily tab NOT found in side menu. Aborting.", level="warning")
+        return False
     return True
 
 
@@ -422,37 +483,37 @@ def go_cityworld(instance_index):
 
 
 def go_tundra_trek(instance_index):
-    """Navigates to the tundra trek screen by opening the side menu, scrolling down, and clicking the tundra trek icon.
+    """Navigates to the tundra trek screen by opening the side menu on the Daily tab and clicking the tundra trek entry by text.
 
     Args:
         instance_index (int): Emulator instance index.
 
     Returns:
-        bool: True if the tundra trek icon was found and clicked, False otherwise.
+        bool: True if the tundra trek entry was found and clicked, False otherwise.
     """
-    if not go_sidemenu_scrolled(instance_index):
+    if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_template("sidemenu_tundra_trek", instance_index, roi=get_roi("sidemenu_icons"), delay=1.0):
-        log_message("Tundra trek icon NOT found in side menu. Aborting.", level="warning")
+    if not click_on_text("Tundra Trek", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+        log_message("Tundra trek entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
 
 
 def go_pet_adventure(instance_index):
-    """Navigates to the pet adventure screen by opening the side menu, scrolling down, and clicking the pet adventure icon.
+    """Navigates to the pet adventure screen by opening the side menu on the Daily tab and clicking the lowest Pet Adventure entry by text.
 
     Args:
         instance_index (int): Emulator instance index.
 
     Returns:
-        bool: True if the pet adventure icon was found and clicked, False otherwise.
+        bool: True if the Pet Adventure entry was found and clicked, False otherwise.
     """
-    if not go_sidemenu_scrolled(instance_index):
+    if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_template("sidemenu_pet_adventure", instance_index, roi=get_roi("sidemenu_icons"), delay=1.0):
-        log_message("Pet adventure icon NOT found in side menu. Aborting.", level="warning")
+    if not click_on_text("Pet Adventure", instance_index, roi=get_roi("sidemenu"), delay=1.0, last=True):
+        log_message("Pet Adventure entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
 

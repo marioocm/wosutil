@@ -93,16 +93,18 @@ class TestTrainTroopsTask(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks for the task-level tests."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_automation.go_sidemenu"),
+            patch("wosutil.tool.tasks.task_automation.go_sidemenu_city"),
             patch("wosutil.tool.tasks.task_automation.click_on_coordinates"),
             patch("wosutil.tool.tasks.task_automation.click_on_template"),
+            patch("wosutil.tool.tasks.task_automation.click_on_text"),
             patch("wosutil.tool.tasks.task_automation.press_android_back_button"),
             patch("wosutil.tool.tasks.task_automation._train_troop_camp"),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.go_sidemenu, self.click_coords, self.click_template, self.back_press, self.train_camp = self.mocks
-        self.go_sidemenu.return_value = True
+        self.go_sidemenu_city, self.click_coords, self.click_template, self.click_text, self.back_press, self.train_camp = self.mocks
+        self.go_sidemenu_city.return_value = True
         self.click_template.return_value = True
+        self.click_text.return_value = True
         self.train_camp.return_value = None
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
@@ -110,6 +112,8 @@ class TestTrainTroopsTask(unittest.TestCase):
         """The shortest readable training timer drives the reschedule, ignoring None."""
         self.train_camp.side_effect = [720, None, 360]
         self.assertEqual(train_troops(0), (True, 360))
+        self.go_sidemenu_city.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("Infantry", 0, roi=(0, 173, 484, 759), delay=3)
         self.assertEqual(self.train_camp.call_count, 3)
         self.click_coords.assert_any_call(362, 1238, 0, delay=1.0)
         self.click_coords.assert_any_call(586, 1238, 0, delay=1.0)
@@ -120,15 +124,22 @@ class TestTrainTroopsTask(unittest.TestCase):
         self.assertEqual(train_troops(0), (True, DEFAULT))
 
     def test_fails_when_side_menu_not_opened(self):
-        """The task fails when the side menu cannot be opened."""
-        self.go_sidemenu.return_value = False
+        """The task fails when the City tab cannot be reached."""
+        self.go_sidemenu_city.return_value = False
         self.assertEqual(train_troops(0), (False, DEFAULT))
-        self.click_template.assert_not_called()
+        self.click_text.assert_not_called()
 
-    def test_fails_when_infantry_icon_missing(self):
-        """The task fails when the infantry camp icon is not in the side menu."""
+    def test_fails_when_infantry_entry_missing(self):
+        """The task fails when the Infantry entry is not found in the side menu."""
+        self.click_text.return_value = False
+        self.assertEqual(train_troops(0), (False, DEFAULT))
+        self.train_camp.assert_not_called()
+
+    def test_fails_when_train_button_missing(self):
+        """The task fails when the train troop button is not on the screen."""
         self.click_template.return_value = False
         self.assertEqual(train_troops(0), (False, DEFAULT))
+        self.back_press.assert_called_once()
 
 
 if __name__ == "__main__":
