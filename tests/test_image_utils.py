@@ -401,6 +401,17 @@ class TestTextOcr(unittest.TestCase):
                 self.assertTrue(found, f"'{target}' should be found in the City tab sample")
                 self.assertIsNotNone(box)
 
+    def test_find_text_picks_last_occurrence_when_duplicated(self):
+        """A duplicated label returns the lowest occurrence with last=True."""
+        found_first, box_first = find_text_on_image(self.image, "Pet Adventure")
+        found_last, box_last = find_text_on_image(self.image, "Pet Adventure", last=True)
+        self.assertTrue(found_first)
+        self.assertTrue(found_last)
+        self.assertIsNotNone(box_first)
+        self.assertIsNotNone(box_last)
+        if box_first is not None and box_last is not None:  # Type guard for linter
+            self.assertGreater(box_last[1], box_first[1])
+
     def test_text_not_found(self):
         """A label that is not on the screen must not be found."""
         found, box = find_text_on_image(self.image, "Nonexistent Entry")

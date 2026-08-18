@@ -359,10 +359,10 @@ class TestGoPetAdventure(unittest.TestCase):
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
     def test_navigates_through_daily_tab_and_pet_entry(self):
-        """The Daily tab is opened and the Pet Adventure entry is clicked by text."""
+        """The Daily tab is opened and the lowest Pet Adventure entry is clicked by text."""
         self.assertTrue(go_pet_adventure(0))
         self.go_sidemenu_daily.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Pet", 0, roi=(0, 173, 484, 759), delay=1.0)
+        self.click_text.assert_called_once_with("Pet Adventure", 0, roi=(0, 173, 484, 759), delay=1.0, last=True)
 
     def test_returns_false_when_daily_tab_not_reached(self):
         """Navigation fails when the Daily tab cannot be reached."""
@@ -495,8 +495,15 @@ class TestClickOnText(unittest.TestCase):
         """The center of the found text is clicked."""
         self.find_center.return_value = (True, (50, 60))
         self.assertTrue(click_on_text("Tundra Trek", 0, delay=1.5))
-        self.find_center.assert_called_once_with("/tmp/shot.png", "Tundra Trek", roi=None, instance_index=0, debug_label="click_text_Tundra Trek")
+        self.find_center.assert_called_once_with("/tmp/shot.png", "Tundra Trek", roi=None, instance_index=0, debug_label="click_text_Tundra Trek", last=False)
         self.click_coords.assert_called_once_with(50, 60, 0, delay=1.5)
+
+    def test_clicks_lowest_occurrence_when_last(self):
+        """The last flag asks for the lowest occurrence of the text."""
+        self.find_center.return_value = (True, (10, 20))
+        self.assertTrue(click_on_text("Pet Adventure", 0, last=True))
+        self.find_center.assert_called_once_with("/tmp/shot.png", "Pet Adventure", roi=None, instance_index=0, debug_label="click_text_Pet Adventure", last=True)
+        self.click_coords.assert_called_once_with(10, 20, 0, delay=CLICK_DELAY)
 
     def test_returns_false_when_not_found(self):
         """No click happens when the text is not found."""

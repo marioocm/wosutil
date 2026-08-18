@@ -239,7 +239,7 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
             delete_temp_screenshot(screenshot_path)
 
 
-def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None):
+def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False):
     """Takes a screenshot and clicks the center of the given text if found.
 
     Text-based counterpart of :func:`click_on_template` for menus whose
@@ -254,6 +254,8 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
             instead of capturing a new one. Only valid when the caller can
             guarantee no screen change has happened since the capture (that is,
             no click between captures).
+        last (bool): When True click the lowest occurrence of the text instead
+            of the first one.
 
     Returns:
         bool: True if the text was found and clicked, False otherwise.
@@ -266,7 +268,7 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
         return False
 
     try:
-        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi, instance_index=instance_index, debug_label=f"click_text_{text}")
+        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi, instance_index=instance_index, debug_label=f"click_text_{text}", last=last)
         if not found or not center:
             return False
 
@@ -499,7 +501,7 @@ def go_tundra_trek(instance_index):
 
 
 def go_pet_adventure(instance_index):
-    """Navigates to the pet adventure screen by opening the side menu on the Daily tab and clicking the Pet Adventure entry by text.
+    """Navigates to the pet adventure screen by opening the side menu on the Daily tab and clicking the lowest Pet Adventure entry by text.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -510,7 +512,7 @@ def go_pet_adventure(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_text("Pet", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+    if not click_on_text("Pet Adventure", instance_index, roi=get_roi("sidemenu"), delay=1.0, last=True):
         log_message("Pet Adventure entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True

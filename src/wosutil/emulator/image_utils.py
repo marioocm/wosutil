@@ -919,7 +919,7 @@ def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int
     return [(" ".join(word for word, _ in line), _union_boxes([box for _, box in line])) for line in _ocr_lines(img)]
 
 
-def find_text_on_image(img: Image.Image, target: str) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
+def find_text_on_image(img: Image.Image, target: str, last: bool = False) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
     """Search a piece of text (one or several words) inside an image with OCR.
 
     Words are normalized (lowercased, punctuation stripped) and the target is
@@ -927,9 +927,14 @@ def find_text_on_image(img: Image.Image, target: str) -> Tuple[bool, Optional[Tu
     entries such as 'Tundra Trek' are found even when the line carries extra
     OCR noise around the words.
 
+    When the target appears several times, the topmost occurrence is returned
+    by default; set ``last`` to True to return the lowest one instead (e.g.
+    when a section header and its clickable entry share the same label).
+
     Args:
         img (PIL.Image): Source image containing text.
         target (str): Text to search for, e.g. 'City' or 'Tundra Trek'.
+        last (bool): When True return the lowest occurrence instead of the first.
 
     Returns:
         tuple: (True, (x, y, w, h)) with the matched text position in original
@@ -938,13 +943,18 @@ def find_text_on_image(img: Image.Image, target: str) -> Tuple[bool, Optional[Tu
     target_words = [w for w in (_normalize_word(word) for word in target.split()) if w]
     if not target_words:
         return False, None
+    matches: List[Tuple[int, int, int, int]] = []
     for line in _ocr_lines(img):
         words = [(_normalize_word(word), box) for word, box in line]
         count = len(target_words)
         for i in range(len(words) - count + 1):
             if [w for w, _ in words[i : i + count]] == target_words:
-                return True, _union_boxes([box for _, box in words[i : i + count]])
-    return False, None
+                matches.append(_union_boxes([box for _, box in words[i : i + count]]))
+    if not matches:
+        return False, None
+    if last:
+        return True, max(matches, key=lambda box: box[1])
+    return True, matches[0]
 
 
 def find_text_on_screen(
@@ -953,6 +963,7 @@ def find_text_on_screen(
     roi: Optional[Tuple[int, int, int, int]] = None,
     instance_index: Optional[int] = None,
     debug_label: Optional[str] = None,
+    last: bool = False,
 ) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
     """Search a piece of text inside a screenshot, optionally within an ROI.
 
@@ -969,6 +980,7 @@ def find_text_on_screen(
             the debug captures on failure.
         debug_label (str, optional): Label used to name the debug captures on
             failure.
+        last (bool): When True return the lowest occurrence instead of the first.
 
     Returns:
         tuple: (True, (x, y, w, h)) in full-screen coordinates when found,
@@ -984,7 +996,7 @@ def find_text_on_screen(
             x, y, w, h = roi
             img_bgr = img_bgr[y : y + h, x : x + w]
         img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
-        found, box = find_text_on_image(img, target)
+        found, box = find_text_on_image(img, target, last=last)
         if not found and debug_label is not None and instance_index is not None:
             lines_text = [text for text, _ in read_text_lines_on_image(img)]
             log_message(f"OCR lines while looking for '{target}': {lines_text}", level="debug")
@@ -1004,6 +1016,7 @@ def find_text_center_on_screen(
     roi: Optional[Tuple[int, int, int, int]] = None,
     instance_index: Optional[int] = None,
     debug_label: Optional[str] = None,
+    last: bool = False,
 ) -> Tuple[bool, Optional[Tuple[int, int]]]:
     """Search a piece of text inside a screenshot and returns the center of the match.
 
@@ -1014,7 +1027,7 @@ def find_text_center_on_screen(
     Returns:
         tuple: (True, (cx, cy)) if found, (False, None) if not.
     """
-    found, box = find_text_on_screen(screenshot_path, target, roi=roi, instance_index=instance_index, debug_label=debug_label)
+    found, box = find_text_on_screen(screenshot_path, target, roi=roi, instance_index=instance_index, debug_label=debug_label, last=last)
     if not found or box is None:
         return False, None
     return True, get_box_center(box)
