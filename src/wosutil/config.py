@@ -113,9 +113,7 @@ TEMPLATE_PATHS = {
     # Side menu
     "sidemenu_island": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_island.png"),
     "sidemenu_research": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_research.png"),
-    "sidemenu_tundra_trek": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_tundra_trek.png"),
     "sidemenu_pet_adventure": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_pet_adventure.png"),
-    "sidemenu_infantry": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_infantry.png"),
     # Island
     "life_essence": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "island", "life_essence.png"),
     # Train camp
@@ -124,7 +122,6 @@ TEMPLATE_PATHS = {
     "train_troop_promote": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "train_camp", "train_troop_promote.png"),
     # Tundra trek
     "tundra_trek_free_supplies": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "tundra_trek", "tundra_trek_free_supplies.png"),
-    "tundra_trek_idle_button": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "tundra_trek", "tundra_trek_idle_button.png"),
     "tundra_trek_idle_end_button": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "tundra_trek", "tundra_trek_idle_end_button.png"),
     # Profile
     "storehouse_claim_stamina": os.path.join(TEMPLATES_DIR, "city", "profile", "storehouse_claim_stamina.png"),
@@ -224,6 +221,7 @@ ROI = {
     "kill_beast_timer": (501, 1138, 118, 29),
     "send_march_screen": (0, 0, 236, 91),
     "tundra_trek_supplies_timer": (520, 587, 112, 33),
+    "tundra_trek_idle": (526, 1126, 194, 154),
     "pet_adventure_screen": (0, 0, 595, 80),
     "pet_skill_screen": (354, 0, 364, 231),
     "pet_skill_buttons": (0, 163, 717, 651),

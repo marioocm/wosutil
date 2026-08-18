@@ -673,7 +673,7 @@ def start_tundra_trek_idle(instance_index):
 
     1. Ensures the main city screen is active.
     2. Navigates to the tundra trek via the side menu.
-    3. Searches for the 'tundra_trek_idle_button' template and clicks it.
+    3. Searches for the 'Idle' text in the idle button ROI and clicks it.
 
     Returns:
         bool: True if the idle button was clicked, False otherwise.
@@ -684,7 +684,7 @@ def start_tundra_trek_idle(instance_index):
 
     end_tundra_trek_idle_if_active(instance_index)
 
-    if not click_on_template("tundra_trek_idle_button", instance_index):
+    if not click_on_text("Idle", instance_index, roi=get_roi("tundra_trek_idle")):
         log_message("Tundra trek idle button NOT found.", level="warning")
         return False
 

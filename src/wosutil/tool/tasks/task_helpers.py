@@ -463,19 +463,24 @@ def go_cityworld(instance_index):
 
 
 def go_tundra_trek(instance_index):
-    """Navigates to the tundra trek screen by opening the side menu, scrolling down, and clicking the tundra trek icon.
+    """Navigates to the tundra trek screen by opening the side menu, selecting the Daily tab, and clicking the tundra trek entry by text.
 
     Args:
         instance_index (int): Emulator instance index.
 
     Returns:
-        bool: True if the tundra trek icon was found and clicked, False otherwise.
+        bool: True if the tundra trek entry was found and clicked, False otherwise.
     """
-    if not go_sidemenu_scrolled(instance_index):
+    if not go_sidemenu(instance_index):
         return False
 
-    if not click_on_template("sidemenu_tundra_trek", instance_index, roi=get_roi("sidemenu_icons"), delay=1.0):
-        log_message("Tundra trek icon NOT found in side menu. Aborting.", level="warning")
+    sidemenu_roi = get_roi("sidemenu")
+    if not click_on_text("Daily", instance_index, roi=sidemenu_roi, delay=1.0):
+        log_message("Daily tab NOT found in side menu. Aborting.", level="warning")
+        return False
+
+    if not click_on_text("Tundra Trek", instance_index, roi=sidemenu_roi, delay=1.0):
+        log_message("Tundra trek entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
 

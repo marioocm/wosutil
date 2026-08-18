@@ -19,6 +19,7 @@ from wosutil.tool.tasks.task_helpers import (
     click_on_text,
     ensure_hero_recruit_screen,
     go_hero_recruit_screen,
+    go_tundra_trek,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
     kill_beast,
@@ -257,6 +258,52 @@ class TestGoHeroRecruitScreen(unittest.TestCase):
         self.ensure_city.return_value = False
         self.assertFalse(go_hero_recruit_screen(0))
         self.click_on.assert_not_called()
+
+
+class TestGoTundraTrek(unittest.TestCase):
+    """Test cases for navigating to the tundra trek screen."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_sidemenu"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.go_sidemenu, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu.return_value = True
+        self.get_roi.return_value = (0, 173, 484, 759)
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_navigates_through_daily_tab_and_entry(self):
+        """The Daily tab is selected and the Tundra Trek entry is clicked by text."""
+        self.assertTrue(go_tundra_trek(0))
+        sidemenu_roi = (0, 173, 484, 759)
+        self.click_text.assert_has_calls(
+            [
+                call("Daily", 0, roi=sidemenu_roi, delay=1.0),
+                call("Tundra Trek", 0, roi=sidemenu_roi, delay=1.0),
+            ]
+        )
+
+    def test_returns_false_when_side_menu_not_opened(self):
+        """Navigation fails when the side menu cannot be opened."""
+        self.go_sidemenu.return_value = False
+        self.assertFalse(go_tundra_trek(0))
+        self.click_text.assert_not_called()
+
+    def test_returns_false_when_daily_tab_missing(self):
+        """Navigation fails when the Daily tab is not found."""
+        self.click_text.return_value = False
+        self.assertFalse(go_tundra_trek(0))
+        self.click_text.assert_called_once_with("Daily", 0, roi=(0, 173, 484, 759), delay=1.0)
+
+    def test_returns_false_when_entry_missing(self):
+        """Navigation fails when the Tundra Trek entry is not found."""
+        self.click_text.side_effect = [True, False]
+        self.assertFalse(go_tundra_trek(0))
 
 
 class TestClickOnTemplate(unittest.TestCase):
