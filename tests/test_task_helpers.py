@@ -495,6 +495,7 @@ class TestClickOnText(unittest.TestCase):
         """The center of the found text is clicked."""
         self.find_center.return_value = (True, (50, 60))
         self.assertTrue(click_on_text("Tundra Trek", 0, delay=1.5))
+        self.find_center.assert_called_once_with("/tmp/shot.png", "Tundra Trek", roi=None, instance_index=0, debug_label="click_text_Tundra Trek")
         self.click_coords.assert_called_once_with(50, 60, 0, delay=1.5)
 
     def test_returns_false_when_not_found(self):

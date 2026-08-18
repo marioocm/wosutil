@@ -266,7 +266,7 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
         return False
 
     try:
-        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi)
+        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi, instance_index=instance_index, debug_label=f"click_text_{text}")
         if not found or not center:
             return False
 

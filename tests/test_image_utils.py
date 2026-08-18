@@ -431,6 +431,30 @@ class TestTextOcr(unittest.TestCase):
                 if center is not None:  # Type guard for linter
                     self.assertEqual(center, get_box_center(box))
 
+    def test_find_text_on_screen_saves_debug_images_on_failure(self):
+        """A missing text saves the OCR debug captures when a label and instance are given."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot_path = os.path.join(temp_dir, "shot.png")
+            self.image.save(screenshot_path)
+            with patch("wosutil.emulator.image_utils._save_ocr_debug_images") as save_debug:
+                found, _ = find_text_on_screen(screenshot_path, "Nonexistent Entry", instance_index=1, debug_label="debug_text")
+                self.assertFalse(found)
+                save_debug.assert_called_once()
+                args = save_debug.call_args.args
+                self.assertEqual(args[:2], ("debug_text", 1))
+                self.assertIsNotNone(args[2])
+                self.assertIsNotNone(args[3])
+
+    def test_find_text_on_screen_skips_debug_without_instance(self):
+        """Without an instance index no debug captures are saved."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot_path = os.path.join(temp_dir, "shot.png")
+            self.image.save(screenshot_path)
+            with patch("wosutil.emulator.image_utils._save_ocr_debug_images") as save_debug:
+                found, _ = find_text_on_screen(screenshot_path, "Nonexistent Entry", debug_label="debug_text")
+                self.assertFalse(found)
+                save_debug.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

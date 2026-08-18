@@ -239,7 +239,7 @@ def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlapThresh: f
     return [tuple(boxes_np[i]) for i in pick]
 
 
-def _save_timer_debug_images(
+def _save_ocr_debug_images(
     label: str,
     instance_index: int,
     original_img: Optional[Image.Image],
@@ -251,7 +251,7 @@ def _save_timer_debug_images(
     captures entirely.
 
     Args:
-        label (str): Timer label used to name the files.
+        label (str): Label used to name the files.
         instance_index (int): Emulator instance index, included in the file name.
         original_img (Image or None): Original ROI crop, before preprocessing.
         processed_img (Image or None): Image after filters, as fed to Tesseract.
@@ -267,7 +267,7 @@ def _save_timer_debug_images(
     if processed_img is not None:
         processed_img.save(os.path.join(DEBUG_DIR, f"{label}_inst{instance_index}_{timestamp}_processed.png"))
     log_message(
-        f"Saved timer OCR debug captures to {DEBUG_DIR} for label '{label}' (instance {instance_index}) at {timestamp}.",
+        f"Saved OCR debug captures to {DEBUG_DIR} for label '{label}' (instance {instance_index}) at {timestamp}.",
         level="warning",
     )
 
@@ -344,7 +344,7 @@ def read_screen_time(
                     level="error",
                 )
                 if debug_label:
-                    _save_timer_debug_images(debug_label, instance_index, original_img, processed_img)
+                    _save_ocr_debug_images(debug_label, instance_index, original_img, processed_img)
                 return None
             log_message(f"Detected timer on screen: {h:02}:{m:02}:{s:02} ({total_seconds} seconds)", level="info")
             return total_seconds
@@ -356,12 +356,12 @@ def read_screen_time(
                 return native_seconds
         log_message(f"No timer in HH:MM:SS format detected in OCR text: '{text.strip() if text else ''}'", level="warning")
         if debug_label:
-            _save_timer_debug_images(debug_label, instance_index, original_img, processed_img)
+            _save_ocr_debug_images(debug_label, instance_index, original_img, processed_img)
         return None
     except Exception as e:
         log_message(f"Error reading timer from screen: {e}", level="error")
         if debug_label:
-            _save_timer_debug_images(debug_label, instance_index, original_img, processed_img)
+            _save_ocr_debug_images(debug_label, instance_index, original_img, processed_img)
         return None
 
 
@@ -459,12 +459,12 @@ def read_screen_utc_time(
             level="warning",
         )
         if debug_label:
-            _save_timer_debug_images(debug_label, instance_index, original_img, processed_img)
+            _save_ocr_debug_images(debug_label, instance_index, original_img, processed_img)
         return None
     except Exception as e:
         log_message(f"Error reading UTC clock from screen: {e}", level="error")
         if debug_label:
-            _save_timer_debug_images(debug_label, instance_index, original_img, processed_img)
+            _save_ocr_debug_images(debug_label, instance_index, original_img, processed_img)
         return None
 
 
@@ -947,14 +947,28 @@ def find_text_on_image(img: Image.Image, target: str) -> Tuple[bool, Optional[Tu
     return False, None
 
 
-def find_text_on_screen(screenshot_path: str, target: str, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
+def find_text_on_screen(
+    screenshot_path: str,
+    target: str,
+    roi: Optional[Tuple[int, int, int, int]] = None,
+    instance_index: Optional[int] = None,
+    debug_label: Optional[str] = None,
+) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
     """Search a piece of text inside a screenshot, optionally within an ROI.
+
+    When the text is not found and both ``instance_index`` and ``debug_label``
+    are given, the original ROI crop and the processed image are saved to the
+    debug directory (only in debug mode) so the OCR failure can be reviewed.
 
     Args:
         screenshot_path (str): Path to the screenshot image file.
         target (str): Text to search for, e.g. 'City' or 'Tundra Trek'.
         roi (tuple, optional): Region of interest (x, y, w, h) to search within
             the screenshot.
+        instance_index (int, optional): Emulator instance index, used to name
+            the debug captures on failure.
+        debug_label (str, optional): Label used to name the debug captures on
+            failure.
 
     Returns:
         tuple: (True, (x, y, w, h)) in full-screen coordinates when found,
@@ -971,6 +985,10 @@ def find_text_on_screen(screenshot_path: str, target: str, roi: Optional[Tuple[i
             img_bgr = img_bgr[y : y + h, x : x + w]
         img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
         found, box = find_text_on_image(img, target)
+        if not found and debug_label is not None and instance_index is not None:
+            lines_text = [text for text, _ in read_text_lines_on_image(img)]
+            log_message(f"OCR lines while looking for '{target}': {lines_text}", level="debug")
+            _save_ocr_debug_images(debug_label, instance_index, img, _preprocess_text_image(img))
         if found and box is not None and roi:
             box = (box[0] + roi[0], box[1] + roi[1], box[2], box[3])
         return found, box
@@ -980,7 +998,13 @@ def find_text_on_screen(screenshot_path: str, target: str, roi: Optional[Tuple[i
         return False, None
 
 
-def find_text_center_on_screen(screenshot_path: str, target: str, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[bool, Optional[Tuple[int, int]]]:
+def find_text_center_on_screen(
+    screenshot_path: str,
+    target: str,
+    roi: Optional[Tuple[int, int, int, int]] = None,
+    instance_index: Optional[int] = None,
+    debug_label: Optional[str] = None,
+) -> Tuple[bool, Optional[Tuple[int, int]]]:
     """Search a piece of text inside a screenshot and returns the center of the match.
 
     Wraps :func:`find_text_on_screen` returning the center (cx, cy) of the
@@ -990,7 +1014,7 @@ def find_text_center_on_screen(screenshot_path: str, target: str, roi: Optional[
     Returns:
         tuple: (True, (cx, cy)) if found, (False, None) if not.
     """
-    found, box = find_text_on_screen(screenshot_path, target, roi=roi)
+    found, box = find_text_on_screen(screenshot_path, target, roi=roi, instance_index=instance_index, debug_label=debug_label)
     if not found or box is None:
         return False, None
     return True, get_box_center(box)
