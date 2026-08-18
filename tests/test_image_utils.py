@@ -369,12 +369,14 @@ class TestTextOcr(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """Load the side menu sample screenshot, skipping when Tesseract is missing."""
+        """Load the side menu sample screenshots, skipping when Tesseract is missing."""
         if not os.path.exists(resolve_tesseract_cmd()):
             raise unittest.SkipTest("Tesseract is not installed.")
-        sample_path = os.path.join(os.path.dirname(__file__), "data", "sidemenu_example.png")
-        with Image.open(sample_path) as sample:
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+        with Image.open(os.path.join(data_dir, "sidemenu_example.png")) as sample:
             cls.image = sample.copy()
+        with Image.open(os.path.join(data_dir, "sidemenu_infantry_example.png")) as sample:
+            cls.city_tab_image = sample.copy()
 
     def test_finds_side_menu_entries(self):
         """Every relevant side menu label must be found with a plausible box."""
@@ -389,6 +391,15 @@ class TestTextOcr(unittest.TestCase):
                     self.assertGreater(w, 0)
                     self.assertGreater(h, 0)
                     self.assertTrue(0 <= x < self.image.width and 0 <= y < self.image.height)
+
+    def test_finds_city_tab_entries(self):
+        """The City tab capture labels must be found despite the selected tab highlight."""
+        targets = ["City", "Training", "Infantry", "Lancer", "Marksman", "Tech Research", "War Academy Research", "Icefire Hunter"]
+        for target in targets:
+            with self.subTest(target=target):
+                found, box = find_text_on_image(self.city_tab_image, target)
+                self.assertTrue(found, f"'{target}' should be found in the City tab sample")
+                self.assertIsNotNone(box)
 
     def test_text_not_found(self):
         """A label that is not on the screen must not be found."""

@@ -52,7 +52,8 @@ _DIGIT_WHITELIST = "0123456789:"
 
 # Menu text OCR settings (side menu tabs/entries, shop labels)
 _TEXT_SCALE = 3
-_TEXT_VALUE_THRESHOLD = 240
+_TEXT_VALUE_THRESHOLD = 220
+_TEXT_SATURATION_THRESHOLD = 100
 _TEXT_PSM = 6
 
 # UTC clock OCR settings (world map schedule panel: 'UTC MM-DD HH:MM:SS')
@@ -859,11 +860,12 @@ def _union_boxes(boxes: List[Tuple[int, int, int, int]]) -> Tuple[int, int, int,
 def _preprocess_text_image(img: Image.Image) -> Image.Image:
     """Binarize a game UI image so bright text becomes dark glyphs on a light background.
 
-    The game draws menu text in white/light blue over dark panels, so
-    thresholding the HSV value channel at a high level isolates the text
-    strokes; the mask is inverted because Tesseract reads dark-on-light text
-    better. The image is upscaled first so the thin game font survives the
-    binarization.
+    The game draws menu text in white/light blue over dark panels, so keeping
+    the pixels with a high HSV value and a low-to-medium saturation isolates
+    the text strokes while discarding colored backgrounds and highlights (e.g.
+    the light blue of a selected tab, which is bright but saturated); the mask
+    is inverted because Tesseract reads dark-on-light text better. The image
+    is upscaled first so the thin game font survives the binarization.
 
     Args:
         img (PIL.Image): Source image containing text.
@@ -874,7 +876,7 @@ def _preprocess_text_image(img: Image.Image) -> Image.Image:
     arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
     arr = cv2.resize(arr, (arr.shape[1] * _TEXT_SCALE, arr.shape[0] * _TEXT_SCALE), interpolation=cv2.INTER_LANCZOS4)
     hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)
-    _, mask = cv2.threshold(hsv[:, :, 2], _TEXT_VALUE_THRESHOLD, 255, cv2.THRESH_BINARY)
+    mask = ((hsv[:, :, 2] >= _TEXT_VALUE_THRESHOLD) & (hsv[:, :, 1] <= _TEXT_SATURATION_THRESHOLD)).astype(np.uint8) * 255
     return Image.fromarray(255 - mask)
 
 
