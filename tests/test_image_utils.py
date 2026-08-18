@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from wosutil.emulator.image_utils import (
     _TIME_RE,
@@ -16,9 +17,14 @@ from wosutil.emulator.image_utils import (
     find_multiple_templates,
     find_template_center_on_screen,
     find_template_on_screen,
+    find_text_center_on_screen,
+    find_text_on_image,
+    find_text_on_screen,
     get_box_center,
     load_template,
     non_max_suppression,
+    read_text_lines_on_image,
+    resolve_tesseract_cmd,
 )
 
 
@@ -356,6 +362,63 @@ class TestFirstNonZeroDigit(unittest.TestCase):
 
         img = PILImage.fromarray(np.zeros((40, 80), dtype=np.uint8))
         self.assertIsNone(_find_first_non_zero_digit_on_image(img))
+
+
+class TestTextOcr(unittest.TestCase):
+    """Test the OCR-based text search used for the side menu."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Load the side menu sample screenshot, skipping when Tesseract is missing."""
+        if not os.path.exists(resolve_tesseract_cmd()):
+            raise unittest.SkipTest("Tesseract is not installed.")
+        sample_path = os.path.join(os.path.dirname(__file__), "data", "sidemenu_example.png")
+        with Image.open(sample_path) as sample:
+            cls.image = sample.copy()
+
+    def test_finds_side_menu_entries(self):
+        """Every relevant side menu label must be found with a plausible box."""
+        targets = ["City", "Wilderness", "Daily", "Arena", "Tundra Trek", "Trek Supplies", "Pet Adventure", "Land of Heroes"]
+        for target in targets:
+            with self.subTest(target=target):
+                found, box = find_text_on_image(self.image, target)
+                self.assertTrue(found, f"'{target}' should be found in the side menu sample")
+                self.assertIsNotNone(box)
+                if box is not None:  # Type guard for linter
+                    x, y, w, h = box
+                    self.assertGreater(w, 0)
+                    self.assertGreater(h, 0)
+                    self.assertTrue(0 <= x < self.image.width and 0 <= y < self.image.height)
+
+    def test_text_not_found(self):
+        """A label that is not on the screen must not be found."""
+        found, box = find_text_on_image(self.image, "Nonexistent Entry")
+        self.assertFalse(found)
+        self.assertIsNone(box)
+
+    def test_read_text_lines(self):
+        """The line reader must return the side menu entries."""
+        lines = read_text_lines_on_image(self.image.crop((0, 230, 450, 940)))
+        self.assertGreater(len(lines), 5)
+        joined = " ".join(text for text, _ in lines)
+        self.assertIn("Tundra Trek", joined)
+        self.assertIn("Land of Heroes", joined)
+
+    def test_find_text_on_screen_with_roi(self):
+        """Boxes returned with an ROI must be in full-screen coordinates."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot_path = os.path.join(temp_dir, "shot.png")
+            self.image.save(screenshot_path)
+            roi = (0, 230, 450, 710)
+            found, box = find_text_on_screen(screenshot_path, "City", roi=roi)
+            self.assertTrue(found)
+            self.assertIsNotNone(box)
+            if box is not None:  # Type guard for linter
+                self.assertTrue(roi[1] <= box[1] < roi[1] + roi[3])
+                found_center, center = find_text_center_on_screen(screenshot_path, "City", roi=roi)
+                self.assertTrue(found_center)
+                if center is not None:  # Type guard for linter
+                    self.assertEqual(center, get_box_center(box))
 
 
 if __name__ == "__main__":

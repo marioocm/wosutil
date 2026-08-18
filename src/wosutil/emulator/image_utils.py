@@ -50,6 +50,11 @@ _TIME_RE = re.compile(r"(?<!\d)(\d{1,2}):(\d{2}):(\d{2})")
 _OCR_PSMS = (7, 8, 13)
 _DIGIT_WHITELIST = "0123456789:"
 
+# Menu text OCR settings (side menu tabs/entries, shop labels)
+_TEXT_SCALE = 3
+_TEXT_VALUE_THRESHOLD = 240
+_TEXT_PSM = 6
+
 # UTC clock OCR settings (world map schedule panel: 'UTC MM-DD HH:MM:SS')
 _UTC_TIME_RE = re.compile(r"UTC\s*(\d{1,2})-(\d{1,2})\s*(\d{1,2}):(\d{2}):(\d{2})", re.IGNORECASE)
 _UTC_OCR_PSMS = (6, 7)
@@ -818,6 +823,172 @@ def find_gray_template_center_on_screen(
         tuple: (True, (cx, cy)) if found, (False, None) if not.
     """
     found, box = find_gray_template_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
+    if not found or box is None:
+        return False, None
+    return True, get_box_center(box)
+
+
+def _normalize_word(word: str) -> str:
+    """Lowercase a word and strip every non-alphanumeric character.
+
+    Args:
+        word (str): Raw OCR word.
+
+    Returns:
+        str: Normalized word, empty when the word is only punctuation.
+    """
+    return re.sub(r"[^a-z0-9]", "", word.lower())
+
+
+def _union_boxes(boxes: List[Tuple[int, int, int, int]]) -> Tuple[int, int, int, int]:
+    """Merge several (x, y, w, h) boxes into the smallest box containing them all.
+
+    Args:
+        boxes (list): Non-empty list of (x, y, w, h) boxes.
+
+    Returns:
+        tuple: (x, y, w, h) union box.
+    """
+    x1 = min(b[0] for b in boxes)
+    y1 = min(b[1] for b in boxes)
+    x2 = max(b[0] + b[2] for b in boxes)
+    y2 = max(b[1] + b[3] for b in boxes)
+    return x1, y1, x2 - x1, y2 - y1
+
+
+def _preprocess_text_image(img: Image.Image) -> Image.Image:
+    """Binarize a game UI image so bright text becomes dark glyphs on a light background.
+
+    The game draws menu text in white/light blue over dark panels, so
+    thresholding the HSV value channel at a high level isolates the text
+    strokes; the mask is inverted because Tesseract reads dark-on-light text
+    better. The image is upscaled first so the thin game font survives the
+    binarization.
+
+    Args:
+        img (PIL.Image): Source image containing text.
+
+    Returns:
+        PIL.Image: Upscaled and binarized image ready for Tesseract.
+    """
+    arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    arr = cv2.resize(arr, (arr.shape[1] * _TEXT_SCALE, arr.shape[0] * _TEXT_SCALE), interpolation=cv2.INTER_LANCZOS4)
+    hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)
+    _, mask = cv2.threshold(hsv[:, :, 2], _TEXT_VALUE_THRESHOLD, 255, cv2.THRESH_BINARY)
+    return Image.fromarray(255 - mask)
+
+
+def _ocr_lines(img: Image.Image) -> List[List[Tuple[str, Tuple[int, int, int, int]]]]:
+    """Run OCR on an image and group the recognized words into text lines.
+
+    Args:
+        img (PIL.Image): Source image containing text.
+
+    Returns:
+        list: One entry per text line, each a list of (word, (x, y, w, h))
+            pairs in original image coordinates. Punctuation-only words are
+            dropped.
+    """
+    processed = _preprocess_text_image(img)
+    data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT, config=f"--psm {_TEXT_PSM}")
+    lines: Dict[Tuple[int, int, int], List[Tuple[str, Tuple[int, int, int, int]]]] = {}
+    for i, word in enumerate(data["text"]):
+        if not _normalize_word(word):
+            continue
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        x1 = data["left"][i] // _TEXT_SCALE
+        y1 = data["top"][i] // _TEXT_SCALE
+        x2 = (data["left"][i] + data["width"][i]) // _TEXT_SCALE
+        y2 = (data["top"][i] + data["height"][i]) // _TEXT_SCALE
+        lines.setdefault(key, []).append((word, (x1, y1, x2 - x1, y2 - y1)))
+    return list(lines.values())
+
+
+def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int, int, int]]]:
+    """Read the text lines of an image with OCR.
+
+    Args:
+        img (PIL.Image): Source image containing text.
+
+    Returns:
+        list: (line text, (x, y, w, h)) pairs for every recognized text line,
+            in original image coordinates.
+    """
+    return [(" ".join(word for word, _ in line), _union_boxes([box for _, box in line])) for line in _ocr_lines(img)]
+
+
+def find_text_on_image(img: Image.Image, target: str) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
+    """Search a piece of text (one or several words) inside an image with OCR.
+
+    Words are normalized (lowercased, punctuation stripped) and the target is
+    matched as a consecutive run of words within a single OCR line, so menu
+    entries such as 'Tundra Trek' are found even when the line carries extra
+    OCR noise around the words.
+
+    Args:
+        img (PIL.Image): Source image containing text.
+        target (str): Text to search for, e.g. 'City' or 'Tundra Trek'.
+
+    Returns:
+        tuple: (True, (x, y, w, h)) with the matched text position in original
+            image coordinates, or (False, None) when not found.
+    """
+    target_words = [w for w in (_normalize_word(word) for word in target.split()) if w]
+    if not target_words:
+        return False, None
+    for line in _ocr_lines(img):
+        words = [(_normalize_word(word), box) for word, box in line]
+        count = len(target_words)
+        for i in range(len(words) - count + 1):
+            if [w for w, _ in words[i : i + count]] == target_words:
+                return True, _union_boxes([box for _, box in words[i : i + count]])
+    return False, None
+
+
+def find_text_on_screen(screenshot_path: str, target: str, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
+    """Search a piece of text inside a screenshot, optionally within an ROI.
+
+    Args:
+        screenshot_path (str): Path to the screenshot image file.
+        target (str): Text to search for, e.g. 'City' or 'Tundra Trek'.
+        roi (tuple, optional): Region of interest (x, y, w, h) to search within
+            the screenshot.
+
+    Returns:
+        tuple: (True, (x, y, w, h)) in full-screen coordinates when found,
+            (False, None) otherwise.
+    """
+    try:
+        img_bgr = cv2.imread(screenshot_path)
+        if img_bgr is None:
+            msg = f"Error loading screenshot: {screenshot_path}"
+            log_message(msg, level="error")
+            return False, None
+        if roi:
+            x, y, w, h = roi
+            img_bgr = img_bgr[y : y + h, x : x + w]
+        img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        found, box = find_text_on_image(img, target)
+        if found and box is not None and roi:
+            box = (box[0] + roi[0], box[1] + roi[1], box[2], box[3])
+        return found, box
+    except Exception as e:
+        msg = f"Error in text search: {e}"
+        log_message(msg, level="error")
+        return False, None
+
+
+def find_text_center_on_screen(screenshot_path: str, target: str, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[bool, Optional[Tuple[int, int]]]:
+    """Search a piece of text inside a screenshot and returns the center of the match.
+
+    Wraps :func:`find_text_on_screen` returning the center (cx, cy) of the
+    matched text instead of the (x, y, w, h) box, so callers can click directly
+    without computing it.
+
+    Returns:
+        tuple: (True, (cx, cy)) if found, (False, None) if not.
+    """
+    found, box = find_text_on_screen(screenshot_path, target, roi=roi)
     if not found or box is None:
         return False, None
     return True, get_box_center(box)

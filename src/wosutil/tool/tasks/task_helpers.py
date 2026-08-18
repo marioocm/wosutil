@@ -35,6 +35,7 @@ from wosutil.emulator.image_utils import (
     find_multiple_templates,
     find_template_center_on_screen,
     find_template_on_screen,
+    find_text_center_on_screen,
     read_screen_time,
 )
 from wosutil.preferences import get_kill_beast_march_assignment
@@ -233,6 +234,46 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
             if click_on_template(template_name, instance_index, roi=roi, delay=delay, gray=gray, screenshot_path=screenshot_path):
                 return template_name
         return None
+    finally:
+        if owned_screenshot:
+            delete_temp_screenshot(screenshot_path)
+
+
+def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None):
+    """Takes a screenshot and clicks the center of the given text if found.
+
+    Text-based counterpart of :func:`click_on_template` for menus whose
+    entries kept their labels but moved around, e.g. the side menu.
+
+    Args:
+        text (str): Text to search for and click, e.g. 'Tundra Trek'.
+        instance_index (int): Emulator instance index.
+        roi (tuple, optional): Region of interest (x, y, w, h).
+        delay (float): Delay after the click.
+        screenshot_path (str, optional): Reuse an already taken screenshot
+            instead of capturing a new one. Only valid when the caller can
+            guarantee no screen change has happened since the capture (that is,
+            no click between captures).
+
+    Returns:
+        bool: True if the text was found and clicked, False otherwise.
+    """
+    owned_screenshot = screenshot_path is None
+    if screenshot_path is None:
+        screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        log_message(f"Could not get a screenshot to click on '{text}'.", level="error")
+        return False
+
+    try:
+        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi)
+        if not found or not center:
+            return False
+
+        cx, cy = center
+        click_on_coordinates(cx, cy, instance_index, delay=delay)
+        log_message(f"Text '{text}' found, clicking at ({cx}, {cy}).", level="success")
+        return True
     finally:
         if owned_screenshot:
             delete_temp_screenshot(screenshot_path)

@@ -16,6 +16,7 @@ from wosutil.tool.tasks.task_helpers import (
     KILL_BEAST_MARCH_SCROLL_START,
     click_first_found_template,
     click_on_template,
+    click_on_text,
     ensure_hero_recruit_screen,
     go_hero_recruit_screen,
     is_game_on_hero_recruit_screen,
@@ -355,6 +356,55 @@ class TestClickFirstFoundTemplate(unittest.TestCase):
         self.take_screenshot.return_value = None
         self.assertIsNone(click_first_found_template(0, ["a", "b"]))
         self.click_template.assert_not_called()
+
+
+class TestClickOnText(unittest.TestCase):
+    """Test cases for the text-based find and click helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.find_text_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.take_screenshot, self.delete_temp_screenshot, self.find_center, self.click_coords = self.mocks
+        self.take_screenshot.return_value = "/tmp/shot.png"
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_clicks_text_center(self):
+        """The center of the found text is clicked."""
+        self.find_center.return_value = (True, (50, 60))
+        self.assertTrue(click_on_text("Tundra Trek", 0, delay=1.5))
+        self.click_coords.assert_called_once_with(50, 60, 0, delay=1.5)
+
+    def test_returns_false_when_not_found(self):
+        """No click happens when the text is not found."""
+        self.find_center.return_value = (False, None)
+        self.assertFalse(click_on_text("Missing", 0))
+        self.click_coords.assert_not_called()
+
+    def test_returns_false_without_screenshot(self):
+        """No click happens when a screenshot cannot be taken."""
+        self.take_screenshot.return_value = None
+        self.assertFalse(click_on_text("City", 0))
+        self.find_center.assert_not_called()
+
+    def test_reuses_provided_screenshot(self):
+        """A provided screenshot is reused and not deleted."""
+        self.find_center.return_value = (True, (10, 20))
+        self.assertTrue(click_on_text("City", 0, screenshot_path="/tmp/existing.png"))
+        self.take_screenshot.assert_not_called()
+        self.delete_temp_screenshot.assert_not_called()
+        self.click_coords.assert_called_once_with(10, 20, 0, delay=CLICK_DELAY)
+
+    def test_deletes_owned_screenshot(self):
+        """The screenshot captured by the helper is deleted afterwards."""
+        self.find_center.return_value = (True, (10, 20))
+        self.assertTrue(click_on_text("City", 0))
+        self.delete_temp_screenshot.assert_called_once_with("/tmp/shot.png")
 
 
 class TestIsGameOnScreen(unittest.TestCase):
