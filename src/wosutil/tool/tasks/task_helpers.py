@@ -422,6 +422,40 @@ def go_sidemenu(instance_index):
     return True
 
 
+def go_sidemenu_city(instance_index):
+    """Opens the side menu and selects the City tab.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True if the side menu opened and the City tab was clicked, False otherwise.
+    """
+    if not go_sidemenu(instance_index):
+        return False
+    if not click_on_text("City", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+        log_message("City tab NOT found in side menu. Aborting.", level="warning")
+        return False
+    return True
+
+
+def go_sidemenu_daily(instance_index):
+    """Opens the side menu and selects the Daily tab.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True if the side menu opened and the Daily tab was clicked, False otherwise.
+    """
+    if not go_sidemenu(instance_index):
+        return False
+    if not click_on_text("Daily", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+        log_message("Daily tab NOT found in side menu. Aborting.", level="warning")
+        return False
+    return True
+
+
 def go_sidemenu_scrolled(instance_index):
     """Opens the side menu and scrolls it down to reveal the lower icons.
 
@@ -463,7 +497,7 @@ def go_cityworld(instance_index):
 
 
 def go_tundra_trek(instance_index):
-    """Navigates to the tundra trek screen by opening the side menu, selecting the Daily tab, and clicking the tundra trek entry by text.
+    """Navigates to the tundra trek screen by opening the side menu on the Daily tab and clicking the tundra trek entry by text.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -471,15 +505,10 @@ def go_tundra_trek(instance_index):
     Returns:
         bool: True if the tundra trek entry was found and clicked, False otherwise.
     """
-    if not go_sidemenu(instance_index):
+    if not go_sidemenu_daily(instance_index):
         return False
 
-    sidemenu_roi = get_roi("sidemenu")
-    if not click_on_text("Daily", instance_index, roi=sidemenu_roi, delay=1.0):
-        log_message("Daily tab NOT found in side menu. Aborting.", level="warning")
-        return False
-
-    if not click_on_text("Tundra Trek", instance_index, roi=sidemenu_roi, delay=1.0):
+    if not click_on_text("Tundra Trek", instance_index, roi=get_roi("sidemenu"), delay=1.0):
         log_message("Tundra trek entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True

@@ -19,6 +19,8 @@ from wosutil.tool.tasks.task_helpers import (
     click_on_text,
     ensure_hero_recruit_screen,
     go_hero_recruit_screen,
+    go_sidemenu_city,
+    go_sidemenu_daily,
     go_tundra_trek,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
@@ -260,8 +262,8 @@ class TestGoHeroRecruitScreen(unittest.TestCase):
         self.click_on.assert_not_called()
 
 
-class TestGoTundraTrek(unittest.TestCase):
-    """Test cases for navigating to the tundra trek screen."""
+class TestGoSidemenuTab(unittest.TestCase):
+    """Test cases for the side menu tab selectors."""
 
     def setUp(self):
         """Set up shared mocks."""
@@ -277,32 +279,64 @@ class TestGoTundraTrek(unittest.TestCase):
         self.click_text.return_value = True
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
-    def test_navigates_through_daily_tab_and_entry(self):
-        """The Daily tab is selected and the Tundra Trek entry is clicked by text."""
-        self.assertTrue(go_tundra_trek(0))
-        sidemenu_roi = (0, 173, 484, 759)
-        self.click_text.assert_has_calls(
-            [
-                call("Daily", 0, roi=sidemenu_roi, delay=1.0),
-                call("Tundra Trek", 0, roi=sidemenu_roi, delay=1.0),
-            ]
-        )
+    def test_go_sidemenu_city_clicks_city_tab(self):
+        """The City tab selector opens the side menu and clicks 'City'."""
+        self.assertTrue(go_sidemenu_city(0))
+        self.go_sidemenu.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("City", 0, roi=(0, 173, 484, 759), delay=1.0)
+
+    def test_go_sidemenu_daily_clicks_daily_tab(self):
+        """The Daily tab selector opens the side menu and clicks 'Daily'."""
+        self.assertTrue(go_sidemenu_daily(0))
+        self.go_sidemenu.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("Daily", 0, roi=(0, 173, 484, 759), delay=1.0)
 
     def test_returns_false_when_side_menu_not_opened(self):
-        """Navigation fails when the side menu cannot be opened."""
+        """The selectors fail when the side menu cannot be opened."""
         self.go_sidemenu.return_value = False
+        self.assertFalse(go_sidemenu_city(0))
+        self.assertFalse(go_sidemenu_daily(0))
+        self.click_text.assert_not_called()
+
+    def test_returns_false_when_tab_missing(self):
+        """The selectors fail when the tab text is not found."""
+        self.click_text.return_value = False
+        self.assertFalse(go_sidemenu_city(0))
+        self.assertFalse(go_sidemenu_daily(0))
+
+
+class TestGoTundraTrek(unittest.TestCase):
+    """Test cases for navigating to the tundra trek screen."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu_daily.return_value = True
+        self.get_roi.return_value = (0, 173, 484, 759)
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_navigates_through_daily_tab_and_entry(self):
+        """The Daily tab is opened and the Tundra Trek entry is clicked by text."""
+        self.assertTrue(go_tundra_trek(0))
+        self.go_sidemenu_daily.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("Tundra Trek", 0, roi=(0, 173, 484, 759), delay=1.0)
+
+    def test_returns_false_when_daily_tab_not_reached(self):
+        """Navigation fails when the Daily tab cannot be reached."""
+        self.go_sidemenu_daily.return_value = False
         self.assertFalse(go_tundra_trek(0))
         self.click_text.assert_not_called()
 
-    def test_returns_false_when_daily_tab_missing(self):
-        """Navigation fails when the Daily tab is not found."""
-        self.click_text.return_value = False
-        self.assertFalse(go_tundra_trek(0))
-        self.click_text.assert_called_once_with("Daily", 0, roi=(0, 173, 484, 759), delay=1.0)
-
     def test_returns_false_when_entry_missing(self):
         """Navigation fails when the Tundra Trek entry is not found."""
-        self.click_text.side_effect = [True, False]
+        self.click_text.return_value = False
         self.assertFalse(go_tundra_trek(0))
 
 

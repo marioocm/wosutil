@@ -11,6 +11,7 @@ from wosutil.emulator.emulator_manager import (
     delete_temp_screenshot,
     long_press_on_coordinates,
     press_android_back_button,
+    scroll_screen,
     take_screenshot,
 )
 from wosutil.emulator.image_utils import (
@@ -41,8 +42,8 @@ from wosutil.tool.tasks.task_helpers import (
     go_pet_adventure,
     go_pet_skill,
     go_shop,
-    go_sidemenu,
-    go_sidemenu_scrolled,
+    go_sidemenu_city,
+    go_sidemenu_daily,
     go_tundra_trek,
     is_game_on_intel_screen,
     is_game_on_pet_adventure_screen,
@@ -160,11 +161,14 @@ def claim_island_idle(instance_index):
         bool: True if successful, False otherwise.
     """
     log_message("Attempting to claim island idle income...", level="info")
-    if not go_sidemenu_scrolled(instance_index):
+    if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_template("sidemenu_island", instance_index, roi=get_roi("sidemenu_icons"), delay=4):
-        log_message("Island icon NOT found in side menu. Aborting.", level="warning")
+    scroll_screen(13, 500, 13, 0, 500, instance_index)
+    time.sleep(1.0)
+
+    if not click_on_text("Tree", instance_index, roi=get_roi("sidemenu"), delay=4):
+        log_message("Tree entry NOT found in side menu. Aborting.", level="warning")
         return False
 
     click_on_coordinates(100, 70, instance_index)
@@ -948,15 +952,10 @@ def train_troops(instance_index):
     Returns (True/False, reschedule_seconds).
     """
     log_message("Attempting to promote or train troops...", level="info")
-    if not go_sidemenu(instance_index):
+    if not go_sidemenu_city(instance_index):
         return False, 6 * 60 * 60
 
-    sidemenu_roi = get_roi("sidemenu")
-    if not click_on_text("City", instance_index, roi=sidemenu_roi, delay=1.0):
-        log_message("City tab NOT found in side menu. Aborting.", level="warning")
-        return False, 6 * 60 * 60
-
-    if not click_on_text("Infantry", instance_index, roi=sidemenu_roi, delay=3):
+    if not click_on_text("Infantry", instance_index, roi=get_roi("sidemenu"), delay=3):
         log_message("Infantry camp entry NOT found in side menu. Aborting.", level="warning")
         return False, 6 * 60 * 60
 
