@@ -51,7 +51,7 @@ class TestClaimIslandIdle(unittest.TestCase):
         self.find_templates.return_value = []
         claim_island_idle(0)
         self.go_sidemenu_daily.assert_called_once_with(0)
-        self.scroll_screen.assert_called_once_with(13, 500, 13, 0, 500, 0)
+        self.scroll_screen.assert_called_once_with(13, 500, 13, 0, 500, 0, hold_end_ms=150)
         self.click_text.assert_called_once_with("Tree", 0, roi=ROI_SIDEMENU, delay=4)
 
     def test_success_clicks_life_essence(self):

@@ -345,8 +345,12 @@ def click_on(coordinate_name, instance_index, delay=CLICK_DELAY):
         return False
 
 
-def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index):
+def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, hold_end_ms=0):
     """Performs a scroll gesture on the emulator screen.
+
+    When ``hold_end_ms`` is greater than zero the finger is kept still at the
+    end point after the swipe, which stops the scrolling momentum instead of
+    letting the list keep gliding after the finger is lifted.
 
     Args:
         start_x (int): Starting X coordinate.
@@ -355,9 +359,12 @@ def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index):
         end_y (int): Ending Y coordinate.
         duration_ms (int): Duration of the scroll in milliseconds.
         instance_index (int): Emulator instance index.
+        hold_end_ms (int): Extra milliseconds to hold the finger at the end point (0 to skip).
     """
     log_message(f"Performing scroll from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration_ms}ms", level="info")
     execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms)], instance_index)
+    if hold_end_ms > 0:
+        execute_adb_command(["shell", "input", "swipe", str(end_x), str(end_y), str(end_x), str(end_y), str(hold_end_ms)], instance_index)
 
 
 def long_press_on_coordinates(x, y, duration_ms, instance_index):

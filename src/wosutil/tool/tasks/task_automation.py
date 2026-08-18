@@ -164,7 +164,7 @@ def claim_island_idle(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    scroll_screen(13, 500, 13, 0, 500, instance_index)
+    scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=150)
     time.sleep(1.0)
 
     if not click_on_text("Tree", instance_index, roi=get_roi("sidemenu"), delay=4):
