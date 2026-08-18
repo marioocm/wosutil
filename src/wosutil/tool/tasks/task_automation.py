@@ -437,7 +437,7 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
     """Claims resources and VIP from the nomadic shop.
 
     1. Ensures the main city screen is active.
-    2. Navigates to the shop using go_shop.
+    2. Navigates to the shop using go_shop and clicks the Nomadic tab.
     3. Searches for nomadic shop resources and VIP.
     4. Clicks on found resources and VIP.
     5. Continues searching until no more resources are found.
@@ -455,6 +455,10 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
     """
     log_message("Attempting to claim nomadic shop resources and VIP...", level="info")
     if not go_shop(instance_index):
+        return False, 10 * 60 * 60
+
+    if not click_on_text("Nomadic", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
+        log_message("Nomadic shop tab NOT found. Aborting.", level="warning")
         return False, 10 * 60 * 60
 
     # Define the resources to search for
@@ -521,7 +525,7 @@ def claim_mystery_shop(instance_index):
     """Claims redeemable items from the mystery shop.
 
     1. Ensures the main city screen is active.
-    2. Navigates to the shop using go_shop and opens the mystery shop tab.
+    2. Navigates to the shop using go_shop and clicks the Mystery tab.
     3. Searches the items ROI for redeemable objects (free items always,
        widgets depending on the user preference) and clicks them.
     4. Continues searching until no more items are found.
@@ -540,7 +544,9 @@ def claim_mystery_shop(instance_index):
     if not go_shop(instance_index):
         return False, 10 * 60 * 60
 
-    click_on_coordinates(302, 1247, instance_index, delay=1.0)
+    if not click_on_text("Mystery", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
+        log_message("Mystery shop tab NOT found. Aborting.", level="warning")
+        return False, 10 * 60 * 60
 
     items_roi = (0, 375, 710, 817)
     refresh_roi = (403, 146, 317, 343)

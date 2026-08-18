@@ -201,6 +201,7 @@ ROI = {
     "world": (627, 1175, 46, 55),
     "tech_thumb": (58, 322, 510, 958),
     "sidemenu": (0, 173, 484, 759),
+    "shop_tabs": (0, 1195, 719, 85),
     "sidemenu_icons": (17, 342, 58, 517),
     "bottom_right_side_icons": (589, 673, 129, 431),
     "island_life_essence": (0, 63, 633, 1041),
