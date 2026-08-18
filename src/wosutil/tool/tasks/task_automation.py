@@ -28,6 +28,7 @@ from wosutil.tool.tasks.task_helpers import (
     _train_troop_camp,
     click_first_found_template,
     click_on_template,
+    click_on_text,
     detect_pet_adventure_chests,
     do_intel_exploration,
     end_tundra_trek_idle_if_active,
@@ -937,7 +938,8 @@ def train_troops(instance_index):
     """Trains and promotes troops in the 3 troop camps.
 
     1. Ensures the main city screen and opens the side menu.
-    2. Clicks the infantry camp icon and opens the train troop screen.
+    2. Selects the City tab and clicks the Infantry entry by text, then opens
+       the train troop screen.
     3. Runs the camp flow for the infantry (default) camp, then switches to the
        other two camps using their bottom tabs.
     4. Reschedules with the shortest readable training timer, or 6 hours when
@@ -949,8 +951,13 @@ def train_troops(instance_index):
     if not go_sidemenu(instance_index):
         return False, 6 * 60 * 60
 
-    if not click_on_template("sidemenu_infantry", instance_index, roi=get_roi("sidemenu_icons"), delay=3):
-        log_message("Infantry camp icon NOT found in side menu. Aborting.", level="warning")
+    sidemenu_roi = get_roi("sidemenu")
+    if not click_on_text("City", instance_index, roi=sidemenu_roi, delay=1.0):
+        log_message("City tab NOT found in side menu. Aborting.", level="warning")
+        return False, 6 * 60 * 60
+
+    if not click_on_text("Infantry", instance_index, roi=sidemenu_roi, delay=3):
+        log_message("Infantry camp entry NOT found in side menu. Aborting.", level="warning")
         return False, 6 * 60 * 60
 
     for _ in range(4):
