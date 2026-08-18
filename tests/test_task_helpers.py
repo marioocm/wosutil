@@ -19,6 +19,7 @@ from wosutil.tool.tasks.task_helpers import (
     click_on_text,
     ensure_hero_recruit_screen,
     go_hero_recruit_screen,
+    go_pet_adventure,
     go_sidemenu_city,
     go_sidemenu_daily,
     go_tundra_trek,
@@ -338,6 +339,41 @@ class TestGoTundraTrek(unittest.TestCase):
         """Navigation fails when the Tundra Trek entry is not found."""
         self.click_text.return_value = False
         self.assertFalse(go_tundra_trek(0))
+
+
+class TestGoPetAdventure(unittest.TestCase):
+    """Test cases for navigating to the pet adventure screen."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu_daily.return_value = True
+        self.get_roi.return_value = (0, 173, 484, 759)
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_navigates_through_daily_tab_and_pet_entry(self):
+        """The Daily tab is opened and the Pet Adventure entry is clicked by text."""
+        self.assertTrue(go_pet_adventure(0))
+        self.go_sidemenu_daily.assert_called_once_with(0)
+        self.click_text.assert_called_once_with("Pet", 0, roi=(0, 173, 484, 759), delay=1.0)
+
+    def test_returns_false_when_daily_tab_not_reached(self):
+        """Navigation fails when the Daily tab cannot be reached."""
+        self.go_sidemenu_daily.return_value = False
+        self.assertFalse(go_pet_adventure(0))
+        self.click_text.assert_not_called()
+
+    def test_returns_false_when_pet_entry_missing(self):
+        """Navigation fails when the Pet Adventure entry is not found."""
+        self.click_text.return_value = False
+        self.assertFalse(go_pet_adventure(0))
 
 
 class TestClickOnTemplate(unittest.TestCase):

@@ -456,22 +456,6 @@ def go_sidemenu_daily(instance_index):
     return True
 
 
-def go_sidemenu_scrolled(instance_index):
-    """Opens the side menu and scrolls it down to reveal the lower icons.
-
-    Args:
-        instance_index (int): Emulator instance index.
-
-    Returns:
-        bool: True if the side menu was opened, False otherwise.
-    """
-    if not go_sidemenu(instance_index):
-        return False
-    scroll_screen(13, 500, 13, 0, 200, instance_index)
-    time.sleep(1.0)
-    return True
-
-
 def go_exploration_tab(instance_index):
     """Navigates to the exploration tab, ensuring the city screen first.
 
@@ -515,19 +499,19 @@ def go_tundra_trek(instance_index):
 
 
 def go_pet_adventure(instance_index):
-    """Navigates to the pet adventure screen by opening the side menu, scrolling down, and clicking the pet adventure icon.
+    """Navigates to the pet adventure screen by opening the side menu on the Daily tab and clicking the Pet Adventure entry by text.
 
     Args:
         instance_index (int): Emulator instance index.
 
     Returns:
-        bool: True if the pet adventure icon was found and clicked, False otherwise.
+        bool: True if the Pet Adventure entry was found and clicked, False otherwise.
     """
-    if not go_sidemenu_scrolled(instance_index):
+    if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_template("sidemenu_pet_adventure", instance_index, roi=get_roi("sidemenu_icons"), delay=1.0):
-        log_message("Pet adventure icon NOT found in side menu. Aborting.", level="warning")
+    if not click_on_text("Pet", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+        log_message("Pet Adventure entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
 
