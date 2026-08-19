@@ -401,6 +401,23 @@ class TestTextOcr(unittest.TestCase):
                 self.assertTrue(found, f"'{target}' should be found in the City tab sample")
                 self.assertIsNotNone(box)
 
+    @patch("wosutil.emulator.image_utils._ocr_lines")
+    def test_retries_with_sparse_text_layout_when_primary_ocr_misses(self, ocr_lines):
+        """A sparse-text OCR pass must recover labels missed by the block-layout pass."""
+        image = Image.new("RGB", (100, 40), "black")
+        box = (10, 10, 40, 10)
+        ocr_lines.side_effect = [
+            [[("ed", box), ("Arena", box)]],
+            [[("Mystery", box)]],
+        ]
+
+        found, result = find_text_on_image(image, "Mystery")
+
+        self.assertTrue(found)
+        self.assertEqual(result, box)
+        self.assertEqual(ocr_lines.call_count, 2)
+        self.assertEqual(ocr_lines.call_args_list[1].kwargs, {"psm": 11})
+
     def test_find_text_picks_last_occurrence_when_duplicated(self):
         """A duplicated label returns the lowest occurrence with last=True."""
         found_first, box_first = find_text_on_image(self.image, "Pet Adventure")

@@ -55,6 +55,7 @@ _TEXT_SCALE = 3
 _TEXT_VALUE_THRESHOLD = 220
 _TEXT_SATURATION_THRESHOLD = 100
 _TEXT_PSM = 6
+_TEXT_FALLBACK_PSM = 11
 
 # UTC clock OCR settings (world map schedule panel: 'UTC MM-DD HH:MM:SS')
 _UTC_TIME_RE = re.compile(r"UTC\s*(\d{1,2})-(\d{1,2})\s*(\d{1,2}):(\d{2}):(\d{2})", re.IGNORECASE)
@@ -880,11 +881,12 @@ def _preprocess_text_image(img: Image.Image) -> Image.Image:
     return Image.fromarray(255 - mask)
 
 
-def _ocr_lines(img: Image.Image) -> List[List[Tuple[str, Tuple[int, int, int, int]]]]:
+def _ocr_lines(img: Image.Image, psm: int = _TEXT_PSM) -> List[List[Tuple[str, Tuple[int, int, int, int]]]]:
     """Run OCR on an image and group the recognized words into text lines.
 
     Args:
         img (PIL.Image): Source image containing text.
+        psm (int): Tesseract page segmentation mode.
 
     Returns:
         list: One entry per text line, each a list of (word, (x, y, w, h))
@@ -892,7 +894,7 @@ def _ocr_lines(img: Image.Image) -> List[List[Tuple[str, Tuple[int, int, int, in
             dropped.
     """
     processed = _preprocess_text_image(img)
-    data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT, config=f"--psm {_TEXT_PSM}")
+    data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT, config=f"--psm {psm}")
     lines: Dict[Tuple[int, int, int], List[Tuple[str, Tuple[int, int, int, int]]]] = {}
     for i, word in enumerate(data["text"]):
         if not _normalize_word(word):
@@ -904,6 +906,18 @@ def _ocr_lines(img: Image.Image) -> List[List[Tuple[str, Tuple[int, int, int, in
         y2 = (data["top"][i] + data["height"][i]) // _TEXT_SCALE
         lines.setdefault(key, []).append((word, (x1, y1, x2 - x1, y2 - y1)))
     return list(lines.values())
+
+
+def _find_text_matches(lines: List[List[Tuple[str, Tuple[int, int, int, int]]]], target_words: List[str]) -> List[Tuple[int, int, int, int]]:
+    """Find consecutive target words in OCR lines and return their boxes."""
+    matches: List[Tuple[int, int, int, int]] = []
+    for line in lines:
+        words = [(_normalize_word(word), box) for word, box in line]
+        count = len(target_words)
+        for i in range(len(words) - count + 1):
+            if [w for w, _ in words[i : i + count]] == target_words:
+                matches.append(_union_boxes([box for _, box in words[i : i + count]]))
+    return matches
 
 
 def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int, int, int]]]:
@@ -943,13 +957,9 @@ def find_text_on_image(img: Image.Image, target: str, last: bool = False) -> Tup
     target_words = [w for w in (_normalize_word(word) for word in target.split()) if w]
     if not target_words:
         return False, None
-    matches: List[Tuple[int, int, int, int]] = []
-    for line in _ocr_lines(img):
-        words = [(_normalize_word(word), box) for word, box in line]
-        count = len(target_words)
-        for i in range(len(words) - count + 1):
-            if [w for w, _ in words[i : i + count]] == target_words:
-                matches.append(_union_boxes([box for _, box in words[i : i + count]]))
+    matches = _find_text_matches(_ocr_lines(img), target_words)
+    if not matches:
+        matches = _find_text_matches(_ocr_lines(img, psm=_TEXT_FALLBACK_PSM), target_words)
     if not matches:
         return False, None
     if last:
