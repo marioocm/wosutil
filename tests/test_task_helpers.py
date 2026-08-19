@@ -272,12 +272,14 @@ class TestGoSidemenuTab(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.go_sidemenu"),
             patch("wosutil.tool.tasks.task_helpers.get_roi"),
             patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_template"),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.go_sidemenu, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu, self.get_roi, self.click_text, self.click_template = self.mocks
         self.go_sidemenu.return_value = True
         self.get_roi.return_value = (0, 173, 484, 759)
         self.click_text.return_value = True
+        self.click_template.return_value = True
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
     def test_go_sidemenu_city_clicks_city_tab(self):
@@ -287,10 +289,11 @@ class TestGoSidemenuTab(unittest.TestCase):
         self.click_text.assert_called_once_with("City", 0, roi=(0, 173, 484, 759), delay=1.0)
 
     def test_go_sidemenu_daily_clicks_daily_tab(self):
-        """The Daily tab selector opens the side menu and clicks 'Daily'."""
+        """The Daily tab selector opens the side menu, clicks 'Daily', and unchecks the hide-completed-mission box."""
         self.assertTrue(go_sidemenu_daily(0))
         self.go_sidemenu.assert_called_once_with(0)
         self.click_text.assert_called_once_with("Daily", 0, roi=(0, 173, 484, 759), delay=1.0)
+        self.click_template.assert_called_once_with("sidemenu_daily_hide_completed_mission", 0, roi=(0, 173, 484, 759))
 
     def test_returns_false_when_side_menu_not_opened(self):
         """The selectors fail when the side menu cannot be opened."""
@@ -298,12 +301,14 @@ class TestGoSidemenuTab(unittest.TestCase):
         self.assertFalse(go_sidemenu_city(0))
         self.assertFalse(go_sidemenu_daily(0))
         self.click_text.assert_not_called()
+        self.click_template.assert_not_called()
 
     def test_returns_false_when_tab_missing(self):
         """The selectors fail when the tab text is not found."""
         self.click_text.return_value = False
         self.assertFalse(go_sidemenu_city(0))
         self.assertFalse(go_sidemenu_daily(0))
+        self.click_template.assert_not_called()
 
 
 class TestGoTundraTrek(unittest.TestCase):

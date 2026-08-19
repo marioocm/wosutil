@@ -112,6 +112,8 @@ TEMPLATE_PATHS = {
     "free_hero_chest": os.path.join(TEMPLATES_DIR, "city", "heroes", "recruit", "free_hero_chest.png"),
     # Island
     "life_essence": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "island", "life_essence.png"),
+    # Daily
+    "sidemenu_daily_hide_completed_mission": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "sidemenu_daily_hide_completed_mission.png"),
     # Train camp
     "train_troop": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "train_camp", "train_troop.png"),
     "troop_train_speed_up": os.path.join(TEMPLATES_DIR, "city", "sidemenu", "train_camp", "troop_train_speed_up.png"),

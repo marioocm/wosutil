@@ -455,6 +455,8 @@ def go_sidemenu_daily(instance_index):
     if not click_on_text("Daily", instance_index, roi=get_roi("sidemenu"), delay=1.0):
         log_message("Daily tab NOT found in side menu. Aborting.", level="warning")
         return False
+    # Uncheck "Hide completed mission" if it is checked (no-op when unchecked).
+    click_on_template("sidemenu_daily_hide_completed_mission", instance_index, roi=get_roi("sidemenu"))
     return True
 
 
