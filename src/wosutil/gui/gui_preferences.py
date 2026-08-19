@@ -1,7 +1,7 @@
 """GUI module for user preferences.
 
-Allows ordering tasks by priority and selecting the march used to kill beasts,
-persisting the choices to the preferences file.
+Allows ordering tasks by priority, selecting the march used to kill beasts, and
+selecting the resource used by the ox gathering skill.
 """
 
 import tkinter as tk
@@ -14,6 +14,7 @@ from wosutil.emulator.backends import (
     detect_installed_emulators,
 )
 from wosutil.preferences import (
+    GATHER_RESOURCES,
     KILL_BEAST_MARCH_MAX,
     KILL_BEAST_MARCH_MIN,
     MYSTERY_SHOP_LEVEL_FREE,
@@ -22,6 +23,7 @@ from wosutil.preferences import (
     MYSTERY_SHOP_LEVELS,
     get_debug_mode,
     get_emulator,
+    get_gather_resource,
     get_kill_beast_march,
     get_mystery_shop_level,
     get_remember_schedule,
@@ -36,6 +38,8 @@ _MYSTERY_SHOP_LEVEL_LABELS = {
     MYSTERY_SHOP_LEVEL_WIDGETS_50: "Free items + widgets 50%",
     MYSTERY_SHOP_LEVEL_WIDGETS_20: "Free items + widgets 50% + widgets 20%",
 }
+
+_GATHER_RESOURCE_LABELS = {resource: resource.title() for resource in GATHER_RESOURCES}
 
 
 def _ordered_tasks(TASK_DEFINITIONS):
@@ -160,6 +164,23 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     )
     march_spinbox.pack(side="left", padx=5)
 
+    # --- Ox gathering resource selection ---
+    gather_resource_frame = ttk.LabelFrame(preferences_tab, text="Ox Gathering")
+    gather_resource_frame.pack(pady=10, padx=10, fill="x")
+
+    gather_resource_row = ttk.Frame(gather_resource_frame)
+    gather_resource_row.pack(anchor="w", padx=10, pady=10)
+
+    gather_resource_var = tk.StringVar(value=_GATHER_RESOURCE_LABELS[get_gather_resource()])
+    ttk.Label(gather_resource_row, text="Gather resource with the ox skill:").pack(side="left", padx=5)
+    ttk.Combobox(
+        gather_resource_row,
+        textvariable=gather_resource_var,
+        values=[_GATHER_RESOURCE_LABELS[resource] for resource in GATHER_RESOURCES],
+        state="readonly",
+        width=12,
+    ).pack(side="left", padx=5)
+
     # --- Mystery shop redemption level ---
     mystery_shop_frame = ttk.LabelFrame(preferences_tab, text="Mystery Shop")
     mystery_shop_frame.pack(pady=10, padx=10, fill="x")
@@ -224,6 +245,11 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
             march_var.set(get_kill_beast_march(prefs))
         elif march_touched["value"] or "kill_beast_march" in prefs:
             prefs["kill_beast_march"] = march
+        resource = next(
+            (resource for resource, label in _GATHER_RESOURCE_LABELS.items() if label == gather_resource_var.get()),
+            get_gather_resource(prefs),
+        )
+        prefs["gather_resource"] = resource
         level = next(
             (level for level, label in _MYSTERY_SHOP_LEVEL_LABELS.items() if label == mystery_shop_var.get()),
             get_mystery_shop_level(prefs),
