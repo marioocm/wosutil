@@ -11,6 +11,8 @@ from wosutil.config import (
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.tool.tasks.task_helpers import (
+    GATHER_TILE_SCROLL_END,
+    GATHER_TILE_SCROLL_START,
     KILL_BEAST_MARCH_POSITIONS,
     KILL_BEAST_MARCH_SCROLL_END,
     KILL_BEAST_MARCH_SCROLL_START,
@@ -18,6 +20,7 @@ from wosutil.tool.tasks.task_helpers import (
     click_on_template,
     click_on_text,
     ensure_hero_recruit_screen,
+    gather_tile,
     go_hero_recruit_screen,
     go_pet_adventure,
     go_sidemenu_city,
@@ -25,6 +28,7 @@ from wosutil.tool.tasks.task_helpers import (
     go_tundra_trek,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
+    is_pet_skill_ox_active,
     kill_beast,
     kill_intel_beast,
 )
@@ -128,6 +132,100 @@ class TestKillBeast(unittest.TestCase):
                 self.assertEqual(self.click_on_coordinates.call_count, 3)
                 self.scroll_screen.reset_mock()
                 self.click_on_coordinates.reset_mock()
+
+
+class TestGatherTile(unittest.TestCase):
+    """Test cases for the world-map gathering helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.ensure_world_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_template"),
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
+            patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
+            patch("wosutil.tool.tasks.task_helpers.find_text_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.read_screen_time"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.ensure_world,
+            self.click_coords,
+            self.scroll_screen,
+            self.get_roi,
+            self.click_text,
+            self.click_template,
+            self.take_screenshot,
+            self.delete_screenshot,
+            self.get_template_path,
+            self.find_multiple,
+            self.find_text,
+            self.read_time,
+        ) = self.mocks
+        self.ensure_world.return_value = True
+        search_roi = (0, 843, 718, 435)
+        self.get_roi.side_effect = lambda name: search_roi if name == "worldmap_search" else (501, 1138, 118, 29)
+        self.click_text.return_value = True
+        self.click_template.return_value = True
+        self.take_screenshot.return_value = "/tmp/march.png"
+        self.get_template_path.return_value = "/tmp/remove_hero.png"
+        self.find_multiple.return_value = [(400, 100, 30, 30), (200, 100, 30, 30)]
+        self.find_text.return_value = (True, (190, 514, 150, 24))
+        self.read_time.side_effect = [120, 30]
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_gathers_selected_resource_and_returns_round_trip_time(self):
+        """The helper searches, deploys the march, and returns the full duration."""
+        result = gather_tile(0, "wood")
+
+        self.assertEqual(result, 180)
+        self.ensure_world.assert_called_once_with(0)
+        self.click_coords.assert_any_call(44, 878, 0)
+        self.scroll_screen.assert_called_once_with(
+            GATHER_TILE_SCROLL_START[0],
+            GATHER_TILE_SCROLL_START[1],
+            GATHER_TILE_SCROLL_END[0],
+            GATHER_TILE_SCROLL_END[1],
+            200,
+            0,
+        )
+        self.click_text.assert_any_call("Wood", 0, roi=(0, 843, 718, 435))
+        self.click_text.assert_any_call("Search", 0, roi=(0, 843, 718, 435), delay=3.0)
+        self.click_text.assert_any_call("Gather", 0, last=True)
+        self.click_text.assert_any_call("Deploy", 0, last=True)
+        self.assertEqual(self.click_template.call_count, 10)
+        self.click_template.assert_called_with("gather_tile_increase_level", 0, roi=(0, 843, 718, 435))
+        self.find_text.assert_called_once_with(
+            "/tmp/march.png",
+            "Gathering Time",
+            instance_index=0,
+            debug_label="gathering_tile_time",
+        )
+        self.assertEqual(self.read_time.call_args_list[1].kwargs["roi"], (501, 1138, 118, 29))
+        self.click_coords.assert_any_call(215, 115, 0, delay=1.0)
+
+    def test_invalid_resource_is_rejected_before_navigation(self):
+        """An unsupported resource does not interact with the emulator."""
+        self.assertIsNone(gather_tile(0, "gold"))
+        self.ensure_world.assert_not_called()
+        self.click_coords.assert_not_called()
+
+
+class TestPetSkillOxActive(unittest.TestCase):
+    """Test the ox active-state template lookup."""
+
+    def test_uses_the_ox_timer_roi(self):
+        """The active marker is searched in the existing ox timer ROI."""
+        with patch("wosutil.tool.tasks.task_helpers.is_game_on_screen", return_value=True) as is_on_screen:
+            self.assertTrue(is_pet_skill_ox_active(0))
+
+        is_on_screen.assert_called_once_with(0, "pet_skill_ox_active", "pet_skill_ox_timer")
 
 
 class TestMarchPositions(unittest.TestCase):

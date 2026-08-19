@@ -36,9 +36,10 @@ from wosutil.emulator.image_utils import (
     find_template_center_on_screen,
     find_template_on_screen,
     find_text_center_on_screen,
+    find_text_on_screen,
     read_screen_time,
 )
-from wosutil.preferences import get_kill_beast_march_assignment
+from wosutil.preferences import GATHER_RESOURCES, get_kill_beast_march_assignment
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.utils import get_roi, get_template_path, log_message, retry_operation
 
@@ -851,6 +852,179 @@ def ensure_pet_skill_screen(instance_index, max_attempts=3):
         is_game_on_pet_skill_screen,
         max_attempts=max_attempts,
     )
+
+
+def is_pet_skill_ox_active(instance_index):
+    """Check whether the ox skill is active instead of waiting for a cooldown.
+
+    The active marker is displayed where the ox cooldown timer normally appears,
+    so the existing ox timer ROI is reused.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True when the ox active marker is visible.
+    """
+    return is_game_on_screen(instance_index, "pet_skill_ox_active", "pet_skill_ox_timer")
+
+
+GATHER_TILE_SCROLL_START = (636, 912)
+GATHER_TILE_SCROLL_END = (86, 912)
+GATHER_TILE_SCROLL_DURATION_MS = 200
+
+
+def _read_gathering_tile_time(instance_index):
+    """Read the gathering duration to the right of the ``Gathering Time`` label.
+
+    Locating the label first avoids depending on a fixed modal position while
+    still restricting the timer OCR to the area where the value is displayed.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int or None: Gathering duration in seconds, or None when unreadable.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        return None
+
+    try:
+        found, label_box = find_text_on_screen(
+            screenshot_path,
+            "Gathering Time",
+            instance_index=instance_index,
+            debug_label="gathering_tile_time",
+        )
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+    if not found or label_box is None:
+        log_message("'Gathering Time' label NOT found on the resource tile.", level="warning")
+        return None
+
+    label_x, label_y, label_w, label_h = label_box
+    timer_x = label_x + label_w
+    screen_right = ROI["worldmap_search"][0] + ROI["worldmap_search"][2]
+    timer_roi = (
+        timer_x,
+        max(0, label_y - 10),
+        max(1, screen_right - timer_x),
+        max(50, label_h + 20),
+    )
+    return read_screen_time(instance_index, roi=timer_roi, debug_label="gathering_tile_timer")
+
+
+def _click_leftmost_template(instance_index, template_name, delay=CLICK_DELAY):
+    """Click the left-most occurrence of a template on the current screen.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        template_name (str): Template name in ``TEMPLATE_PATHS``.
+        delay (float): Delay after the click.
+
+    Returns:
+        bool: True when at least one template was found and clicked.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        return False
+    template_path = get_template_path(template_name)
+    if not template_path:
+        delete_temp_screenshot(screenshot_path)
+        return False
+
+    try:
+        matches = find_multiple_templates(template_path, screenshot_path)
+        if not matches:
+            log_message(f"Template '{template_name}' NOT found on screen.", level="warning")
+            return False
+        x, y, width, height = min(matches, key=lambda box: box[0])
+        click_on_coordinates(x + width // 2, y + height // 2, instance_index, delay=delay)
+        log_message(f"Template '{template_name}' found, clicking its left-most match.", level="success")
+        return True
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
+def gather_tile(instance_index, resource):
+    """Find and deploy a gathering march for the selected resource.
+
+    The helper opens the world-map search, selects the resource, raises the
+    search level up to ten times when the increase control is available, finds
+    a tile, reads its gathering duration, removes the left-most hero, reads the
+    march duration, and deploys the march.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        resource (str): Resource to search: ``meat``, ``wood``, ``coal`` or
+            ``iron``.
+
+    Returns:
+        int or None: Gathering duration plus twice the march duration, or None
+            when any required step cannot be completed.
+    """
+    if resource not in GATHER_RESOURCES:
+        log_message(f"Unsupported gathering resource '{resource}'.", level="error")
+        return None
+    if not ensure_world_screen(instance_index):
+        return None
+
+    search_roi = get_roi("worldmap_search")
+    if not search_roi:
+        log_message("Could not get the world-map search ROI.", level="error")
+        return None
+
+    click_on_coordinates(44, 878, instance_index)
+    scroll_screen(
+        GATHER_TILE_SCROLL_START[0],
+        GATHER_TILE_SCROLL_START[1],
+        GATHER_TILE_SCROLL_END[0],
+        GATHER_TILE_SCROLL_END[1],
+        GATHER_TILE_SCROLL_DURATION_MS,
+        instance_index,
+    )
+
+    if not click_on_text(resource.title(), instance_index, roi=search_roi):
+        log_message(f"Resource '{resource}' NOT found in the world-map search.", level="warning")
+        return None
+
+    for _ in range(10):
+        if not click_on_template("gather_tile_increase_level", instance_index, roi=search_roi):
+            break
+
+    if not click_on_text("Search", instance_index, roi=search_roi, delay=3.0):
+        log_message("Search button NOT found in the world-map search.", level="warning")
+        return None
+
+    gathering_time = _read_gathering_tile_time(instance_index)
+    if gathering_time is None:
+        return None
+
+    if not click_on_text("Gather", instance_index, last=True):
+        log_message("Gather button NOT found on the resource tile.", level="warning")
+        return None
+    if not _click_leftmost_template(instance_index, "remove_hero", delay=1.0):
+        log_message("No hero removal control found on the march screen.", level="warning")
+        return None
+
+    march_time = read_screen_time(
+        instance_index,
+        roi=get_roi("kill_beast_timer"),
+        debug_label="gathering_tile_march_timer",
+        max_seconds=INTEL_BEAST_TIMER_MAX_SECONDS,
+    )
+    if march_time is None:
+        log_message("Could not read the gathering march timer.", level="warning")
+        return None
+    if not click_on_text("Deploy", instance_index, last=True):
+        log_message("Deploy button NOT found on the march screen.", level="warning")
+        return None
+
+    total_time = gathering_time + march_time * 2
+    log_message(f"Gathering march deployed; estimated total duration is {total_time} seconds.", level="success")
+    return total_time
 
 
 def open_pet_adventure_chest(instance_index, x, y):

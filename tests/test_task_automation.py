@@ -1,0 +1,38 @@
+"""Unit tests for task automation flows."""
+
+import unittest
+from unittest.mock import patch
+
+from wosutil.tool.tasks.task_automation import PET_SKILL_RESCHEDULE_SECONDS, activate_daily_pet_skills
+
+
+class TestActivateDailyPetSkills(unittest.TestCase):
+    """Test the active ox gathering branch of the pet skills task."""
+
+    def test_active_ox_gathers_then_returns_to_pet_skills(self):
+        """An active ox starts gathering before the task continues with pet skills."""
+        with patch("wosutil.tool.tasks.task_automation.go_pet_skill", return_value=True) as go_pet_skill, \
+            patch("wosutil.tool.tasks.task_automation.ensure_pet_skill_screen", return_value=True), \
+            patch("wosutil.tool.tasks.task_automation.is_pet_skill_ox_active", side_effect=[True, False]), \
+            patch("wosutil.tool.tasks.task_automation.click_first_found_template", return_value=None) as click_first_found, \
+            patch("wosutil.tool.tasks.task_automation.click_on_template"), \
+            patch("wosutil.tool.tasks.task_automation.get_roi", return_value=(0, 0, 1, 1)), \
+            patch("wosutil.tool.tasks.task_automation.read_screen_time", return_value=None), \
+            patch("wosutil.tool.tasks.task_automation.press_android_back_button"), \
+            patch("wosutil.tool.tasks.task_automation.gather_tile", return_value=180) as gather, \
+            patch("wosutil.tool.tasks.task_automation.get_gather_resource", return_value="wood"):
+            result = activate_daily_pet_skills(0)
+
+        self.assertEqual(result, (True, PET_SKILL_RESCHEDULE_SECONDS))
+        gather.assert_called_once_with(0, "wood")
+        self.assertEqual(go_pet_skill.call_count, 2)
+        click_first_found.assert_called_once_with(
+            0,
+            ["pet_skill_wolf", "pet_skill_tapir", "pet_skill_elk"],
+            roi=(0, 0, 1, 1),
+            delay=0.8,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

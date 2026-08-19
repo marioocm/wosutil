@@ -22,6 +22,7 @@ from wosutil.emulator.image_utils import (
 from wosutil.preferences import (
     MYSTERY_SHOP_LEVEL_WIDGETS_20,
     MYSTERY_SHOP_LEVEL_WIDGETS_50,
+    get_gather_resource,
     get_mystery_shop_level,
 )
 from wosutil.stop import stop_signal
@@ -36,6 +37,7 @@ from wosutil.tool.tasks.task_helpers import (
     ensure_city_screen,
     ensure_hero_recruit_screen,
     ensure_pet_skill_screen,
+    gather_tile,
     go_alliance_tab,
     go_cityworld,
     go_exploration_tab,
@@ -47,6 +49,7 @@ from wosutil.tool.tasks.task_helpers import (
     go_tundra_trek,
     is_game_on_intel_screen,
     is_game_on_pet_adventure_screen,
+    is_pet_skill_ox_active,
     kill_intel_beast,
     open_pet_adventure_chest,
     rescue_intel_survivor,
@@ -886,9 +889,11 @@ def activate_daily_pet_skills(instance_index):
     1. Ensures the main city screen is active.
     2. Navigates to the pet skill screen (go_pet_skill).
     3. Ensures the pet skill screen before activating a skill or reading a timer.
-    4. Searches the four pet skills; the first one found is clicked and confirmed
+    4. When the ox active marker is found, starts a gathering march with the
+       configured resource and returns to the pet skill screen.
+    5. Searches the four pet skills; the first one found is clicked and confirmed
        with the use button, then the search is repeated for the rest.
-    5. When no skill is ready, reads the four timers and reschedules with the
+    6. When no skill is ready, reads the four timers and reschedules with the
        shortest one, or 6 hours when no timer is detected.
 
     Returns (True/False, reschedule_seconds).
@@ -899,6 +904,7 @@ def activate_daily_pet_skills(instance_index):
 
     skills_roi = get_roi("pet_skill_buttons")
     use_roi = get_roi("pet_skill_use")
+    ox_gathered = False
 
     while True:
         stop_signal.check()
@@ -907,12 +913,27 @@ def activate_daily_pet_skills(instance_index):
             log_message("Not on the pet skill screen, aborting task.", level="warning")
             return False, PET_SKILL_RESCHEDULE_SECONDS
 
+        if not ox_gathered and is_pet_skill_ox_active(instance_index):
+            resource = get_gather_resource()
+            log_message(f"Ox skill is active; gathering {resource} before continuing pet skills.", level="info")
+            if gather_tile(instance_index, resource) is None:
+                log_message("Could not start the ox gathering march, aborting task.", level="warning")
+                return False, PET_SKILL_RESCHEDULE_SECONDS
+            ox_gathered = True
+            if not go_pet_skill(instance_index):
+                log_message("Could not return to the pet skill screen after gathering.", level="warning")
+                return False, PET_SKILL_RESCHEDULE_SECONDS
+            continue
+
         # Try to activate a pet skill
         activated = False
         if skills_roi:
+            skill_templates = [
+                skill_name for skill_name, _ in PET_SKILLS if not ox_gathered or skill_name != "pet_skill_ox"
+            ]
             clicked_skill = click_first_found_template(
                 instance_index,
-                [skill_name for skill_name, _ in PET_SKILLS],
+                skill_templates,
                 roi=skills_roi,
                 delay=0.8,
             )

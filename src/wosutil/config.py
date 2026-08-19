@@ -140,6 +140,7 @@ TEMPLATE_PATHS = {
     "pet_skill_screen": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_screen.png"),
     "pet_skill_wolf": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_wolf.png"),
     "pet_skill_ox": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_ox.png"),
+    "pet_skill_ox_active": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_ox_active.png"),
     "pet_skill_tapir": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_tapir.png"),
     "pet_skill_elk": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_elk.png"),
     "pet_skill_use": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_use.png"),
@@ -170,6 +171,8 @@ TEMPLATE_PATHS = {
     # March
     "no_troops_left": os.path.join(TEMPLATES_DIR, "world", "march", "no_troops_left.png"),
     "send_march_screen": os.path.join(TEMPLATES_DIR, "world", "march", "send_march_screen.png"),
+    "gather_tile_increase_level": os.path.join(TEMPLATES_DIR, "world", "gather", "gather_tile_increase_level.png"),
+    "remove_hero": os.path.join(TEMPLATES_DIR, "world", "march", "remove_hero.png"),
 }
 
 # --- Automation Parameters ---
@@ -234,4 +237,5 @@ ROI = {
     "troop_promote_text": (3, 768, 717, 28),
     "train_troop_promote": (561, 394, 159, 274),
     "world_schedule_utc": (99, 0, 264, 42),
+    "worldmap_search": (0, 843, 718, 435),
 }

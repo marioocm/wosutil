@@ -194,7 +194,7 @@ def get_task_definitions(log_message):
         "activate_daily_pet_skills": {
             "id": "activate_daily_pet_skills",
             "name": "Activate Daily Pet Skills",
-            "description": "Activates the daily pet skills (wolf, ox, tapir, elk), rescheduling with the shortest on-screen timer or 6 hours by default.",
+            "description": "Activates the daily pet skills (wolf, ox, tapir, elk), gathers a tile with the active ox skill, and reschedules with the shortest on-screen timer or 6 hours by default.",
             "function": lambda instance_index: activate_daily_pet_skills(instance_index),
             "priority": 7,
             "reschedule_seconds": 6 * 60 * 60,  # 6 hours
