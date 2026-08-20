@@ -110,12 +110,10 @@ class TestImageUtils(unittest.TestCase):
 
     def test_read_screen_time_accepts_custom_ocr_modes(self):
         """A caller can add OCR modes needed by a different timer rendering."""
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), \
-            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), \
-            patch(
-                "wosutil.emulator.image_utils.pytesseract.image_to_string",
-                side_effect=lambda _image, config: "12:24:29" if "--psm 11" in config else "",
-            ) as image_to_string:
+        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
+            "wosutil.emulator.image_utils.pytesseract.image_to_string",
+            side_effect=lambda _image, config: "12:24:29" if "--psm 11" in config else "",
+        ) as image_to_string:
             result = read_screen_time(0, ocr_psms=(6, 11))
 
         self.assertEqual(result, 12 * 3600 + 24 * 60 + 29)
@@ -123,12 +121,10 @@ class TestImageUtils(unittest.TestCase):
 
     def test_read_screen_time_adds_days_to_timer(self):
         """A timer with a day prefix (e.g. 1d 06:29:08) adds 24h per day."""
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), \
-            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), \
-            patch(
-                "wosutil.emulator.image_utils.pytesseract.image_to_string",
-                return_value="1d 06:29:08",
-            ) as image_to_string:
+        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
+            "wosutil.emulator.image_utils.pytesseract.image_to_string",
+            return_value="1d 06:29:08",
+        ) as image_to_string:
             result = read_screen_time(0, ocr_psms=(11,))
 
         self.assertEqual(result, 1 * 86400 + 6 * 3600 + 29 * 60 + 8)

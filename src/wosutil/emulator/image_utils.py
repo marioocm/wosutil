@@ -975,9 +975,7 @@ def _find_text_matches(lines: List[List[Tuple[str, Tuple[int, int, int, int]]]],
     return matches
 
 
-def _find_fuzzy_text_matches(
-    lines: List[List[Tuple[str, Tuple[int, int, int, int]]]], target_words: List[str]
-) -> List[Tuple[float, Tuple[int, int, int, int]]]:
+def _find_fuzzy_text_matches(lines: List[List[Tuple[str, Tuple[int, int, int, int]]]], target_words: List[str]) -> List[Tuple[float, Tuple[int, int, int, int]]]:
     """Find close OCR spellings of a single target word.
 
     This is reserved for short, fixed UI labels whose decorative outline can
@@ -1058,9 +1056,7 @@ def find_text_on_image(img: Image.Image, target: str, last: bool = False, fuzzy:
             for psm in _FUZZY_TEXT_PSMS:
                 lines = _ocr_lines(img, psm=psm, preprocess=preprocess)
                 alternate_matches.extend(_find_text_matches(lines, target_words))
-                fuzzy_matches.extend(
-                    _find_fuzzy_text_matches(lines, target_words)
-                )
+                fuzzy_matches.extend(_find_fuzzy_text_matches(lines, target_words))
         if alternate_matches:
             if last:
                 matches.extend(alternate_matches)

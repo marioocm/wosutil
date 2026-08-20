@@ -933,9 +933,7 @@ def activate_daily_pet_skills(instance_index):
         # Try to activate a pet skill
         activated = False
         if skills_roi:
-            skill_templates = [
-                skill_name for skill_name, _ in PET_SKILLS if not ox_gathered or skill_name != "pet_skill_ox"
-            ]
+            skill_templates = [skill_name for skill_name, _ in PET_SKILLS if not ox_gathered or skill_name != "pet_skill_ox"]
             clicked_skill = click_first_found_template(
                 instance_index,
                 skill_templates,

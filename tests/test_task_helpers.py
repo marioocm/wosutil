@@ -29,7 +29,7 @@ from wosutil.tool.tasks.task_helpers import (
     go_sidemenu_daily,
     go_tundra_trek,
     go_worldmap_search,
-is_game_on_hero_recruit_screen,
+    is_game_on_hero_recruit_screen,
     is_game_on_screen,
     kill_beast,
     kill_intel_beast,
@@ -264,7 +264,7 @@ class TestGatherTile(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.get_template_path"),
-patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
+            patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
             patch("wosutil.tool.tasks.task_helpers.find_text_on_screen"),
             patch("wosutil.tool.tasks.task_helpers.read_screen_time"),
             patch("wosutil.tool.tasks.task_helpers.send_march"),
@@ -286,13 +286,7 @@ patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
         ) = self.mocks
         self.go_search.return_value = True
         search_roi = (0, 843, 718, 435)
-        self.get_roi.side_effect = lambda name: (
-            search_roi
-            if name == "worldmap_search"
-            else (0, 95, 718, 1008)
-            if name == "worldmap"
-            else (501, 1138, 118, 29)
-        )
+        self.get_roi.side_effect = lambda name: search_roi if name == "worldmap_search" else (0, 95, 718, 1008) if name == "worldmap" else (501, 1138, 118, 29)
         self.click_text.return_value = True
         self.click_template_repeatedly.return_value = True
         self.take_screenshot.return_value = "/tmp/march.png"
