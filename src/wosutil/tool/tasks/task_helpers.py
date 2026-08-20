@@ -975,10 +975,15 @@ def _read_gathering_tile_time(instance_index):
     label_x, label_y, label_w, label_h = label_box
     timer_x = label_x + label_w
     screen_right = ROI["worldmap_search"][0] + ROI["worldmap_search"][2]
+    roi_width = max(1, screen_right - timer_x)
+    # The timer sits centered between the label and the modal edge, so the empty
+    # padding on both sides can be cropped (20% left, 25% right).
+    left_trim = int(roi_width * 0.20)
+    right_trim = int(roi_width * 0.25)
     timer_roi = (
-        timer_x,
+        timer_x + left_trim,
         max(0, label_y - 10),
-        max(1, screen_right - timer_x),
+        max(1, roi_width - left_trim - right_trim),
         max(50, label_h + 20),
     )
     return read_screen_time(
@@ -1026,8 +1031,8 @@ def gather_tile(instance_index, resource):
 
     The helper opens the world-map search, selects the resource, raises the
     search level up to ten times when the increase control is available, finds
-    a tile, reads its gathering duration, removes the left-most hero, reads the
-    march duration, and deploys the march.
+    a tile, reads its gathering duration, removes the left-most hero and deploys
+    the march with :func:`send_march`.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -1070,20 +1075,12 @@ def gather_tile(instance_index, resource):
         log_message("No hero removal control found on the march screen.", level="warning")
         return None
 
-    march_time = read_screen_time(
-        instance_index,
-        roi=get_roi("kill_beast_timer"),
-        debug_label="gathering_tile_march_timer",
-        max_seconds=INTEL_BEAST_TIMER_MAX_SECONDS,
-    )
-    if march_time is None:
-        log_message("Could not read the gathering march timer.", level="warning")
-        return None
-    if not click_on_text("Deploy", instance_index, last=True):
-        log_message("Deploy button NOT found on the march screen.", level="warning")
+    march_wait = send_march(instance_index)
+    if march_wait is None or march_wait is False:
+        log_message("Could not send the gathering march.", level="warning")
         return None
 
-    total_time = gathering_time + march_time * 2
+    total_time = gathering_time + march_wait
     log_message(f"Gathering march deployed; estimated total duration is {total_time} seconds.", level="success")
     return total_time
 
@@ -1214,20 +1211,73 @@ KILL_BEAST_MARCH_SCROLL_START = (511, 122)
 KILL_BEAST_MARCH_SCROLL_END = (63, 122)
 
 
+def send_march(instance_index):
+    """Read the march timer and deploy the march by clicking its Deploy button.
+
+    The timer, the no-troops check and the Deploy button are all resolved from a
+    single screenshot, so no extra captures are taken between those steps.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Time in seconds to wait (detected timer * 2, capped at
+            INTEL_BEAST_MAX_WAIT_SECONDS, or
+            INTEL_BEAST_MARCH_SENT_WAIT_SECONDS when the march was sent without
+            a readable timer).
+        False: When no troops are available to send the march.
+        None: When the send-march screen could not be confirmed (the Deploy
+            button is not on screen).
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        log_message("Could not take a screenshot to send the march.", level="error")
+        return None
+
+    try:
+        timer = read_screen_time(
+            instance_index,
+            roi=get_roi("walking_march_time"),
+            debug_label="walking_march_time",
+            max_seconds=INTEL_BEAST_TIMER_MAX_SECONDS,
+            screenshot_path=screenshot_path,
+        )
+        if timer is None and is_game_on_screen(instance_index, "no_troops_left", screenshot_path=screenshot_path):
+            log_message("No troops left to send to the march, skipping it.", level="warning")
+            return False
+
+        deploy_found, deploy_center = find_text_center_on_screen(
+            screenshot_path,
+            "Deploy",
+            instance_index=instance_index,
+            debug_label="click_text_Deploy",
+            last=True,
+        )
+
+        if timer is None:
+            if deploy_found and deploy_center:
+                log_message("Timer unreadable but the Deploy button is on screen, sending the march.", level="warning")
+                click_on_coordinates(deploy_center[0], deploy_center[1], instance_index)
+                return INTEL_BEAST_MARCH_SENT_WAIT_SECONDS
+            log_message("Deploy button NOT found, not on the correct screen; the march will be retried.", level="warning")
+            return None
+
+        if deploy_found and deploy_center:
+            click_on_coordinates(deploy_center[0], deploy_center[1], instance_index)
+        else:
+            log_message("Deploy button NOT found, cannot send the march.", level="warning")
+            return None
+        return min(timer * 2, INTEL_BEAST_MAX_WAIT_SECONDS)
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
 def kill_beast(instance_index):
     """Kills a beast with the default march if the beast is already clicked and centered on the screen.
 
     If the user assigned a march in the preferences, that formation is selected
     on the march row (scrolling horizontally first when needed) before attacking.
-
-    When the march timer cannot be read, the send-march screen template is
-    searched to confirm the flow is on the correct screen:
-
-    - If the send-march screen is found, the march is sent and a short wait is
-      returned since the timer is unknown.
-    - If the send-march screen is NOT found, the flow is not on the correct
-      screen: ``None`` is returned so the caller can go back to the intel and
-      retry the attack.
+    The march itself is deployed by :func:`send_march`.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -1254,34 +1304,7 @@ def kill_beast(instance_index):
             )
         click_on_coordinates(*KILL_BEAST_MARCH_POSITIONS[march], instance_index, delay=0.3)
 
-    timer = read_screen_time(
-        instance_index,
-        roi=ROI["kill_beast_timer"],
-        debug_label="kill_beast_timer",
-        max_seconds=INTEL_BEAST_TIMER_MAX_SECONDS,
-    )
-    if timer is None and is_game_on_screen(instance_index, "no_troops_left"):
-        log_message("No troops left to send to the beast, skipping the attack.", level="warning")
-        return False
-
-    if timer is None:
-        # The timer could not be read: verify the flow is really on the
-        # send-march screen before assuming the march was sent.
-        if is_game_on_screen(instance_index, "send_march_screen", "send_march_screen", threshold=0.90):
-            log_message(
-                "Timer unreadable but the send-march screen is confirmed, sending the march.",
-                level="warning",
-            )
-            click_on_coordinates(552, 1216, instance_index)
-            return INTEL_BEAST_MARCH_SENT_WAIT_SECONDS
-        log_message(
-            "Send-march screen NOT found, not on the correct screen; the beast attack will be retried.",
-            level="warning",
-        )
-        return None
-
-    click_on_coordinates(552, 1216, instance_index)
-    return min(timer * 2, INTEL_BEAST_MAX_WAIT_SECONDS)
+    return send_march(instance_index)
 
 
 def _click_intel_template(instance_index, templates):

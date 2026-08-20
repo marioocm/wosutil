@@ -220,7 +220,7 @@ ROI = {
     "intel_timer2": (370, 585, 171, 49),
     "storehouse_claim_stamina": (491, 343, 177, 74),
     "storehouse_claim_stamina_timer": (502, 366, 156, 63),
-    "kill_beast_timer": (501, 1138, 118, 29),
+    "walking_march_time": (501, 1138, 118, 29),
     "send_march_screen": (0, 0, 236, 91),
     "tundra_trek_supplies_timer": (520, 587, 112, 33),
     "tundra_trek_idle": (526, 1126, 194, 154),

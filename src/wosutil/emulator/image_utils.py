@@ -282,8 +282,13 @@ def read_screen_time(
     debug_label: Optional[str] = None,
     max_seconds: Optional[int] = None,
     ocr_psms: Optional[Tuple[int, ...]] = None,
+    screenshot_path: Optional[str] = None,
 ) -> Optional[int]:
-    """Takes a screenshot from the given emulator instance and reads a timer in HH:MM:SS format from the specified ROI using OCR, returning the time in seconds.
+    """Read a timer in HH:MM:SS format from an emulator screenshot using OCR, returning the time in seconds.
+
+    By default a fresh screenshot is captured; a caller can pass ``screenshot_path``
+    to reuse one it already owns so the same capture can be shared with other OCR
+    steps. The shared file is never deleted here.
 
     On failure (no timer matched, an unexpected error, or a detected value over
     ``max_seconds``) the original ROI image and the processed image are saved to
@@ -297,6 +302,8 @@ def read_screen_time(
             this are treated as OCR errors (logged and debug captured) and return ``None``.
         ocr_psms (tuple, optional): Tesseract page-segmentation modes to try. The
             default uses the standard timer modes.
+        screenshot_path (str, optional): Reuse an already taken screenshot instead
+            of capturing a new one. The file is not deleted by this function.
 
     Returns:
         int or None: Time in seconds if detected, None if not found or implausible.
@@ -305,9 +312,11 @@ def read_screen_time(
 
     original_img: Optional[Image.Image] = None
     processed_img: Optional[Image.Image] = None
+    owned_screenshot = screenshot_path is None
 
     try:
-        screenshot_path = take_screenshot(instance_index)
+        if screenshot_path is None:
+            screenshot_path = take_screenshot(instance_index)
         if not screenshot_path:
             log_message("Could not take screenshot for timer OCR.", level="error")
             return None
@@ -315,7 +324,8 @@ def read_screen_time(
             with Image.open(screenshot_path) as opened_img:
                 img = opened_img.copy()
         finally:
-            delete_temp_screenshot(screenshot_path)
+            if owned_screenshot:
+                delete_temp_screenshot(screenshot_path)
         if roi:
             x, y, w, h = roi
             img = img.crop((x, y, x + w, y + h))
