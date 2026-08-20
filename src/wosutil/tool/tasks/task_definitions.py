@@ -20,6 +20,7 @@ from wosutil.tool.tasks.task_automation import (
     claim_vip_daily_rewards,
     do_intel_missions,
     donate_to_alliance_tech,
+    play_bear_trap,
     send_pet_adventure_chests,
     start_tundra_trek_idle,
     train_troops,
@@ -37,6 +38,15 @@ def get_task_definitions(log_message):
         dict: Dictionary of task definitions with metadata and functions.
     """
     task_definitions = {
+        "play_bear_trap": {
+            "id": "play_bear_trap",
+            "name": "Play Bear Trap",
+            "description": "Recalls every march to prepare the bear trap attack and then attacks the bear trap with all marches.",
+            "function": lambda instance_index: play_bear_trap(instance_index),
+            "priority": 0,
+            "reschedule_seconds": 2 * 24 * 60 * 60,  # 2 days
+            "category": "world",
+        },
         "claim_idle": {
             "id": "claim_idle",
             "name": "Claim Idle Income",

@@ -173,6 +173,7 @@ TEMPLATE_PATHS = {
     "send_march_screen": os.path.join(TEMPLATES_DIR, "world", "march", "send_march_screen.png"),
     "gather_tile_increase_level": os.path.join(TEMPLATES_DIR, "world", "gather", "gather_tile_increase_level.png"),
     "remove_hero": os.path.join(TEMPLATES_DIR, "world", "march", "remove_hero.png"),
+    "recall_march": os.path.join(TEMPLATES_DIR, "world", "march", "recall_march.png"),
 }
 
 # --- Automation Parameters ---
@@ -239,4 +240,5 @@ ROI = {
     "world_schedule_utc": (99, 0, 264, 42),
     "worldmap_search": (0, 843, 718, 435),
     "worldmap": (0, 95, 718, 1008),
+    "worldmap_marching": (0, 175, 280, 492),
 }

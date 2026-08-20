@@ -1313,6 +1313,47 @@ KILL_BEAST_MARCH_SCROLL_START = (511, 122)
 KILL_BEAST_MARCH_SCROLL_END = (63, 122)
 
 
+def recall_march(instance_index):
+    """Recalls every march currently away from the city on the world map.
+
+    Takes a single screenshot and searches the world-map marching panel ROI
+    (``worldmap_marching``) for the 'recall_march' template, clicking each
+    occurrence and confirming the recall popup at the fixed coordinates
+    (510, 792) before moving to the next one.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Number of marches recalled (0 when there is nothing to recall).
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        return 0
+
+    template_path = get_template_path("recall_march")
+    roi = get_roi("worldmap_marching")
+    if not template_path or not roi:
+        log_message("Could not get the recall_march template or the worldmap_marching ROI.", level="error")
+        delete_temp_screenshot(screenshot_path)
+        return 0
+
+    try:
+        matches = find_multiple_templates(template_path, screenshot_path, roi=roi)
+        if not matches:
+            log_message("No marching units to recall on the world map.", level="info")
+            return 0
+        for x, y, w, h in matches:
+            stop_signal.check()
+            cx, cy = x + w // 2, y + h // 2
+            click_on_coordinates(cx, cy, instance_index, delay=0.6)
+            click_on_coordinates(510, 792, instance_index, delay=0.6)
+            log_message(f"Recalled a march by clicking ({cx}, {cy}) and confirming at (510, 792).", level="success")
+        return len(matches)
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
 def send_march(instance_index):
     """Read the march timer and deploy the march by clicking its Deploy button.
 

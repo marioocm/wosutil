@@ -17,6 +17,7 @@ from wosutil.emulator.emulator_manager import (
 from wosutil.emulator.image_utils import (
     find_multiple_templates,
     find_template_center_on_screen,
+    find_text_center_on_screen,
     read_screen_time,
 )
 from wosutil.preferences import (
@@ -38,6 +39,7 @@ from wosutil.tool.tasks.task_helpers import (
     ensure_hero_recruit_screen,
     ensure_pet_adventure_screen,
     ensure_pet_skill_screen,
+    ensure_world_screen,
     gather_tile,
     go_alliance_tab,
     go_cityworld,
@@ -53,6 +55,7 @@ from wosutil.tool.tasks.task_helpers import (
     is_game_on_screen,
     kill_intel_beast,
     open_pet_adventure_chest,
+    recall_march,
     rescue_intel_survivor,
     start_pet_adventure_chests,
 )
@@ -1130,3 +1133,52 @@ def do_intel_missions(instance_index):
             return True, timer
     log_message("No reliable intel timer detected, using default value (4 hours).", level="warning")
     return True, 4 * 60 * 60
+
+
+def play_bear_trap(instance_index):
+    """Recalls every march to prepare the bear trap attack.
+
+    The bear trap must be attacked with all marches available, so every march
+    still gathering or marching away from the city is recalled first. The task
+    ensures the world map, checks the marching panel for the 'Marching' label
+    and recalls every march listed in it, then clicks the label to reopen the
+    panel, recalls again, and finishes with one last recall pass so a march
+    that appeared or was skipped (e.g. because it moved a little) is not left
+    behind.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True when the world map was reached and the panel was checked,
+            False otherwise.
+    """
+    log_message("Preparing the bear trap attack by recalling all marches...", level="info")
+    if not ensure_world_screen(instance_index):
+        return False
+
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        return False
+    roi = get_roi("worldmap_marching")
+    try:
+        found, marching_center = find_text_center_on_screen(
+            screenshot_path,
+            "Marching",
+            roi=roi,
+            instance_index=instance_index,
+            debug_label="play_bear_trap_marching",
+        )
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+    if not found or marching_center is None:
+        log_message("No 'Marching' label on the world map, all marches are at the city.", level="success")
+        return True
+
+    recall_march(instance_index)
+    click_on_coordinates(marching_center[0], marching_center[1], instance_index, delay=0.8)
+    recall_march(instance_index)
+    # Final pass: catch any march that appeared or was skipped while recalling.
+    recall_march(instance_index)
+    return True
