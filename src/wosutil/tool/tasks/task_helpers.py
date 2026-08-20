@@ -665,6 +665,9 @@ PET_ADVENTURE_CHEST_DETECTION_DELAY = 1.5  # Seconds between the two detection s
 PET_ADVENTURE_CHEST_MAX_STARTS = 5  # Max start attempts per run (4 chests per day + guard)
 PET_ADVENTURE_CHEST_SELECT_RETRY_SECONDS = 1.0  # Wait before retrying the select pet search
 PET_ADVENTURE_CHEST_RETRY_SECONDS = 2.0  # Wait before re-detecting after a failed detection
+PET_ADVENTURE_CHEST_START_RETRY_ATTEMPTS = 3  # Re-detect attempts while starting chests
+PET_ADVENTURE_CHEST_START_RETRY_SECONDS = 2.0  # Wait between start re-detection attempts
+PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY = 60  # px: chest centers closer than this are the same chest
 # Main templates: identify the chest type and state (available to start / ready to open)
 PET_ADVENTURE_CHEST_TEMPLATES = [
     ("pet_adventure_chest1", 1, "start"),
@@ -716,12 +719,45 @@ def ensure_pet_adventure_screen(instance_index, max_attempts=2):
     )
 
 
+# State precedence used to break ties when the same physical chest matches
+# several templates with the same number of occurrences. A chest matched by the
+# start template is never ready (a ready chest only matches the "_ready"
+# template), so start wins over ready.
+PET_ADVENTURE_CHEST_STATE_PRECEDENCE = {"start": 3, "ready": 2, "filling": 1}
+
+
+def _pet_adventure_boxes_overlap(box1, box2, iou_threshold=0.2):
+    """Returns True when two template match boxes overlap enough to be the same chest.
+
+    Args:
+        box1 (tuple): (x, y, w, h) of the first match.
+        box2 (tuple): (x, y, w, h) of the second match.
+        iou_threshold (float): Minimum intersection over union to consider the
+            boxes the same chest (default 0.2).
+
+    Returns:
+        bool: True if the boxes belong to the same physical chest.
+    """
+    ax, ay, aw, ah = box1
+    bx, by, bw, bh = box2
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    iw, ih = ix2 - ix1, iy2 - iy1
+    if iw <= 0 or ih <= 0:
+        return False
+    inter = iw * ih
+    union = aw * ah + bw * bh - inter
+    return inter / union >= iou_threshold
+
+
 def merge_pet_adventure_chest_matches(chests, positions, chest_type, state):
     """Merges template matches into a chest detection accumulator.
 
-    Chests are keyed by their rounded position so the same chest found by
-    several templates, or in the two screenshots, is only counted once.
-    For the same position a "ready" state always wins over "start"/"filling".
+    Matches are grouped per physical chest by their rounded position or by box
+    overlap, so the same chest found by several templates (e.g. the "start" and
+    "_ready" templates of the same type) or in the two screenshots is only
+    counted once. Every state occurrence is tallied and the winning state is the
+    most frequent one, with "start" breaking ties over "ready" over "filling".
 
     Args:
         chests (dict): Accumulator mapping position key -> chest dict.
@@ -736,9 +772,26 @@ def merge_pet_adventure_chest_matches(chests, positions, chest_type, state):
         key = (x // 10, y // 10)
         chest = chests.get(key)
         if chest is None:
-            chests[key] = {"x": x, "y": y, "w": w, "h": h, "type": chest_type, "state": state}
-        elif state == "ready" and chest["state"] != "ready":
-            chest["state"] = "ready"
+            for existing in chests.values():
+                if existing["type"] == chest_type and _pet_adventure_boxes_overlap((existing["x"], existing["y"], existing["w"], existing["h"]), (x, y, w, h)):
+                    chest = existing
+                    break
+        if chest is None:
+            chests[key] = {
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+                "type": chest_type,
+                "state": state,
+                "state_counts": {state: 1},
+            }
+        else:
+            chest["state_counts"][state] = chest["state_counts"].get(state, 0) + 1
+            chest["state"] = max(
+                chest["state_counts"],
+                key=lambda s: (chest["state_counts"][s], PET_ADVENTURE_CHEST_STATE_PRECEDENCE[s]),
+            )
     return chests
 
 
@@ -793,6 +846,49 @@ def detect_pet_adventure_chests(instance_index):
         delete_temp_screenshot(second_shot)
 
 
+def _chest_center_is_attempted(chest, attempted_centers):
+    """Returns True when a chest center is within proximity of an attempted center.
+
+    Chests vibrate and shift a few pixels between detections, so an exact
+    position match would re-attempt the same physical chest (e.g. one that is
+    mid-animation). Centers closer than PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY
+    pixels are considered the same chest.
+
+    Args:
+        chest (dict): Chest detection dict.
+        attempted_centers (list): List of (x, y) centers already attempted.
+
+    Returns:
+        bool: True if the chest was already attempted.
+    """
+    cx = chest["x"] + chest["w"] // 2
+    cy = chest["y"] + chest["h"] // 2
+    return any(abs(cx - ax) <= PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY and abs(cy - ay) <= PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY for ax, ay in attempted_centers)
+
+
+def _detect_three_pet_adventure_chests(instance_index):
+    """Detects the 3 pet adventure chests, retrying until they are visible.
+
+    After a chest is started or opened the remaining chests can animate for a
+    few seconds, during which fewer than 3 chests are detected. This retries the
+    detection (closing leftover panels between attempts) instead of failing.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        list: Detected chests, or a list with fewer than 3 entries if they never
+            became visible within the retry budget.
+    """
+    for _ in range(PET_ADVENTURE_CHEST_START_RETRY_ATTEMPTS):
+        chests = detect_pet_adventure_chests(instance_index)
+        if chests and len(chests) >= 3:
+            return chests
+        time.sleep(PET_ADVENTURE_CHEST_START_RETRY_SECONDS)
+        ensure_pet_adventure_screen(instance_index)
+    return chests
+
+
 def start_pet_adventure_chest(instance_index, x, y):
     """Starts a single pet adventure chest by clicking it and confirming with the select pet and start buttons.
 
@@ -819,8 +915,11 @@ def start_pet_adventure_chest(instance_index, x, y):
         time.sleep(PET_ADVENTURE_CHEST_SELECT_RETRY_SECONDS)
         if not click_on_template("pet_adventure_select_pet_button", instance_index, delay=1.0):
             log_message("Select pet button NOT found, the chest is probably already active. Returning to pet adventure screen.", level="warning")
+            # A single back closes the chest panel if it opened. Pressing a second
+            # one could exit the pet adventure screen entirely, so verify the
+            # screen instead of pressing blindly.
             press_android_back_button(instance_index, delay=1.0)
-            press_android_back_button(instance_index, delay=1.0)
+            ensure_pet_adventure_screen(instance_index)
             return "already_active"
 
     if not click_on_template("pet_adventure_start_button", instance_index, delay=1.5):
@@ -855,32 +954,35 @@ def start_pet_adventure_chests(instance_index):
             button was missing (all 4 daily attempts used), or "failed" if the
             3 chests could not be detected to keep going.
     """
-    attempted_positions = set()
+    attempted_centers = []
     for _ in range(PET_ADVENTURE_CHEST_MAX_STARTS):
         stop_signal.check()
 
-        chests = detect_pet_adventure_chests(instance_index)
+        chests = _detect_three_pet_adventure_chests(instance_index)
         if not chests or len(chests) < 3:
-            time.sleep(PET_ADVENTURE_CHEST_RETRY_SECONDS)
-            chests = detect_pet_adventure_chests(instance_index)
+            # The chest clicks may have exited the pet adventure screen (e.g. a
+            # misclassified chest opened no panel and a back press closed the
+            # screen); re-enter it once before giving up.
+            if not is_game_on_pet_adventure_screen(instance_index):
+                log_message("Not on the pet adventure screen while starting chests, re-entering.", level="info")
+                go_pet_adventure(instance_index)
+                ensure_pet_adventure_screen(instance_index)
+            chests = _detect_three_pet_adventure_chests(instance_index)
             if not chests or len(chests) < 3:
                 log_message("Could not detect the 3 pet adventure chests while starting them.", level="warning")
                 return "failed"
 
         candidates = sorted(
-            (c for c in chests if c["state"] == "start"),
+            (c for c in chests if c["state"] == "start" and not _chest_center_is_attempted(c, attempted_centers)),
             key=lambda c: (c["type"] != 3, -c["type"]),  # chest 3 first, then type 2, then type 1
         )
-        chest = next((c for c in candidates if (c["x"] // 10, c["y"] // 10) not in attempted_positions), None)
-        if chest is None:
+        if not candidates:
             return "done"
-        attempted_positions.add((chest["x"] // 10, chest["y"] // 10))
+        chest = candidates[0]
+        center = (chest["x"] + chest["w"] // 2, chest["y"] + chest["h"] // 2)
+        attempted_centers.append(center)
 
-        result = start_pet_adventure_chest(
-            instance_index,
-            chest["x"] + chest["w"] // 2,
-            chest["y"] + chest["h"] // 2,
-        )
+        result = start_pet_adventure_chest(instance_index, center[0], center[1])
         if result == "no_attempts":
             return "no_attempts"
         if result == "already_active":

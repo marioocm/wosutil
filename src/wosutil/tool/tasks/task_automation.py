@@ -36,6 +36,7 @@ from wosutil.tool.tasks.task_helpers import (
     end_tundra_trek_idle_if_active,
     ensure_city_screen,
     ensure_hero_recruit_screen,
+    ensure_pet_adventure_screen,
     ensure_pet_skill_screen,
     gather_tile,
     go_alliance_tab,
@@ -739,6 +740,33 @@ def claim_pet_adventure_ally_treasure(instance_index):
 PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS = 5 * 60 * 60  # Default reschedule (chest 3 takes 5h)
 PET_ADVENTURE_CHESTS_DAILY_LIMIT_RESCHEDULE_SECONDS = 6 * 60 * 60  # Reschedule when daily attempts are exhausted
 PET_ADVENTURE_CHESTS_MAX_LOOP_ITERATIONS = 15  # Safety guard against infinite loops
+PET_ADVENTURE_CHESTS_DETECT_RETRY_ATTEMPTS = 3  # Re-detect attempts after opening a chest
+PET_ADVENTURE_CHESTS_DETECT_RETRY_SECONDS = 3.0  # Wait between re-detection attempts
+
+
+def _detect_pet_adventure_chests_with_retry(instance_index):
+    """Detects the 3 pet adventure chests, retrying until they are visible.
+
+    After opening a ready chest a new one spawns with an animation that can take
+    a few seconds, during which fewer than 3 chests are detected. Retrying (and
+    closing leftover popups between attempts) prevents the task from aborting on
+    a transient detection.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        list: Detected chests, or a list with fewer than 3 entries if they never
+            became visible within the retry budget.
+    """
+    for _ in range(PET_ADVENTURE_CHESTS_DETECT_RETRY_ATTEMPTS):
+        chests = detect_pet_adventure_chests(instance_index)
+        if chests and len(chests) >= 3:
+            return chests
+        log_message("Fewer than 3 pet adventure chests detected, retrying...", level="info")
+        time.sleep(PET_ADVENTURE_CHESTS_DETECT_RETRY_SECONDS)
+        ensure_pet_adventure_screen(instance_index)
+    return chests
 
 
 def _finish_pet_adventure_starts(instance_index, result):
@@ -815,7 +843,7 @@ def send_pet_adventure_chests(instance_index):
     for _ in range(PET_ADVENTURE_CHESTS_MAX_LOOP_ITERATIONS):
         stop_signal.check()
 
-        chests = detect_pet_adventure_chests(instance_index)
+        chests = _detect_pet_adventure_chests_with_retry(instance_index)
         if not chests or len(chests) < 3:
             log_message(f"Detected {len(chests) if chests else 0} pet adventure chests, expected 3. Aborting task.", level="warning")
             press_android_back_button(instance_index)
