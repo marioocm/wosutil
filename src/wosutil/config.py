@@ -238,4 +238,5 @@ ROI = {
     "train_troop_promote": (561, 394, 159, 274),
     "world_schedule_utc": (99, 0, 264, 42),
     "worldmap_search": (0, 843, 718, 435),
+    "worldmap": (0, 95, 718, 1008),
 }

@@ -197,6 +197,52 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
             delete_temp_screenshot(screenshot_path)
 
 
+def _click_template_repeatedly(
+    template_name,
+    instance_index,
+    clicks,
+    roi=None,
+    delay=CLICK_DELAY,
+    gray=False,
+    threshold=SCREEN_CHECK_THRESHOLD,
+):
+    """Locate a template once and click its unchanged center repeatedly.
+
+    Args:
+        template_name (str): Template name in TEMPLATE_PATHS.
+        instance_index (int): Emulator instance index.
+        clicks (int): Number of clicks to send after the template is found.
+        roi (tuple, optional): Region of interest (x, y, w, h).
+        delay (float): Delay after each click.
+        gray (bool): Use gray-scale matching when True. The default is color
+            matching.
+        threshold (float): Minimum confidence threshold for a match.
+
+    Returns:
+        bool: True when the template was found and all clicks were sent.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    template_path = get_template_path(template_name)
+    if not screenshot_path or not template_path:
+        log_message(f"Could not get screenshot or template for '{template_name}'.", level="error")
+        delete_temp_screenshot(screenshot_path)
+        return False
+
+    try:
+        if gray:
+            found, center = find_gray_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
+        else:
+            found, center = find_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
+        if not found or not center:
+            return False
+        for _ in range(clicks):
+            click_on_coordinates(center[0], center[1], instance_index, delay=delay)
+        log_message(f"Template '{template_name}' found; clicked it {clicks} times.", level="success")
+        return True
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
 def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_DELAY, screenshot_path=None):
     """Tries to find and click the first template in the list that matches.
 
@@ -240,7 +286,7 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
             delete_temp_screenshot(screenshot_path)
 
 
-def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False):
+def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False, fuzzy=False):
     """Takes a screenshot and clicks the center of the given text if found.
 
     Text-based counterpart of :func:`click_on_template` for menus whose
@@ -257,6 +303,8 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
             no click between captures).
         last (bool): When True click the lowest occurrence of the text instead
             of the first one.
+        fuzzy (bool): Retry the OCR with a looser mask and small spelling
+            differences for decorative single-word labels.
 
     Returns:
         bool: True if the text was found and clicked, False otherwise.
@@ -269,7 +317,15 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
         return False
 
     try:
-        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi, instance_index=instance_index, debug_label=f"click_text_{text}", last=last)
+        text_search_kwargs = {
+            "roi": roi,
+            "instance_index": instance_index,
+            "debug_label": f"click_text_{text}",
+            "last": last,
+        }
+        if fuzzy:
+            text_search_kwargs["fuzzy"] = True
+        found, center = find_text_center_on_screen(screenshot_path, text, **text_search_kwargs)
         if not found or not center:
             return False
 
@@ -393,6 +449,38 @@ def ensure_world_screen(instance_index):
         return True
     log_message("Failed to reach world screen after navigation.", level="error")
     return False
+
+
+WORLD_MAP_SEARCH_SCROLL_START = (636, 912)
+WORLD_MAP_SEARCH_SCROLL_END = (86, 912)
+WORLD_MAP_SEARCH_SCROLL_DURATION_MS = 200
+
+
+def go_worldmap_search(instance_index, scroll=True):
+    """Open the world-map resource search panel.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        scroll (bool): Whether to scroll the resource selector from right to
+            left after opening it.
+
+    Returns:
+        bool: True when the world map was reached and the search was opened.
+    """
+    if not ensure_world_screen(instance_index):
+        return False
+
+    click_on_coordinates(44, 878, instance_index)
+    if scroll:
+        scroll_screen(
+            WORLD_MAP_SEARCH_SCROLL_START[0],
+            WORLD_MAP_SEARCH_SCROLL_START[1],
+            WORLD_MAP_SEARCH_SCROLL_END[0],
+            WORLD_MAP_SEARCH_SCROLL_END[1],
+            WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
+            instance_index,
+        )
+    return True
 
 
 def go_alliance_tab(instance_index):
@@ -854,26 +942,6 @@ def ensure_pet_skill_screen(instance_index, max_attempts=3):
     )
 
 
-def is_pet_skill_ox_active(instance_index):
-    """Check whether the ox skill is active instead of waiting for a cooldown.
-
-    The active marker is displayed where the ox cooldown timer normally appears,
-    so the existing ox timer ROI is reused.
-
-    Args:
-        instance_index (int): Emulator instance index.
-
-    Returns:
-        bool: True when the ox active marker is visible.
-    """
-    return is_game_on_screen(instance_index, "pet_skill_ox_active", "pet_skill_ox_timer")
-
-
-GATHER_TILE_SCROLL_START = (636, 912)
-GATHER_TILE_SCROLL_END = (86, 912)
-GATHER_TILE_SCROLL_DURATION_MS = 200
-
-
 def _read_gathering_tile_time(instance_index):
     """Read the gathering duration to the right of the ``Gathering Time`` label.
 
@@ -913,7 +981,12 @@ def _read_gathering_tile_time(instance_index):
         max(1, screen_right - timer_x),
         max(50, label_h + 20),
     )
-    return read_screen_time(instance_index, roi=timer_roi, debug_label="gathering_tile_timer")
+    return read_screen_time(
+        instance_index,
+        roi=timer_roi,
+        debug_label="gathering_tile_timer",
+        ocr_psms=(6, 7, 8, 11, 12, 13),
+    )
 
 
 def _click_leftmost_template(instance_index, template_name, delay=CLICK_DELAY):
@@ -968,7 +1041,7 @@ def gather_tile(instance_index, resource):
     if resource not in GATHER_RESOURCES:
         log_message(f"Unsupported gathering resource '{resource}'.", level="error")
         return None
-    if not ensure_world_screen(instance_index):
+    if not go_worldmap_search(instance_index):
         return None
 
     search_roi = get_roi("worldmap_search")
@@ -976,25 +1049,13 @@ def gather_tile(instance_index, resource):
         log_message("Could not get the world-map search ROI.", level="error")
         return None
 
-    click_on_coordinates(44, 878, instance_index)
-    scroll_screen(
-        GATHER_TILE_SCROLL_START[0],
-        GATHER_TILE_SCROLL_START[1],
-        GATHER_TILE_SCROLL_END[0],
-        GATHER_TILE_SCROLL_END[1],
-        GATHER_TILE_SCROLL_DURATION_MS,
-        instance_index,
-    )
-
-    if not click_on_text(resource.title(), instance_index, roi=search_roi):
+    if not click_on_text(resource.title(), instance_index, roi=search_roi, fuzzy=True):
         log_message(f"Resource '{resource}' NOT found in the world-map search.", level="warning")
         return None
 
-    for _ in range(10):
-        if not click_on_template("gather_tile_increase_level", instance_index, roi=search_roi):
-            break
+    _click_template_repeatedly("gather_tile_increase_level", instance_index, clicks=10, roi=search_roi, gray=False, threshold=0.92)
 
-    if not click_on_text("Search", instance_index, roi=search_roi, delay=3.0):
+    if not click_on_text("Search", instance_index, roi=search_roi, delay=3.0, last=True, fuzzy=True):
         log_message("Search button NOT found in the world-map search.", level="warning")
         return None
 
@@ -1002,7 +1063,7 @@ def gather_tile(instance_index, resource):
     if gathering_time is None:
         return None
 
-    if not click_on_text("Gather", instance_index, last=True):
+    if not click_on_text("Gather", instance_index, roi=get_roi("worldmap"), last=True, fuzzy=True):
         log_message("Gather button NOT found on the resource tile.", level="warning")
         return None
     if not _click_leftmost_template(instance_index, "remove_hero", delay=1.0):

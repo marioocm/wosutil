@@ -49,7 +49,7 @@ from wosutil.tool.tasks.task_helpers import (
     go_tundra_trek,
     is_game_on_intel_screen,
     is_game_on_pet_adventure_screen,
-    is_pet_skill_ox_active,
+    is_game_on_screen,
     kill_intel_beast,
     open_pet_adventure_chest,
     rescue_intel_survivor,
@@ -913,12 +913,12 @@ def activate_daily_pet_skills(instance_index):
             log_message("Not on the pet skill screen, aborting task.", level="warning")
             return False, PET_SKILL_RESCHEDULE_SECONDS
 
-        if not ox_gathered and is_pet_skill_ox_active(instance_index):
+        if not ox_gathered and is_game_on_screen(instance_index, "pet_skill_ox_active", "pet_skill_ox_timer"):
+            press_android_back_button(instance_index)
             resource = get_gather_resource()
             log_message(f"Ox skill is active; gathering {resource} before continuing pet skills.", level="info")
             if gather_tile(instance_index, resource) is None:
-                log_message("Could not start the ox gathering march, aborting task.", level="warning")
-                return False, PET_SKILL_RESCHEDULE_SECONDS
+                log_message("Could not start the ox gathering march; continuing with the remaining pet skills.", level="warning")
             ox_gathered = True
             if not go_pet_skill(instance_index):
                 log_message("Could not return to the pet skill screen after gathering.", level="warning")

@@ -23,6 +23,7 @@ from wosutil.emulator.image_utils import (
     get_box_center,
     load_template,
     non_max_suppression,
+    read_screen_time,
     read_text_lines_on_image,
     resolve_tesseract_cmd,
 )
@@ -106,6 +107,19 @@ class TestImageUtils(unittest.TestCase):
             x, y, w, h = position
             self.assertEqual(w, 10)
             self.assertEqual(h, 10)
+
+    def test_read_screen_time_accepts_custom_ocr_modes(self):
+        """A caller can add OCR modes needed by a different timer rendering."""
+        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), \
+            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), \
+            patch(
+                "wosutil.emulator.image_utils.pytesseract.image_to_string",
+                side_effect=lambda _image, config: "12:24:29" if "--psm 11" in config else "",
+            ) as image_to_string:
+            result = read_screen_time(0, ocr_psms=(6, 11))
+
+        self.assertEqual(result, 12 * 3600 + 24 * 60 + 29)
+        self.assertEqual(image_to_string.call_count, 2)
 
     def test_find_template_on_screen_not_found(self):
         """Test template not found."""
@@ -417,6 +431,70 @@ class TestTextOcr(unittest.TestCase):
         self.assertEqual(result, box)
         self.assertEqual(ocr_lines.call_count, 2)
         self.assertEqual(ocr_lines.call_args_list[1].kwargs, {"psm": 11})
+
+    @patch("wosutil.emulator.image_utils._ocr_lines")
+    def test_fuzzy_search_recovers_a_decorative_single_word_label(self, ocr_lines):
+        """A small OCR spelling error can still locate a fixed UI label."""
+        image = Image.new("RGB", (100, 40), "black")
+        box = (40, 10, 20, 10)
+        ocr_lines.side_effect = [
+            [[]],
+            [[]],
+            [[("ol", box)]],
+            [[]],
+            [[]],
+            [[]],
+            [[]],
+            [[]],
+        ]
+
+        found, result = find_text_on_image(image, "Coal", fuzzy=True)
+
+        self.assertTrue(found)
+        self.assertEqual(result, box)
+
+    @patch("wosutil.emulator.image_utils._ocr_lines")
+    def test_last_fuzzy_search_prefers_a_lower_alternative_match(self, ocr_lines):
+        """The lower OCR match wins even when the upper match was exact."""
+        image = Image.new("RGB", (100, 80), "black")
+        upper_box = (10, 5, 30, 10)
+        lower_box = (50, 60, 30, 10)
+        ocr_lines.side_effect = [
+            [[("Search", upper_box)]],
+            [[("Search", lower_box)]],
+            [[]],
+            [[]],
+            [[]],
+            [[]],
+            [[]],
+        ]
+
+        found, result = find_text_on_image(image, "Search", last=True, fuzzy=True)
+
+        self.assertTrue(found)
+        self.assertEqual(result, lower_box)
+
+    @patch("wosutil.emulator.image_utils._ocr_lines")
+    def test_exact_gather_match_beats_lower_fuzzy_noise(self, ocr_lines):
+        """The Gather button wins over a lower unrelated fuzzy spelling."""
+        image = Image.new("RGB", (100, 100), "black")
+        button_box = (40, 50, 30, 10)
+        noise_box = (5, 85, 30, 10)
+        ocr_lines.side_effect = [
+            [[]],
+            [[]],
+            [[("Gather", button_box)]],
+            [[("ashery", noise_box)]],
+            [[]],
+            [[]],
+            [[]],
+            [[]],
+        ]
+
+        found, result = find_text_on_image(image, "Gather", last=True, fuzzy=True)
+
+        self.assertTrue(found)
+        self.assertEqual(result, button_box)
 
     def test_find_text_picks_last_occurrence_when_duplicated(self):
         """A duplicated label returns the lowest occurrence with last=True."""

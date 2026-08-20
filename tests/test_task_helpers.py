@@ -11,11 +11,13 @@ from wosutil.config import (
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.tool.tasks.task_helpers import (
-    GATHER_TILE_SCROLL_END,
-    GATHER_TILE_SCROLL_START,
     KILL_BEAST_MARCH_POSITIONS,
     KILL_BEAST_MARCH_SCROLL_END,
     KILL_BEAST_MARCH_SCROLL_START,
+    WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
+    WORLD_MAP_SEARCH_SCROLL_END,
+    WORLD_MAP_SEARCH_SCROLL_START,
+    _click_template_repeatedly,
     click_first_found_template,
     click_on_template,
     click_on_text,
@@ -26,9 +28,9 @@ from wosutil.tool.tasks.task_helpers import (
     go_sidemenu_city,
     go_sidemenu_daily,
     go_tundra_trek,
+    go_worldmap_search,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
-    is_pet_skill_ox_active,
     kill_beast,
     kill_intel_beast,
 )
@@ -134,8 +136,8 @@ class TestKillBeast(unittest.TestCase):
                 self.click_on_coordinates.reset_mock()
 
 
-class TestGatherTile(unittest.TestCase):
-    """Test cases for the world-map gathering helper."""
+class TestGoWorldMapSearch(unittest.TestCase):
+    """Test cases for opening the world-map search panel."""
 
     def setUp(self):
         """Set up shared mocks."""
@@ -143,9 +145,53 @@ class TestGatherTile(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.ensure_world_screen"),
             patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
             patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
+        ]
+        self.ensure_world, self.click_coords, self.scroll_screen = [p.start() for p in self.patchers]
+        self.ensure_world.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_opens_search_with_scroll_by_default(self):
+        """The default navigation opens the search and scrolls the resources."""
+        self.assertTrue(go_worldmap_search(0))
+
+        self.ensure_world.assert_called_once_with(0)
+        self.click_coords.assert_called_once_with(44, 878, 0)
+        self.scroll_screen.assert_called_once_with(
+            WORLD_MAP_SEARCH_SCROLL_START[0],
+            WORLD_MAP_SEARCH_SCROLL_START[1],
+            WORLD_MAP_SEARCH_SCROLL_END[0],
+            WORLD_MAP_SEARCH_SCROLL_END[1],
+            WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
+            0,
+        )
+
+    def test_opens_search_without_scroll_when_disabled(self):
+        """The caller can open the search without changing the resource row."""
+        self.assertTrue(go_worldmap_search(0, scroll=False))
+
+        self.click_coords.assert_called_once_with(44, 878, 0)
+        self.scroll_screen.assert_not_called()
+
+    def test_returns_false_when_world_map_cannot_be_reached(self):
+        """Navigation fails without opening the search when the map is unavailable."""
+        self.ensure_world.return_value = False
+
+        self.assertFalse(go_worldmap_search(0))
+        self.click_coords.assert_not_called()
+        self.scroll_screen.assert_not_called()
+
+
+class TestGatherTile(unittest.TestCase):
+    """Test cases for the world-map gathering helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_worldmap_search"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
             patch("wosutil.tool.tasks.task_helpers.get_roi"),
             patch("wosutil.tool.tasks.task_helpers.click_on_text"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_template"),
+            patch("wosutil.tool.tasks.task_helpers._click_template_repeatedly"),
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.get_template_path"),
@@ -155,12 +201,11 @@ class TestGatherTile(unittest.TestCase):
         ]
         self.mocks = [p.start() for p in self.patchers]
         (
-            self.ensure_world,
+            self.go_search,
             self.click_coords,
-            self.scroll_screen,
             self.get_roi,
             self.click_text,
-            self.click_template,
+            self.click_template_repeatedly,
             self.take_screenshot,
             self.delete_screenshot,
             self.get_template_path,
@@ -168,11 +213,17 @@ class TestGatherTile(unittest.TestCase):
             self.find_text,
             self.read_time,
         ) = self.mocks
-        self.ensure_world.return_value = True
+        self.go_search.return_value = True
         search_roi = (0, 843, 718, 435)
-        self.get_roi.side_effect = lambda name: search_roi if name == "worldmap_search" else (501, 1138, 118, 29)
+        self.get_roi.side_effect = lambda name: (
+            search_roi
+            if name == "worldmap_search"
+            else (0, 95, 718, 1008)
+            if name == "worldmap"
+            else (501, 1138, 118, 29)
+        )
         self.click_text.return_value = True
-        self.click_template.return_value = True
+        self.click_template_repeatedly.return_value = True
         self.take_screenshot.return_value = "/tmp/march.png"
         self.get_template_path.return_value = "/tmp/remove_hero.png"
         self.find_multiple.return_value = [(400, 100, 30, 30), (200, 100, 30, 30)]
@@ -185,47 +236,41 @@ class TestGatherTile(unittest.TestCase):
         result = gather_tile(0, "wood")
 
         self.assertEqual(result, 180)
-        self.ensure_world.assert_called_once_with(0)
-        self.click_coords.assert_any_call(44, 878, 0)
-        self.scroll_screen.assert_called_once_with(
-            GATHER_TILE_SCROLL_START[0],
-            GATHER_TILE_SCROLL_START[1],
-            GATHER_TILE_SCROLL_END[0],
-            GATHER_TILE_SCROLL_END[1],
-            200,
-            0,
-        )
-        self.click_text.assert_any_call("Wood", 0, roi=(0, 843, 718, 435))
-        self.click_text.assert_any_call("Search", 0, roi=(0, 843, 718, 435), delay=3.0)
-        self.click_text.assert_any_call("Gather", 0, last=True)
+        self.go_search.assert_called_once_with(0)
+        self.click_text.assert_any_call("Wood", 0, roi=(0, 843, 718, 435), fuzzy=True)
+        self.click_text.assert_any_call("Search", 0, roi=(0, 843, 718, 435), delay=3.0, last=True, fuzzy=True)
+        self.click_text.assert_any_call("Gather", 0, roi=(0, 95, 718, 1008), last=True, fuzzy=True)
         self.click_text.assert_any_call("Deploy", 0, last=True)
-        self.assertEqual(self.click_template.call_count, 10)
-        self.click_template.assert_called_with("gather_tile_increase_level", 0, roi=(0, 843, 718, 435))
+        self.click_template_repeatedly.assert_called_once_with(
+            "gather_tile_increase_level",
+            0,
+            clicks=10,
+            roi=(0, 843, 718, 435),
+            gray=False,
+            threshold=0.92,
+        )
         self.find_text.assert_called_once_with(
             "/tmp/march.png",
             "Gathering Time",
             instance_index=0,
             debug_label="gathering_tile_time",
         )
+        self.assertEqual(self.read_time.call_args_list[0].kwargs["ocr_psms"], (6, 7, 8, 11, 12, 13))
         self.assertEqual(self.read_time.call_args_list[1].kwargs["roi"], (501, 1138, 118, 29))
         self.click_coords.assert_any_call(215, 115, 0, delay=1.0)
+
+    def test_meat_uses_the_resource_label_subregion(self):
+        """Meat is searched in the narrow label area instead of the full ROI."""
+        result = gather_tile(0, "meat")
+
+        self.assertEqual(result, 180)
+        self.click_text.assert_any_call("Meat", 0, roi=(0, 843, 718, 435), fuzzy=True)
 
     def test_invalid_resource_is_rejected_before_navigation(self):
         """An unsupported resource does not interact with the emulator."""
         self.assertIsNone(gather_tile(0, "gold"))
-        self.ensure_world.assert_not_called()
+        self.go_search.assert_not_called()
         self.click_coords.assert_not_called()
-
-
-class TestPetSkillOxActive(unittest.TestCase):
-    """Test the ox active-state template lookup."""
-
-    def test_uses_the_ox_timer_roi(self):
-        """The active marker is searched in the existing ox timer ROI."""
-        with patch("wosutil.tool.tasks.task_helpers.is_game_on_screen", return_value=True) as is_on_screen:
-            self.assertTrue(is_pet_skill_ox_active(0))
-
-        is_on_screen.assert_called_once_with(0, "pet_skill_ox_active", "pet_skill_ox_timer")
 
 
 class TestMarchPositions(unittest.TestCase):
@@ -531,6 +576,51 @@ class TestClickOnTemplate(unittest.TestCase):
         self.assertTrue(click_on_template("my_template", 0, gray=True, delay=0.5))
         self.click_coords.assert_called_once_with(10, 20, 0, delay=0.5)
         self.find_center.assert_not_called()
+
+
+class TestClickTemplateRepeatedly(unittest.TestCase):
+    """Test the single-search repeated-click template helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
+            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.find_gray_template_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.take_screenshot,
+            self.get_template_path,
+            self.find_center,
+            self.find_gray_center,
+            self.click_coords,
+            self.delete_screenshot,
+        ) = self.mocks
+        self.take_screenshot.return_value = "/tmp/shot.png"
+        self.get_template_path.return_value = "/tmp/template.png"
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_finds_once_and_clicks_the_same_center_repeatedly(self):
+        """Ten clicks reuse one template match and one screenshot."""
+        self.find_center.return_value = (True, (50, 60))
+
+        self.assertTrue(_click_template_repeatedly("my_template", 0, clicks=10, roi=(1, 2, 3, 4), delay=0.1))
+
+        self.take_screenshot.assert_called_once_with(0)
+        self.find_center.assert_called_once_with(
+            "/tmp/template.png",
+            "/tmp/shot.png",
+            threshold=SCREEN_CHECK_THRESHOLD,
+            roi=(1, 2, 3, 4),
+        )
+        self.find_gray_center.assert_not_called()
+        self.assertEqual(self.click_coords.call_count, 10)
+        self.assertTrue(all(call_args == call(50, 60, 0, delay=0.1) for call_args in self.click_coords.call_args_list))
+        self.delete_screenshot.assert_called_once_with("/tmp/shot.png")
 
 
 class TestClickFirstFoundTemplate(unittest.TestCase):
