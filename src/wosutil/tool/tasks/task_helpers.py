@@ -773,9 +773,7 @@ def merge_pet_adventure_chest_matches(chests, positions, chest_type, state):
         chest = chests.get(key)
         if chest is None:
             for existing in chests.values():
-                if existing["type"] == chest_type and _pet_adventure_boxes_overlap(
-                    (existing["x"], existing["y"], existing["w"], existing["h"]), (x, y, w, h)
-                ):
+                if existing["type"] == chest_type and _pet_adventure_boxes_overlap((existing["x"], existing["y"], existing["w"], existing["h"]), (x, y, w, h)):
                     chest = existing
                     break
         if chest is None:
@@ -865,10 +863,7 @@ def _chest_center_is_attempted(chest, attempted_centers):
     """
     cx = chest["x"] + chest["w"] // 2
     cy = chest["y"] + chest["h"] // 2
-    return any(
-        abs(cx - ax) <= PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY and abs(cy - ay) <= PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY
-        for ax, ay in attempted_centers
-    )
+    return any(abs(cx - ax) <= PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY and abs(cy - ay) <= PET_ADVENTURE_CHEST_ATTEMPT_PROXIMITY for ax, ay in attempted_centers)
 
 
 def _detect_three_pet_adventure_chests(instance_index):
