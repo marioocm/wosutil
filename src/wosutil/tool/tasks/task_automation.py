@@ -947,9 +947,13 @@ def activate_daily_pet_skills(instance_index):
         if activated:
             continue  # re-detect the remaining skills
 
-        # No skill to activate: reschedule with the shortest on-screen timer
+        # No skill to activate: reschedule with the shortest on-screen timer.
+        # The ox timer is skipped when its gathering march was already started,
+        # since the skill is active instead of waiting on a cooldown.
         timers = []
-        for _skill_name, timer_roi in PET_SKILLS:
+        for skill_name, timer_roi in PET_SKILLS:
+            if ox_gathered and skill_name == "pet_skill_ox":
+                continue
             seconds = read_screen_time(instance_index, roi=get_roi(timer_roi), debug_label=timer_roi)
             if seconds is not None:
                 timers.append(seconds)
