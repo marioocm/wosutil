@@ -34,21 +34,50 @@ class TestMergePetAdventureChestMatches(unittest.TestCase):
         self.assertEqual(chest["type"], 3)
         self.assertEqual(chest["state"], "start")
 
-    def test_ready_state_wins_over_start(self):
-        """A ready match at the same position overrides a start match."""
+    def test_start_state_wins_over_ready_on_tie(self):
+        """A chest matched by both start and ready templates is not ready.
+
+        A chest in the ready state only matches the "_ready" template, so when
+        the same physical chest also matches its start template the matches tie
+        and the start state must win.
+        """
         chests = {}
         merge_pet_adventure_chest_matches(chests, [(100, 200, 90, 80)], 3, "start")
-        merge_pet_adventure_chest_matches(chests, [(102, 201, 90, 80)], 3, "ready")
+        merge_pet_adventure_chest_matches(chests, [(102, 201, 74, 79)], 3, "ready")
+        chest = next(iter(chests.values()))
+        self.assertEqual(chest["state"], "start")
+
+    def test_start_state_not_downgraded_by_ready(self):
+        """A later ready match must not downgrade an existing start match."""
+        chests = {}
+        merge_pet_adventure_chest_matches(chests, [(100, 200, 90, 80)], 3, "start")
+        merge_pet_adventure_chest_matches(chests, [(102, 201, 74, 79)], 3, "ready")
+        chest = next(iter(chests.values()))
+        self.assertEqual(chest["state"], "start")
+
+    def test_ready_state_wins_when_no_start_match(self):
+        """A chest that only matches the ready template stays ready."""
+        chests = {}
+        merge_pet_adventure_chest_matches(chests, [(100, 200, 74, 79)], 3, "ready")
         chest = next(iter(chests.values()))
         self.assertEqual(chest["state"], "ready")
 
-    def test_ready_state_not_downgraded(self):
-        """A later start match must not downgrade an existing ready match."""
+    def test_merges_overlapping_matches_from_different_buckets(self):
+        """A start and a ready match of the same chest in different buckets merge.
+
+        Regression test for the 2026-08-20 pet adventure failure: the same
+        normal chest matched both the start (98x80) and the ready (74x79)
+        templates with top-left corners far enough to land in different
+        (x//10, y//10) buckets, producing a duplicated chest that was wrongly
+        treated as ready to open.
+        """
         chests = {}
-        merge_pet_adventure_chest_matches(chests, [(100, 200, 90, 80)], 3, "ready")
-        merge_pet_adventure_chest_matches(chests, [(102, 201, 90, 80)], 3, "start")
+        merge_pet_adventure_chest_matches(chests, [(579, 792, 98, 80)], 2, "start")
+        merge_pet_adventure_chest_matches(chests, [(612, 780, 74, 79)], 2, "ready")
+        self.assertEqual(len(chests), 1)
         chest = next(iter(chests.values()))
-        self.assertEqual(chest["state"], "ready")
+        self.assertEqual(chest["type"], 2)
+        self.assertEqual(chest["state"], "start")
 
     def test_distinct_positions_stay_separate(self):
         """Chests at distant positions are kept as separate entries."""
@@ -215,11 +244,16 @@ class TestStartPetAdventureChest(unittest.TestCase):
         self.time_sleep.assert_called()
 
     def test_already_active_when_select_pet_missing(self):
-        """Returning already_active when the select pet panel never appears."""
+        """Returning already_active when the select pet panel never appears.
+
+        Only one back press is sent so the pet adventure screen is not exited by
+        a second blind press; the screen is verified afterwards instead.
+        """
         self.click_template.side_effect = [False, False]
         result = start_pet_adventure_chest(0, 150, 250)
         self.assertEqual(result, "already_active")
-        self.assertEqual(self.press_back.call_count, 2)
+        self.press_back.assert_called_once()
+        self.ensure.assert_called_with(0)
 
     def test_no_attempts_when_start_button_missing(self):
         """Returning no_attempts when the start button is not found."""
@@ -238,9 +272,12 @@ class TestStartPetAdventureChests(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.detect_pet_adventure_chests"),
             patch("wosutil.tool.tasks.task_helpers.start_pet_adventure_chest"),
             patch("wosutil.tool.tasks.task_helpers.time.sleep"),
+            patch("wosutil.tool.tasks.task_helpers.ensure_pet_adventure_screen", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.is_game_on_pet_adventure_screen", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.go_pet_adventure", return_value=True),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.detect, self.start_chest, self.time_sleep = self.mocks
+        self.detect, self.start_chest, self.time_sleep = self.mocks[:3]
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
     def _chest(self, x, y, chest_type, state):
@@ -277,6 +314,28 @@ class TestStartPetAdventureChests(unittest.TestCase):
         # each chest attempted exactly once, chest 3 first (skipped), then 2 and 1
         self.assertEqual(centers, [(145, 240), (345, 540), (545, 840)])
 
+    def test_does_not_reattempt_chest_shifted_between_detections(self):
+        """A chest that shifted a few pixels between detections is not retried.
+
+        Regression test for the 2026-08-20 failure: after starting a chest the
+        same physical chest shifted 1px (579,792 -> 580,791), changing its
+        (x//10, y//10) bucket key, so the old logic re-clicked it and found no
+        select pet panel. Centers within proximity must count as the same chest.
+        """
+        self.detect.side_effect = [
+            [self._chest(579, 792, 2, "start"), self._chest(100, 200, 1, "start"), self._chest(300, 500, 1, "start")],
+            [self._chest(580, 791, 2, "start"), self._chest(100, 200, 1, "start"), self._chest(300, 500, 1, "start")],
+            [self._chest(100, 200, 1, "start"), self._chest(300, 500, 1, "start"), self._chest(500, 800, 1, "start")],
+            [self._chest(100, 200, 1, "start"), self._chest(300, 500, 1, "start"), self._chest(500, 800, 1, "start")],
+            [self._chest(100, 200, 1, "start"), self._chest(300, 500, 1, "start"), self._chest(500, 800, 1, "start")],
+        ]
+        self.start_chest.return_value = True
+        result = start_pet_adventure_chests(0)
+        self.assertEqual(result, "done")
+        centers = [tuple(c.args[1:3]) for c in self.start_chest.call_args_list]
+        self.assertEqual(centers, [(624, 832), (145, 240), (345, 540), (545, 840)])
+        self.assertNotIn((625, 831), centers)
+
     def test_propagates_no_attempts(self):
         """The no_attempts result is returned to the caller."""
         self.detect.side_effect = [[self._chest(100, 200, 3, "start"), self._chest(300, 500, 2, "start"), self._chest(500, 800, 1, "start")]]
@@ -285,8 +344,8 @@ class TestStartPetAdventureChests(unittest.TestCase):
         self.assertEqual(result, "no_attempts")
 
     def test_failed_when_no_chests_detected(self):
-        """Detection failing twice makes the helper return failed."""
-        self.detect.side_effect = [None, None]
+        """Detection never finding the 3 chests makes the helper return failed."""
+        self.detect.return_value = None
         result = start_pet_adventure_chests(0)
         self.assertEqual(result, "failed")
 
@@ -392,6 +451,61 @@ class TestSendPetAdventureChestsReschedule(unittest.TestCase):
         result = send_pet_adventure_chests(0)
         # Not on the pet adventure screen after navigating keeps the 5h schedule
         self.assertEqual(result, (False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS))
+
+
+class TestSendPetAdventureChestsRetryDetection(unittest.TestCase):
+    """Test cases for retrying the chest detection after opening a chest."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_automation.go_pet_adventure", return_value=True),
+            patch("wosutil.tool.tasks.task_automation.is_game_on_pet_adventure_screen", return_value=True),
+            patch("wosutil.tool.tasks.task_automation.detect_pet_adventure_chests"),
+            patch("wosutil.tool.tasks.task_automation.ensure_pet_adventure_screen"),
+            patch("wosutil.tool.tasks.task_automation.start_pet_adventure_chests", return_value="done"),
+            patch("wosutil.tool.tasks.task_automation.press_android_back_button"),
+            patch("wosutil.tool.tasks.task_automation.time.sleep"),
+            patch("wosutil.tool.tasks.task_automation.get_seconds_until_utc_midnight", return_value=None),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.go_pet_adventure,
+            self.is_on_screen,
+            self.detect,
+            self.ensure,
+            self.start_chests,
+            self.press_back,
+            self.time_sleep,
+            self.midnight,
+        ) = self.mocks
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def _chest(self, x, y, chest_type, state):
+        """Build a chest detection dict."""
+        return {"x": x, "y": y, "w": 90, "h": 80, "type": chest_type, "state": state}
+
+    def test_retries_when_fewer_than_3_chests_detected_after_opening(self):
+        """A transient <3 detection after opening a chest is retried, not aborted.
+
+        Regression test for the 2026-08-20 failure: after opening a ready chest a
+        new one spawns with an animation during which only 2 chests are detected.
+        The task must retry until the 3 chests are visible instead of aborting.
+        """
+        self.detect.side_effect = [
+            [self._chest(100, 200, 2, "start"), self._chest(300, 500, 1, "start")],
+            [self._chest(100, 200, 2, "start"), self._chest(300, 500, 1, "start"), self._chest(500, 800, 1, "start")],
+        ]
+        result = send_pet_adventure_chests(0)
+        self.assertEqual(result, (True, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS))
+        self.start_chests.assert_called_once_with(0)
+
+    def test_aborts_after_retries_when_chests_never_appear(self):
+        """The task aborts when fewer than 3 chests never become visible."""
+        self.detect.return_value = [self._chest(100, 200, 2, "start"), self._chest(300, 500, 1, "start")]
+        result = send_pet_adventure_chests(0)
+        self.assertEqual(result, (False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS))
+        self.start_chests.assert_not_called()
 
 
 if __name__ == "__main__":
