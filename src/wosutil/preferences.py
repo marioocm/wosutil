@@ -21,6 +21,9 @@ MYSTERY_SHOP_LEVEL_WIDGETS_20 = "widgets_20"
 MYSTERY_SHOP_LEVELS = (MYSTERY_SHOP_LEVEL_FREE, MYSTERY_SHOP_LEVEL_WIDGETS_50, MYSTERY_SHOP_LEVEL_WIDGETS_20)
 DEFAULT_MYSTERY_SHOP_LEVEL = MYSTERY_SHOP_LEVEL_FREE
 
+GATHER_RESOURCES = ("meat", "wood", "coal", "iron")
+DEFAULT_GATHER_RESOURCE = "meat"
+
 DEBUG_MODE_ENV = "WOSUTIL_DEBUG"
 
 
@@ -201,6 +204,23 @@ def get_mystery_shop_level(preferences=None):
     if level not in MYSTERY_SHOP_LEVELS:
         return DEFAULT_MYSTERY_SHOP_LEVEL
     return level
+
+
+def get_gather_resource(preferences=None):
+    """Get the resource selected for the ox gathering skill.
+
+    Args:
+        preferences (dict, optional): Preferences data. If None, loads from disk.
+
+    Returns:
+        str: One of ``GATHER_RESOURCES``.
+    """
+    if preferences is None:
+        preferences = load_preferences()
+    resource = preferences.get("gather_resource", DEFAULT_GATHER_RESOURCE)
+    if resource not in GATHER_RESOURCES:
+        return DEFAULT_GATHER_RESOURCE
+    return resource
 
 
 def save_emulator(emulator):

@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import time
+from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple, cast
 
 import cv2
@@ -47,8 +48,9 @@ _template_cache: Dict[str, np.ndarray] = {}
 
 # Timer OCR settings
 _TIME_RE = re.compile(r"(?<!\d)(\d{1,2}):(\d{2}):(\d{2})")
-_OCR_PSMS = (7, 8, 13)
-_DIGIT_WHITELIST = "0123456789:"
+_DAY_RE = re.compile(r"(\d{1,2})\s*[dD]")
+_OCR_PSMS = (7, 8, 13, 11)
+_DIGIT_WHITELIST = "0123456789:dD"
 
 # Menu text OCR settings (side menu tabs/entries, shop labels)
 _TEXT_SCALE = 3
@@ -56,6 +58,8 @@ _TEXT_VALUE_THRESHOLD = 220
 _TEXT_SATURATION_THRESHOLD = 100
 _TEXT_PSM = 6
 _TEXT_FALLBACK_PSM = 11
+_FUZZY_TEXT_PSMS = (6, 11, 12)
+_FUZZY_TEXT_MIN_SIMILARITY = 0.55
 
 # UTC clock OCR settings (world map schedule panel: 'UTC MM-DD HH:MM:SS')
 _UTC_TIME_RE = re.compile(r"UTC\s*(\d{1,2})-(\d{1,2})\s*(\d{1,2}):(\d{2}):(\d{2})", re.IGNORECASE)
@@ -278,8 +282,14 @@ def read_screen_time(
     roi: Optional[Tuple[int, int, int, int]] = None,
     debug_label: Optional[str] = None,
     max_seconds: Optional[int] = None,
+    ocr_psms: Optional[Tuple[int, ...]] = None,
+    screenshot_path: Optional[str] = None,
 ) -> Optional[int]:
-    """Takes a screenshot from the given emulator instance and reads a timer in HH:MM:SS format from the specified ROI using OCR, returning the time in seconds.
+    """Read a timer in HH:MM:SS format from an emulator screenshot using OCR, returning the time in seconds.
+
+    By default a fresh screenshot is captured; a caller can pass ``screenshot_path``
+    to reuse one it already owns so the same capture can be shared with other OCR
+    steps. The shared file is never deleted here.
 
     On failure (no timer matched, an unexpected error, or a detected value over
     ``max_seconds``) the original ROI image and the processed image are saved to
@@ -291,6 +301,10 @@ def read_screen_time(
         debug_label (str, optional): Label used to name the debug images on failure.
         max_seconds (int, optional): Maximum plausible value in seconds. Reads above
             this are treated as OCR errors (logged and debug captured) and return ``None``.
+        ocr_psms (tuple, optional): Tesseract page-segmentation modes to try. The
+            default uses the standard timer modes.
+        screenshot_path (str, optional): Reuse an already taken screenshot instead
+            of capturing a new one. The file is not deleted by this function.
 
     Returns:
         int or None: Time in seconds if detected, None if not found or implausible.
@@ -299,9 +313,11 @@ def read_screen_time(
 
     original_img: Optional[Image.Image] = None
     processed_img: Optional[Image.Image] = None
+    owned_screenshot = screenshot_path is None
 
     try:
-        screenshot_path = take_screenshot(instance_index)
+        if screenshot_path is None:
+            screenshot_path = take_screenshot(instance_index)
         if not screenshot_path:
             log_message("Could not take screenshot for timer OCR.", level="error")
             return None
@@ -309,7 +325,8 @@ def read_screen_time(
             with Image.open(screenshot_path) as opened_img:
                 img = opened_img.copy()
         finally:
-            delete_temp_screenshot(screenshot_path)
+            if owned_screenshot:
+                delete_temp_screenshot(screenshot_path)
         if roi:
             x, y, w, h = roi
             img = img.crop((x, y, x + w, y + h))
@@ -324,7 +341,7 @@ def read_screen_time(
         # Try several Tesseract page-segmentation modes; some ROI sizes/fonts only
         # work with a specific mode (e.g. psm 7 returns empty while psm 8/13 succeed).
         text = ""
-        for psm in _OCR_PSMS:
+        for psm in _OCR_PSMS if ocr_psms is None else ocr_psms:
             try:
                 text = pytesseract.image_to_string(
                     img,
@@ -339,6 +356,9 @@ def read_screen_time(
             if h > 99:
                 continue
             total_seconds = h * 3600 + m * 60 + s
+            day_match = _DAY_RE.search(text)
+            if day_match:
+                total_seconds += int(day_match.group(1)) * 86400
             if max_seconds is not None and total_seconds > max_seconds:
                 log_message(
                     f"Timer read {h:02}:{m:02}:{s:02} ({total_seconds}s) exceeds the maximum plausible value of {max_seconds}s, treating it as an invalid timer read.",
@@ -881,19 +901,54 @@ def _preprocess_text_image(img: Image.Image) -> Image.Image:
     return Image.fromarray(255 - mask)
 
 
-def _ocr_lines(img: Image.Image, psm: int = _TEXT_PSM) -> List[List[Tuple[str, Tuple[int, int, int, int]]]]:
+def _preprocess_fuzzy_text_image(img: Image.Image) -> Image.Image:
+    """Prepare bright text with a looser color filter for cluttered screens.
+
+    Some resource labels share their ROI with bright illustrations. The normal
+    menu mask is intentionally conservative and can remove parts of those
+    labels, so this fallback keeps more bright, low-saturation pixels and lets
+    the OCR segmentation pass distinguish the text.
+
+    Args:
+        img (PIL.Image): Source image containing text and UI artwork.
+
+    Returns:
+        PIL.Image: Upscaled and binarized image ready for Tesseract.
+    """
+    arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    arr = cv2.resize(arr, (arr.shape[1] * _TEXT_SCALE, arr.shape[0] * _TEXT_SCALE), interpolation=cv2.INTER_LANCZOS4)
+    hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)
+    mask = ((hsv[:, :, 2] >= 180) & (hsv[:, :, 1] <= 200)).astype(np.uint8) * 255
+    return Image.fromarray(255 - mask)
+
+
+def _preprocess_raw_text_image(img: Image.Image) -> Image.Image:
+    """Upscale the original image for OCR when binarization loses glyphs.
+
+    Args:
+        img (PIL.Image): Source image containing text.
+
+    Returns:
+        PIL.Image: Upscaled original image.
+    """
+    return img.resize((img.width * _TEXT_SCALE, img.height * _TEXT_SCALE), resample=Image.Resampling.LANCZOS)
+
+
+def _ocr_lines(img: Image.Image, psm: int = _TEXT_PSM, preprocess=None) -> List[List[Tuple[str, Tuple[int, int, int, int]]]]:
     """Run OCR on an image and group the recognized words into text lines.
 
     Args:
         img (PIL.Image): Source image containing text.
         psm (int): Tesseract page segmentation mode.
+        preprocess (callable, optional): Image preprocessing function. The
+            standard text preprocessing is used when omitted.
 
     Returns:
         list: One entry per text line, each a list of (word, (x, y, w, h))
             pairs in original image coordinates. Punctuation-only words are
             dropped.
     """
-    processed = _preprocess_text_image(img)
+    processed = _preprocess_text_image(img) if preprocess is None else preprocess(img)
     data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT, config=f"--psm {psm}")
     lines: Dict[Tuple[int, int, int], List[Tuple[str, Tuple[int, int, int, int]]]] = {}
     for i, word in enumerate(data["text"]):
@@ -920,6 +975,38 @@ def _find_text_matches(lines: List[List[Tuple[str, Tuple[int, int, int, int]]]],
     return matches
 
 
+def _find_fuzzy_text_matches(lines: List[List[Tuple[str, Tuple[int, int, int, int]]]], target_words: List[str]) -> List[Tuple[float, Tuple[int, int, int, int]]]:
+    """Find close OCR spellings of a single target word.
+
+    This is reserved for short, fixed UI labels whose decorative outline can
+    cause Tesseract to drop or replace one or two characters. Multi-word text
+    keeps the exact matching behavior used by the menus.
+
+    Args:
+        lines: OCR lines containing words and their boxes.
+        target_words: Normalized target words.
+
+    Returns:
+        list: Similarity scores and boxes for close matches.
+    """
+    if len(target_words) != 1:
+        return []
+
+    target = target_words[0]
+    matches = []
+    for line in lines:
+        for word, box in line:
+            normalized = _normalize_word(word)
+            if len(normalized) < 2:
+                continue
+            if normalized.startswith(target) and len(normalized) > len(target):
+                continue
+            similarity = SequenceMatcher(None, normalized, target).ratio()
+            if similarity >= _FUZZY_TEXT_MIN_SIMILARITY:
+                matches.append((similarity, box))
+    return matches
+
+
 def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int, int, int]]]:
     """Read the text lines of an image with OCR.
 
@@ -933,7 +1020,7 @@ def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int
     return [(" ".join(word for word, _ in line), _union_boxes([box for _, box in line])) for line in _ocr_lines(img)]
 
 
-def find_text_on_image(img: Image.Image, target: str, last: bool = False) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
+def find_text_on_image(img: Image.Image, target: str, last: bool = False, fuzzy: bool = False) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
     """Search a piece of text (one or several words) inside an image with OCR.
 
     Words are normalized (lowercased, punctuation stripped) and the target is
@@ -949,6 +1036,8 @@ def find_text_on_image(img: Image.Image, target: str, last: bool = False) -> Tup
         img (PIL.Image): Source image containing text.
         target (str): Text to search for, e.g. 'City' or 'Tundra Trek'.
         last (bool): When True return the lowest occurrence instead of the first.
+        fuzzy (bool): Retry a single-word search with a looser OCR mask and
+            small spelling differences. Use only for decorative, fixed labels.
 
     Returns:
         tuple: (True, (x, y, w, h)) with the matched text position in original
@@ -960,6 +1049,25 @@ def find_text_on_image(img: Image.Image, target: str, last: bool = False) -> Tup
     matches = _find_text_matches(_ocr_lines(img), target_words)
     if not matches:
         matches = _find_text_matches(_ocr_lines(img, psm=_TEXT_FALLBACK_PSM), target_words)
+    if fuzzy and (not matches or last):
+        alternate_matches = []
+        fuzzy_matches = []
+        for preprocess in (_preprocess_fuzzy_text_image, _preprocess_raw_text_image):
+            for psm in _FUZZY_TEXT_PSMS:
+                lines = _ocr_lines(img, psm=psm, preprocess=preprocess)
+                alternate_matches.extend(_find_text_matches(lines, target_words))
+                fuzzy_matches.extend(_find_fuzzy_text_matches(lines, target_words))
+        if alternate_matches:
+            if last:
+                matches.extend(alternate_matches)
+            elif not matches:
+                matches = alternate_matches
+        elif fuzzy_matches:
+            if last:
+                matches.extend(box for _similarity, box in fuzzy_matches)
+            else:
+                best_similarity = max(similarity for similarity, _ in fuzzy_matches)
+                matches = [box for similarity, box in fuzzy_matches if similarity == best_similarity]
     if not matches:
         return False, None
     if last:
@@ -974,6 +1082,7 @@ def find_text_on_screen(
     instance_index: Optional[int] = None,
     debug_label: Optional[str] = None,
     last: bool = False,
+    fuzzy: bool = False,
 ) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
     """Search a piece of text inside a screenshot, optionally within an ROI.
 
@@ -991,6 +1100,8 @@ def find_text_on_screen(
         debug_label (str, optional): Label used to name the debug captures on
             failure.
         last (bool): When True return the lowest occurrence instead of the first.
+        fuzzy (bool): Retry a single-word search with a looser OCR mask and
+            small spelling differences.
 
     Returns:
         tuple: (True, (x, y, w, h)) in full-screen coordinates when found,
@@ -1006,7 +1117,7 @@ def find_text_on_screen(
             x, y, w, h = roi
             img_bgr = img_bgr[y : y + h, x : x + w]
         img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
-        found, box = find_text_on_image(img, target, last=last)
+        found, box = find_text_on_image(img, target, last=last, fuzzy=fuzzy)
         if not found and debug_label is not None and instance_index is not None:
             lines_text = [text for text, _ in read_text_lines_on_image(img)]
             log_message(f"OCR lines while looking for '{target}': {lines_text}", level="debug")
@@ -1027,6 +1138,7 @@ def find_text_center_on_screen(
     instance_index: Optional[int] = None,
     debug_label: Optional[str] = None,
     last: bool = False,
+    fuzzy: bool = False,
 ) -> Tuple[bool, Optional[Tuple[int, int]]]:
     """Search a piece of text inside a screenshot and returns the center of the match.
 
@@ -1037,7 +1149,15 @@ def find_text_center_on_screen(
     Returns:
         tuple: (True, (cx, cy)) if found, (False, None) if not.
     """
-    found, box = find_text_on_screen(screenshot_path, target, roi=roi, instance_index=instance_index, debug_label=debug_label, last=last)
+    found, box = find_text_on_screen(
+        screenshot_path,
+        target,
+        roi=roi,
+        instance_index=instance_index,
+        debug_label=debug_label,
+        last=last,
+        fuzzy=fuzzy,
+    )
     if not found or box is None:
         return False, None
     return True, get_box_center(box)

@@ -140,6 +140,7 @@ TEMPLATE_PATHS = {
     "pet_skill_screen": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_screen.png"),
     "pet_skill_wolf": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_wolf.png"),
     "pet_skill_ox": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_ox.png"),
+    "pet_skill_ox_active": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_ox_active.png"),
     "pet_skill_tapir": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_tapir.png"),
     "pet_skill_elk": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_elk.png"),
     "pet_skill_use": os.path.join(TEMPLATES_DIR, "city", "pets", "pet_skill_use.png"),
@@ -170,6 +171,8 @@ TEMPLATE_PATHS = {
     # March
     "no_troops_left": os.path.join(TEMPLATES_DIR, "world", "march", "no_troops_left.png"),
     "send_march_screen": os.path.join(TEMPLATES_DIR, "world", "march", "send_march_screen.png"),
+    "gather_tile_increase_level": os.path.join(TEMPLATES_DIR, "world", "gather", "gather_tile_increase_level.png"),
+    "remove_hero": os.path.join(TEMPLATES_DIR, "world", "march", "remove_hero.png"),
 }
 
 # --- Automation Parameters ---
@@ -217,7 +220,7 @@ ROI = {
     "intel_timer2": (370, 585, 171, 49),
     "storehouse_claim_stamina": (491, 343, 177, 74),
     "storehouse_claim_stamina_timer": (502, 366, 156, 63),
-    "kill_beast_timer": (501, 1138, 118, 29),
+    "walking_march_time": (501, 1138, 118, 29),
     "send_march_screen": (0, 0, 236, 91),
     "tundra_trek_supplies_timer": (520, 587, 112, 33),
     "tundra_trek_idle": (526, 1126, 194, 154),
@@ -234,4 +237,6 @@ ROI = {
     "troop_promote_text": (3, 768, 717, 28),
     "train_troop_promote": (561, 394, 159, 274),
     "world_schedule_utc": (99, 0, 264, 42),
+    "worldmap_search": (0, 843, 718, 435),
+    "worldmap": (0, 95, 718, 1008),
 }

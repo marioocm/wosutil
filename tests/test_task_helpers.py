@@ -14,19 +14,26 @@ from wosutil.tool.tasks.task_helpers import (
     KILL_BEAST_MARCH_POSITIONS,
     KILL_BEAST_MARCH_SCROLL_END,
     KILL_BEAST_MARCH_SCROLL_START,
+    WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
+    WORLD_MAP_SEARCH_SCROLL_END,
+    WORLD_MAP_SEARCH_SCROLL_START,
+    _click_template_repeatedly,
     click_first_found_template,
     click_on_template,
     click_on_text,
     ensure_hero_recruit_screen,
+    gather_tile,
     go_hero_recruit_screen,
     go_pet_adventure,
     go_sidemenu_city,
     go_sidemenu_daily,
     go_tundra_trek,
+    go_worldmap_search,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
     kill_beast,
     kill_intel_beast,
+    send_march,
 )
 
 
@@ -40,10 +47,23 @@ class TestKillBeast(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
             patch("wosutil.tool.tasks.task_helpers.read_screen_time"),
             patch("wosutil.tool.tasks.task_helpers.is_game_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.find_text_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.click_on_coordinates, self.scroll_screen, self.read_screen_time, self.no_troops_left = self.mocks
+        (
+            self.click_on_coordinates,
+            self.scroll_screen,
+            self.read_screen_time,
+            self.no_troops_left,
+            self.take_screenshot,
+            self.find_text_center,
+            self.delete_screenshot,
+        ) = self.mocks
         self.no_troops_left.return_value = False
+        self.take_screenshot.return_value = "/tmp/shot.png"
+        self.find_text_center.return_value = (True, (552, 1216))
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
     def _run_kill_beast(self, march, timer=100):
@@ -60,9 +80,11 @@ class TestKillBeast(unittest.TestCase):
         self.click_on_coordinates.assert_any_call(360, 620, 0)
         self.click_on_coordinates.assert_any_call(552, 1216, 0)
         self.scroll_screen.assert_not_called()
+        self.take_screenshot.assert_called_once_with(0)
 
     def test_no_assignment_no_timer_returns_none(self):
-        """Test that without a march assignment, no timer and no send-march screen None is returned."""
+        """Test that without a march assignment, no timer and no Deploy button None is returned."""
+        self.find_text_center.return_value = (False, None)
         result = self._run_kill_beast(None, timer=None)
 
         self.assertIsNone(result)
@@ -73,19 +95,19 @@ class TestKillBeast(unittest.TestCase):
         result = self._run_kill_beast(None, timer=None)
 
         self.assertFalse(result)
-        self.no_troops_left.assert_called_once_with(0, "no_troops_left")
+        self.no_troops_left.assert_called_once_with(0, "no_troops_left", screenshot_path="/tmp/shot.png")
 
-    def test_no_timer_with_send_march_screen_returns_short_wait(self):
-        """Test that with no timer but the send-march screen confirmed the march is sent."""
-        self.no_troops_left.side_effect = [False, True]
+    def test_no_timer_with_deploy_returns_short_wait(self):
+        """Test that with no timer but the Deploy button on screen the march is sent."""
         result = self._run_kill_beast(None, timer=None)
 
         self.assertEqual(result, INTEL_BEAST_MARCH_SENT_WAIT_SECONDS)
         self.click_on_coordinates.assert_any_call(552, 1216, 0)
-        self.no_troops_left.assert_called_with(0, "send_march_screen", "send_march_screen", threshold=0.90)
+        self.no_troops_left.assert_called_once_with(0, "no_troops_left", screenshot_path="/tmp/shot.png")
 
-    def test_no_timer_without_send_march_screen_does_not_send(self):
-        """Test that without timer and without the send-march screen the march is not sent."""
+    def test_no_timer_without_deploy_does_not_send(self):
+        """Test that without timer and without the Deploy button the march is not sent."""
+        self.find_text_center.return_value = (False, None)
         result = self._run_kill_beast(None, timer=None)
 
         self.assertIsNone(result)
@@ -98,6 +120,7 @@ class TestKillBeast(unittest.TestCase):
 
         self.assertEqual(result, min(100 * 2, INTEL_BEAST_MAX_WAIT_SECONDS))
         self.no_troops_left.assert_not_called()
+        self.click_on_coordinates.assert_any_call(552, 1216, 0)
 
     def test_assigned_march_clicked_before_timer_read(self):
         """Test that an assigned march is selected right after the first click."""
@@ -128,6 +151,191 @@ class TestKillBeast(unittest.TestCase):
                 self.assertEqual(self.click_on_coordinates.call_count, 3)
                 self.scroll_screen.reset_mock()
                 self.click_on_coordinates.reset_mock()
+
+
+class TestSendMarch(unittest.TestCase):
+    """Test the shared march deployment helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.read_screen_time"),
+            patch("wosutil.tool.tasks.task_helpers.is_game_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.find_text_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.take_screenshot,
+            self.read_screen_time,
+            self.is_game_on_screen,
+            self.find_text_center,
+            self.click_coords,
+            self.delete_screenshot,
+            self.get_roi,
+        ) = self.mocks
+        self.take_screenshot.return_value = "/tmp/shot.png"
+        self.read_screen_time.return_value = 100
+        self.is_game_on_screen.return_value = False
+        self.find_text_center.return_value = (True, (552, 1216))
+        self.get_roi.return_value = (501, 1138, 118, 29)
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_reuses_one_screenshot_and_returns_double_timer(self):
+        """The timer, troops check and Deploy search share a single capture."""
+        result = send_march(0)
+
+        self.assertEqual(result, min(100 * 2, INTEL_BEAST_MAX_WAIT_SECONDS))
+        self.take_screenshot.assert_called_once_with(0)
+        self.read_screen_time.assert_called_once()
+        self.assertEqual(self.read_screen_time.call_args.kwargs["roi"], (501, 1138, 118, 29))
+        self.assertEqual(self.read_screen_time.call_args.kwargs["screenshot_path"], "/tmp/shot.png")
+        self.is_game_on_screen.assert_not_called()
+        self.find_text_center.assert_called_once_with(
+            "/tmp/shot.png",
+            "Deploy",
+            instance_index=0,
+            debug_label="click_text_Deploy",
+            last=True,
+        )
+        self.click_coords.assert_any_call(552, 1216, 0)
+        self.delete_screenshot.assert_called_once_with("/tmp/shot.png")
+
+
+class TestGoWorldMapSearch(unittest.TestCase):
+    """Test cases for opening the world-map search panel."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.ensure_world_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
+        ]
+        self.ensure_world, self.click_coords, self.scroll_screen = [p.start() for p in self.patchers]
+        self.ensure_world.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_opens_search_with_scroll_by_default(self):
+        """The default navigation opens the search and scrolls the resources."""
+        self.assertTrue(go_worldmap_search(0))
+
+        self.ensure_world.assert_called_once_with(0)
+        self.click_coords.assert_called_once_with(44, 878, 0)
+        self.scroll_screen.assert_called_once_with(
+            WORLD_MAP_SEARCH_SCROLL_START[0],
+            WORLD_MAP_SEARCH_SCROLL_START[1],
+            WORLD_MAP_SEARCH_SCROLL_END[0],
+            WORLD_MAP_SEARCH_SCROLL_END[1],
+            WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
+            0,
+        )
+
+    def test_opens_search_without_scroll_when_disabled(self):
+        """The caller can open the search without changing the resource row."""
+        self.assertTrue(go_worldmap_search(0, scroll=False))
+
+        self.click_coords.assert_called_once_with(44, 878, 0)
+        self.scroll_screen.assert_not_called()
+
+    def test_returns_false_when_world_map_cannot_be_reached(self):
+        """Navigation fails without opening the search when the map is unavailable."""
+        self.ensure_world.return_value = False
+
+        self.assertFalse(go_worldmap_search(0))
+        self.click_coords.assert_not_called()
+        self.scroll_screen.assert_not_called()
+
+
+class TestGatherTile(unittest.TestCase):
+    """Test cases for the world-map gathering helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_worldmap_search"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+            patch("wosutil.tool.tasks.task_helpers._click_template_repeatedly"),
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
+            patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
+            patch("wosutil.tool.tasks.task_helpers.find_text_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.read_screen_time"),
+            patch("wosutil.tool.tasks.task_helpers.send_march"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.go_search,
+            self.click_coords,
+            self.get_roi,
+            self.click_text,
+            self.click_template_repeatedly,
+            self.take_screenshot,
+            self.delete_screenshot,
+            self.get_template_path,
+            self.find_multiple,
+            self.find_text,
+            self.read_time,
+            self.send_march,
+        ) = self.mocks
+        self.go_search.return_value = True
+        search_roi = (0, 843, 718, 435)
+        self.get_roi.side_effect = lambda name: search_roi if name == "worldmap_search" else (0, 95, 718, 1008) if name == "worldmap" else (501, 1138, 118, 29)
+        self.click_text.return_value = True
+        self.click_template_repeatedly.return_value = True
+        self.take_screenshot.return_value = "/tmp/march.png"
+        self.get_template_path.return_value = "/tmp/remove_hero.png"
+        self.find_multiple.return_value = [(400, 100, 30, 30), (200, 100, 30, 30)]
+        self.find_text.return_value = (True, (190, 514, 150, 24))
+        self.read_time.side_effect = [120]
+        self.send_march.return_value = 60
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_gathers_selected_resource_and_returns_round_trip_time(self):
+        """The helper searches, deploys the march, and returns the round trip."""
+        result = gather_tile(0, "wood")
+
+        self.assertEqual(result, 60)
+        self.go_search.assert_called_once_with(0)
+        self.click_text.assert_any_call("Wood", 0, roi=(0, 843, 718, 435), fuzzy=True)
+        self.click_text.assert_any_call("Search", 0, roi=(0, 843, 718, 435), delay=3.0, last=True, fuzzy=True)
+        self.click_text.assert_any_call("Gather", 0, roi=(0, 95, 718, 1008), last=True, fuzzy=True)
+        self.send_march.assert_called_once_with(0)
+        self.click_template_repeatedly.assert_called_once_with(
+            "gather_tile_increase_level",
+            0,
+            clicks=10,
+            roi=(0, 843, 718, 435),
+            gray=False,
+            threshold=0.92,
+        )
+        self.find_text.assert_called_once_with(
+            "/tmp/march.png",
+            "Gathering Time",
+            instance_index=0,
+            debug_label="gathering_tile_time",
+        )
+        self.assertEqual(self.read_time.call_args_list[0].kwargs["ocr_psms"], (6, 7, 8, 11, 12, 13))
+        self.click_coords.assert_any_call(215, 115, 0, delay=1.0)
+
+    def test_meat_uses_the_resource_label_subregion(self):
+        """Meat is searched in the narrow label area instead of the full ROI."""
+        result = gather_tile(0, "meat")
+
+        self.assertEqual(result, 60)
+        self.click_text.assert_any_call("Meat", 0, roi=(0, 843, 718, 435), fuzzy=True)
+
+    def test_invalid_resource_is_rejected_before_navigation(self):
+        """An unsupported resource does not interact with the emulator."""
+        self.assertIsNone(gather_tile(0, "gold"))
+        self.go_search.assert_not_called()
+        self.click_coords.assert_not_called()
 
 
 class TestMarchPositions(unittest.TestCase):
@@ -433,6 +641,51 @@ class TestClickOnTemplate(unittest.TestCase):
         self.assertTrue(click_on_template("my_template", 0, gray=True, delay=0.5))
         self.click_coords.assert_called_once_with(10, 20, 0, delay=0.5)
         self.find_center.assert_not_called()
+
+
+class TestClickTemplateRepeatedly(unittest.TestCase):
+    """Test the single-search repeated-click template helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
+            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.find_gray_template_center_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.take_screenshot,
+            self.get_template_path,
+            self.find_center,
+            self.find_gray_center,
+            self.click_coords,
+            self.delete_screenshot,
+        ) = self.mocks
+        self.take_screenshot.return_value = "/tmp/shot.png"
+        self.get_template_path.return_value = "/tmp/template.png"
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_finds_once_and_clicks_the_same_center_repeatedly(self):
+        """Ten clicks reuse one template match and one screenshot."""
+        self.find_center.return_value = (True, (50, 60))
+
+        self.assertTrue(_click_template_repeatedly("my_template", 0, clicks=10, roi=(1, 2, 3, 4), delay=0.1))
+
+        self.take_screenshot.assert_called_once_with(0)
+        self.find_center.assert_called_once_with(
+            "/tmp/template.png",
+            "/tmp/shot.png",
+            threshold=SCREEN_CHECK_THRESHOLD,
+            roi=(1, 2, 3, 4),
+        )
+        self.find_gray_center.assert_not_called()
+        self.assertEqual(self.click_coords.call_count, 10)
+        self.assertTrue(all(call_args == call(50, 60, 0, delay=0.1) for call_args in self.click_coords.call_args_list))
+        self.delete_screenshot.assert_called_once_with("/tmp/shot.png")
 
 
 class TestClickFirstFoundTemplate(unittest.TestCase):

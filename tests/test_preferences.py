@@ -7,8 +7,10 @@ import unittest
 from unittest.mock import patch
 
 from wosutil.preferences import (
+    GATHER_RESOURCES,
     MYSTERY_SHOP_LEVEL_FREE,
     MYSTERY_SHOP_LEVELS,
+    get_gather_resource,
     get_kill_beast_march,
     get_kill_beast_march_assignment,
     get_mystery_shop_level,
@@ -61,6 +63,22 @@ class TestPreferences(unittest.TestCase):
         self.assertEqual(get_kill_beast_march({}), 1)
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
             self.assertEqual(get_kill_beast_march(None), 1)
+
+    def test_get_gather_resource_default(self):
+        """Test that missing resource preferences default to meat."""
+        self.assertEqual(get_gather_resource({}), "meat")
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            self.assertEqual(get_gather_resource(None), "meat")
+
+    def test_get_gather_resource_accepts_all_resources(self):
+        """Test that each supported gathering resource can be selected."""
+        for resource in GATHER_RESOURCES:
+            self.assertEqual(get_gather_resource({"gather_resource": resource}), resource)
+
+    def test_get_gather_resource_invalid_falls_back(self):
+        """Test that invalid resource preferences fall back to meat."""
+        self.assertEqual(get_gather_resource({"gather_resource": "gold"}), "meat")
+        self.assertEqual(get_gather_resource({"gather_resource": None}), "meat")
 
     def test_get_kill_beast_march_valid(self):
         """Test that a valid march number is returned."""

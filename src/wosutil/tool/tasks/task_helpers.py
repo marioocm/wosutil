@@ -13,7 +13,6 @@ from wosutil.config import (
     INTEL_BEAST_MAX_WAIT_SECONDS,
     INTEL_BEAST_TIMER_MAX_SECONDS,
     MAIN_SCREEN_MAX_ATTEMPTS,
-    ROI,
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.context import get_multi_instance_manager
@@ -36,9 +35,10 @@ from wosutil.emulator.image_utils import (
     find_template_center_on_screen,
     find_template_on_screen,
     find_text_center_on_screen,
+    find_text_on_screen,
     read_screen_time,
 )
-from wosutil.preferences import get_kill_beast_march_assignment
+from wosutil.preferences import GATHER_RESOURCES, get_kill_beast_march_assignment
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.utils import get_roi, get_template_path, log_message, retry_operation
 
@@ -196,6 +196,52 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
             delete_temp_screenshot(screenshot_path)
 
 
+def _click_template_repeatedly(
+    template_name,
+    instance_index,
+    clicks,
+    roi=None,
+    delay=CLICK_DELAY,
+    gray=False,
+    threshold=SCREEN_CHECK_THRESHOLD,
+):
+    """Locate a template once and click its unchanged center repeatedly.
+
+    Args:
+        template_name (str): Template name in TEMPLATE_PATHS.
+        instance_index (int): Emulator instance index.
+        clicks (int): Number of clicks to send after the template is found.
+        roi (tuple, optional): Region of interest (x, y, w, h).
+        delay (float): Delay after each click.
+        gray (bool): Use gray-scale matching when True. The default is color
+            matching.
+        threshold (float): Minimum confidence threshold for a match.
+
+    Returns:
+        bool: True when the template was found and all clicks were sent.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    template_path = get_template_path(template_name)
+    if not screenshot_path or not template_path:
+        log_message(f"Could not get screenshot or template for '{template_name}'.", level="error")
+        delete_temp_screenshot(screenshot_path)
+        return False
+
+    try:
+        if gray:
+            found, center = find_gray_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
+        else:
+            found, center = find_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
+        if not found or not center:
+            return False
+        for _ in range(clicks):
+            click_on_coordinates(center[0], center[1], instance_index, delay=delay)
+        log_message(f"Template '{template_name}' found; clicked it {clicks} times.", level="success")
+        return True
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
 def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_DELAY, screenshot_path=None):
     """Tries to find and click the first template in the list that matches.
 
@@ -239,7 +285,7 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
             delete_temp_screenshot(screenshot_path)
 
 
-def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False):
+def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False, fuzzy=False):
     """Takes a screenshot and clicks the center of the given text if found.
 
     Text-based counterpart of :func:`click_on_template` for menus whose
@@ -256,6 +302,8 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
             no click between captures).
         last (bool): When True click the lowest occurrence of the text instead
             of the first one.
+        fuzzy (bool): Retry the OCR with a looser mask and small spelling
+            differences for decorative single-word labels.
 
     Returns:
         bool: True if the text was found and clicked, False otherwise.
@@ -268,7 +316,15 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
         return False
 
     try:
-        found, center = find_text_center_on_screen(screenshot_path, text, roi=roi, instance_index=instance_index, debug_label=f"click_text_{text}", last=last)
+        text_search_kwargs = {
+            "roi": roi,
+            "instance_index": instance_index,
+            "debug_label": f"click_text_{text}",
+            "last": last,
+        }
+        if fuzzy:
+            text_search_kwargs["fuzzy"] = True
+        found, center = find_text_center_on_screen(screenshot_path, text, **text_search_kwargs)
         if not found or not center:
             return False
 
@@ -392,6 +448,38 @@ def ensure_world_screen(instance_index):
         return True
     log_message("Failed to reach world screen after navigation.", level="error")
     return False
+
+
+WORLD_MAP_SEARCH_SCROLL_START = (636, 912)
+WORLD_MAP_SEARCH_SCROLL_END = (86, 912)
+WORLD_MAP_SEARCH_SCROLL_DURATION_MS = 200
+
+
+def go_worldmap_search(instance_index, scroll=True):
+    """Open the world-map resource search panel.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        scroll (bool): Whether to scroll the resource selector from right to
+            left after opening it.
+
+    Returns:
+        bool: True when the world map was reached and the search was opened.
+    """
+    if not ensure_world_screen(instance_index):
+        return False
+
+    click_on_coordinates(44, 878, instance_index)
+    if scroll:
+        scroll_screen(
+            WORLD_MAP_SEARCH_SCROLL_START[0],
+            WORLD_MAP_SEARCH_SCROLL_START[1],
+            WORLD_MAP_SEARCH_SCROLL_END[0],
+            WORLD_MAP_SEARCH_SCROLL_END[1],
+            WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
+            instance_index,
+        )
+    return True
 
 
 def go_alliance_tab(instance_index):
@@ -853,6 +941,150 @@ def ensure_pet_skill_screen(instance_index, max_attempts=3):
     )
 
 
+def _read_gathering_tile_time(instance_index):
+    """Read the gathering duration to the right of the ``Gathering Time`` label.
+
+    Locating the label first avoids depending on a fixed modal position while
+    still restricting the timer OCR to the area where the value is displayed.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int or None: Gathering duration in seconds, or None when unreadable.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        return None
+
+    try:
+        found, label_box = find_text_on_screen(
+            screenshot_path,
+            "Gathering Time",
+            instance_index=instance_index,
+            debug_label="gathering_tile_time",
+        )
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+    if not found or label_box is None:
+        log_message("'Gathering Time' label NOT found on the resource tile.", level="warning")
+        return None
+
+    label_x, label_y, label_w, label_h = label_box
+    timer_x = label_x + label_w
+    search_roi = get_roi("worldmap_search")
+    if not search_roi:
+        log_message("Could not get the world-map search ROI.", level="error")
+        return None
+    screen_right = search_roi[0] + search_roi[2]
+    # The timer sits centered between the label and the modal edge, so the empty
+    # padding on both sides is reduced with fixed offsets.
+    timer_roi = (
+        timer_x + 20,
+        max(0, label_y - 10),
+        max(1, screen_right - timer_x - 45),
+        max(50, label_h + 20),
+    )
+    return read_screen_time(
+        instance_index,
+        roi=timer_roi,
+        debug_label="gathering_tile_timer",
+        ocr_psms=(6, 7, 8, 11, 12, 13),
+    )
+
+
+def _click_leftmost_template(instance_index, template_name, delay=CLICK_DELAY):
+    """Click the left-most occurrence of a template on the current screen.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        template_name (str): Template name in ``TEMPLATE_PATHS``.
+        delay (float): Delay after the click.
+
+    Returns:
+        bool: True when at least one template was found and clicked.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        return False
+    template_path = get_template_path(template_name)
+    if not template_path:
+        delete_temp_screenshot(screenshot_path)
+        return False
+
+    try:
+        matches = find_multiple_templates(template_path, screenshot_path)
+        if not matches:
+            log_message(f"Template '{template_name}' NOT found on screen.", level="warning")
+            return False
+        x, y, width, height = min(matches, key=lambda box: box[0])
+        click_on_coordinates(x + width // 2, y + height // 2, instance_index, delay=delay)
+        log_message(f"Template '{template_name}' found, clicking its left-most match.", level="success")
+        return True
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
+def gather_tile(instance_index, resource):
+    """Find and deploy a gathering march for the selected resource.
+
+    The helper opens the world-map search, selects the resource, raises the
+    search level up to ten times when the increase control is available, finds
+    a tile, reads its gathering duration, removes the left-most hero and deploys
+    the march with :func:`send_march`.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        resource (str): Resource to search: ``meat``, ``wood``, ``coal`` or
+            ``iron``.
+
+    Returns:
+        int or None: The march round-trip time in seconds (the value returned
+            by :func:`send_march`), or None when any required step cannot be
+            completed.
+    """
+    if resource not in GATHER_RESOURCES:
+        log_message(f"Unsupported gathering resource '{resource}'.", level="error")
+        return None
+    if not go_worldmap_search(instance_index):
+        return None
+
+    search_roi = get_roi("worldmap_search")
+    if not search_roi:
+        log_message("Could not get the world-map search ROI.", level="error")
+        return None
+
+    if not click_on_text(resource.title(), instance_index, roi=search_roi, fuzzy=True):
+        log_message(f"Resource '{resource}' NOT found in the world-map search.", level="warning")
+        return None
+
+    _click_template_repeatedly("gather_tile_increase_level", instance_index, clicks=10, roi=search_roi, gray=False, threshold=0.92)
+
+    if not click_on_text("Search", instance_index, roi=search_roi, delay=3.0, last=True, fuzzy=True):
+        log_message("Search button NOT found in the world-map search.", level="warning")
+        return None
+
+    gathering_time = _read_gathering_tile_time(instance_index)
+    if gathering_time is None:
+        return None
+
+    if not click_on_text("Gather", instance_index, roi=get_roi("worldmap"), last=True, fuzzy=True):
+        log_message("Gather button NOT found on the resource tile.", level="warning")
+        return None
+    if not _click_leftmost_template(instance_index, "remove_hero", delay=1.0):
+        log_message("No hero removal control found on the march screen.", level="warning")
+        return None
+
+    march_walking_time = send_march(instance_index)
+    if march_walking_time is None or march_walking_time is False:
+        log_message("Could not send the gathering march.", level="warning")
+        return None
+
+    log_message(f"Gathering march deployed; march round-trip is {march_walking_time} seconds.", level="success")
+    return march_walking_time
+
+
 def open_pet_adventure_chest(instance_index, x, y):
     """Opens a ready pet adventure chest.
 
@@ -979,20 +1211,73 @@ KILL_BEAST_MARCH_SCROLL_START = (511, 122)
 KILL_BEAST_MARCH_SCROLL_END = (63, 122)
 
 
+def send_march(instance_index):
+    """Read the march timer and deploy the march by clicking its Deploy button.
+
+    The timer, the no-troops check and the Deploy button are all resolved from a
+    single screenshot, so no extra captures are taken between those steps.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Time in seconds to wait (detected timer * 2, capped at
+            INTEL_BEAST_MAX_WAIT_SECONDS, or
+            INTEL_BEAST_MARCH_SENT_WAIT_SECONDS when the march was sent without
+            a readable timer).
+        False: When no troops are available to send the march.
+        None: When the send-march screen could not be confirmed (the Deploy
+            button is not on screen).
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        log_message("Could not take a screenshot to send the march.", level="error")
+        return None
+
+    try:
+        timer = read_screen_time(
+            instance_index,
+            roi=get_roi("walking_march_time"),
+            debug_label="walking_march_time",
+            max_seconds=INTEL_BEAST_TIMER_MAX_SECONDS,
+            screenshot_path=screenshot_path,
+        )
+        if timer is None and is_game_on_screen(instance_index, "no_troops_left", screenshot_path=screenshot_path):
+            log_message("No troops left to send to the march, skipping it.", level="warning")
+            return False
+
+        deploy_found, deploy_center = find_text_center_on_screen(
+            screenshot_path,
+            "Deploy",
+            instance_index=instance_index,
+            debug_label="click_text_Deploy",
+            last=True,
+        )
+
+        if timer is None:
+            if deploy_found and deploy_center:
+                log_message("Timer unreadable but the Deploy button is on screen, sending the march.", level="warning")
+                click_on_coordinates(deploy_center[0], deploy_center[1], instance_index)
+                return INTEL_BEAST_MARCH_SENT_WAIT_SECONDS
+            log_message("Deploy button NOT found, not on the correct screen; the march will be retried.", level="warning")
+            return None
+
+        if deploy_found and deploy_center:
+            click_on_coordinates(deploy_center[0], deploy_center[1], instance_index)
+        else:
+            log_message("Deploy button NOT found, cannot send the march.", level="warning")
+            return None
+        return min(timer * 2, INTEL_BEAST_MAX_WAIT_SECONDS)
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
 def kill_beast(instance_index):
     """Kills a beast with the default march if the beast is already clicked and centered on the screen.
 
     If the user assigned a march in the preferences, that formation is selected
     on the march row (scrolling horizontally first when needed) before attacking.
-
-    When the march timer cannot be read, the send-march screen template is
-    searched to confirm the flow is on the correct screen:
-
-    - If the send-march screen is found, the march is sent and a short wait is
-      returned since the timer is unknown.
-    - If the send-march screen is NOT found, the flow is not on the correct
-      screen: ``None`` is returned so the caller can go back to the intel and
-      retry the attack.
+    The march itself is deployed by :func:`send_march`.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -1019,34 +1304,7 @@ def kill_beast(instance_index):
             )
         click_on_coordinates(*KILL_BEAST_MARCH_POSITIONS[march], instance_index, delay=0.3)
 
-    timer = read_screen_time(
-        instance_index,
-        roi=ROI["kill_beast_timer"],
-        debug_label="kill_beast_timer",
-        max_seconds=INTEL_BEAST_TIMER_MAX_SECONDS,
-    )
-    if timer is None and is_game_on_screen(instance_index, "no_troops_left"):
-        log_message("No troops left to send to the beast, skipping the attack.", level="warning")
-        return False
-
-    if timer is None:
-        # The timer could not be read: verify the flow is really on the
-        # send-march screen before assuming the march was sent.
-        if is_game_on_screen(instance_index, "send_march_screen", "send_march_screen", threshold=0.90):
-            log_message(
-                "Timer unreadable but the send-march screen is confirmed, sending the march.",
-                level="warning",
-            )
-            click_on_coordinates(552, 1216, instance_index)
-            return INTEL_BEAST_MARCH_SENT_WAIT_SECONDS
-        log_message(
-            "Send-march screen NOT found, not on the correct screen; the beast attack will be retried.",
-            level="warning",
-        )
-        return None
-
-    click_on_coordinates(552, 1216, instance_index)
-    return min(timer * 2, INTEL_BEAST_MAX_WAIT_SECONDS)
+    return send_march(instance_index)
 
 
 def _click_intel_template(instance_index, templates):
