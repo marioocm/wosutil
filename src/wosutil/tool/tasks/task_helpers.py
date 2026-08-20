@@ -1040,8 +1040,9 @@ def gather_tile(instance_index, resource):
             ``iron``.
 
     Returns:
-        int or None: Gathering duration plus twice the march duration, or None
-            when any required step cannot be completed.
+        int or None: The march round-trip time in seconds (the value returned
+            by :func:`send_march`), or None when any required step cannot be
+            completed.
     """
     if resource not in GATHER_RESOURCES:
         log_message(f"Unsupported gathering resource '{resource}'.", level="error")
@@ -1080,9 +1081,8 @@ def gather_tile(instance_index, resource):
         log_message("Could not send the gathering march.", level="warning")
         return None
 
-    total_time = gathering_time + march_walking_time
-    log_message(f"Gathering march deployed; estimated total duration is {total_time} seconds.", level="success")
-    return total_time
+    log_message(f"Gathering march deployed; march round-trip is {march_walking_time} seconds.", level="success")
+    return march_walking_time
 
 
 def open_pet_adventure_chest(instance_index, x, y):

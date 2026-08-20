@@ -304,10 +304,10 @@ patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
     def test_gathers_selected_resource_and_returns_round_trip_time(self):
-        """The helper searches, deploys the march, and returns the full duration."""
+        """The helper searches, deploys the march, and returns the round trip."""
         result = gather_tile(0, "wood")
 
-        self.assertEqual(result, 180)
+        self.assertEqual(result, 60)
         self.go_search.assert_called_once_with(0)
         self.click_text.assert_any_call("Wood", 0, roi=(0, 843, 718, 435), fuzzy=True)
         self.click_text.assert_any_call("Search", 0, roi=(0, 843, 718, 435), delay=3.0, last=True, fuzzy=True)
@@ -334,7 +334,7 @@ patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
         """Meat is searched in the narrow label area instead of the full ROI."""
         result = gather_tile(0, "meat")
 
-        self.assertEqual(result, 180)
+        self.assertEqual(result, 60)
         self.click_text.assert_any_call("Meat", 0, roi=(0, 843, 718, 435), fuzzy=True)
 
     def test_invalid_resource_is_rejected_before_navigation(self):

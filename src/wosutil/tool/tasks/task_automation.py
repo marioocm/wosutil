@@ -890,10 +890,11 @@ def activate_daily_pet_skills(instance_index):
     2. Navigates to the pet skill screen (go_pet_skill).
     3. Ensures the pet skill screen before activating a skill or reading a timer.
     4. When the ox active marker is found, starts a gathering march with the
-       configured resource and returns to the pet skill screen.
+       configured resource and reschedules in the march round-trip time so the
+       ox timer is checked again when the march returns.
     5. Searches the four pet skills; the first one found is clicked and confirmed
        with the use button, then the search is repeated for the rest.
-    6. When no skill is ready, reads the four timers and reschedules with the
+    6. When no skill is ready, reads the remaining timers and reschedules with the
        shortest one, or 6 hours when no timer is detected.
 
     Returns (True/False, reschedule_seconds).
@@ -917,9 +918,13 @@ def activate_daily_pet_skills(instance_index):
             press_android_back_button(instance_index)
             resource = get_gather_resource()
             log_message(f"Ox skill is active; gathering {resource} before continuing pet skills.", level="info")
-            if gather_tile(instance_index, resource) is None:
-                log_message("Could not start the ox gathering march; continuing with the remaining pet skills.", level="warning")
+            march_walking_time = gather_tile(instance_index, resource)
             ox_gathered = True
+            if march_walking_time is None or march_walking_time is False:
+                log_message("Could not start the ox gathering march; continuing with the remaining pet skills.", level="warning")
+            else:
+                log_message(f"Ox gathering march sent; rescheduling pet skills in {march_walking_time} seconds to check the ox timer.", level="info")
+                return True, march_walking_time
             if not go_pet_skill(instance_index):
                 log_message("Could not return to the pet skill screen after gathering.", level="warning")
                 return False, PET_SKILL_RESCHEDULE_SECONDS
