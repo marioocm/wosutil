@@ -59,7 +59,7 @@ _TEXT_SATURATION_THRESHOLD = 100
 _TEXT_PSM = 6
 _TEXT_FALLBACK_PSM = 11
 _FUZZY_TEXT_PSMS = (6, 11, 12)
-_FUZZY_TEXT_MIN_SIMILARITY = 0.65
+_FUZZY_TEXT_MIN_SIMILARITY = 0.55
 
 # UTC clock OCR settings (world map schedule panel: 'UTC MM-DD HH:MM:SS')
 _UTC_TIME_RE = re.compile(r"UTC\s*(\d{1,2})-(\d{1,2})\s*(\d{1,2}):(\d{2}):(\d{2})", re.IGNORECASE)
