@@ -977,13 +977,12 @@ def _read_gathering_tile_time(instance_index):
     screen_right = ROI["worldmap_search"][0] + ROI["worldmap_search"][2]
     roi_width = max(1, screen_right - timer_x)
     # The timer sits centered between the label and the modal edge, so the empty
-    # padding on both sides can be cropped (20% left, 25% right).
-    left_trim = int(roi_width * 0.20)
-    right_trim = int(roi_width * 0.25)
+    # padding on both sides is reduced (20% left, 25% right) by using a 55%
+    # centered window of the original span.
     timer_roi = (
-        timer_x + left_trim,
+        timer_x + int(roi_width * 0.20),
         max(0, label_y - 10),
-        max(1, roi_width - left_trim - right_trim),
+        max(1, int(roi_width * 0.55)),
         max(50, label_h + 20),
     )
     return read_screen_time(
@@ -1075,12 +1074,12 @@ def gather_tile(instance_index, resource):
         log_message("No hero removal control found on the march screen.", level="warning")
         return None
 
-    march_wait = send_march(instance_index)
-    if march_wait is None or march_wait is False:
+    march_walking_time = send_march(instance_index)
+    if march_walking_time is None or march_walking_time is False:
         log_message("Could not send the gathering march.", level="warning")
         return None
 
-    total_time = gathering_time + march_wait
+    total_time = gathering_time + march_walking_time
     log_message(f"Gathering march deployed; estimated total duration is {total_time} seconds.", level="success")
     return total_time
 
