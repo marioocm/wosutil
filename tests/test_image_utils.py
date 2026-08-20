@@ -121,6 +121,19 @@ class TestImageUtils(unittest.TestCase):
         self.assertEqual(result, 12 * 3600 + 24 * 60 + 29)
         self.assertEqual(image_to_string.call_count, 2)
 
+    def test_read_screen_time_adds_days_to_timer(self):
+        """A timer with a day prefix (e.g. 1d 06:29:08) adds 24h per day."""
+        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), \
+            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), \
+            patch(
+                "wosutil.emulator.image_utils.pytesseract.image_to_string",
+                return_value="1d 06:29:08",
+            ) as image_to_string:
+            result = read_screen_time(0, ocr_psms=(11,))
+
+        self.assertEqual(result, 1 * 86400 + 6 * 3600 + 29 * 60 + 8)
+        self.assertEqual(image_to_string.call_count, 1)
+
     def test_find_template_on_screen_not_found(self):
         """Test template not found."""
         # Create screenshot without template (different pattern)

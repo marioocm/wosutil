@@ -48,8 +48,9 @@ _template_cache: Dict[str, np.ndarray] = {}
 
 # Timer OCR settings
 _TIME_RE = re.compile(r"(?<!\d)(\d{1,2}):(\d{2}):(\d{2})")
-_OCR_PSMS = (7, 8, 13)
-_DIGIT_WHITELIST = "0123456789:"
+_DAY_RE = re.compile(r"(\d{1,2})\s*[dD]")
+_OCR_PSMS = (7, 8, 13, 11)
+_DIGIT_WHITELIST = "0123456789:dD"
 
 # Menu text OCR settings (side menu tabs/entries, shop labels)
 _TEXT_SCALE = 3
@@ -355,6 +356,9 @@ def read_screen_time(
             if h > 99:
                 continue
             total_seconds = h * 3600 + m * 60 + s
+            day_match = _DAY_RE.search(text)
+            if day_match:
+                total_seconds += int(day_match.group(1)) * 86400
             if max_seconds is not None and total_seconds > max_seconds:
                 log_message(
                     f"Timer read {h:02}:{m:02}:{s:02} ({total_seconds}s) exceeds the maximum plausible value of {max_seconds}s, treating it as an invalid timer read.",
