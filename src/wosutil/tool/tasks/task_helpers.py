@@ -13,7 +13,6 @@ from wosutil.config import (
     INTEL_BEAST_MAX_WAIT_SECONDS,
     INTEL_BEAST_TIMER_MAX_SECONDS,
     MAIN_SCREEN_MAX_ATTEMPTS,
-    ROI,
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.context import get_multi_instance_manager
@@ -974,15 +973,17 @@ def _read_gathering_tile_time(instance_index):
 
     label_x, label_y, label_w, label_h = label_box
     timer_x = label_x + label_w
-    screen_right = ROI["worldmap_search"][0] + ROI["worldmap_search"][2]
-    roi_width = max(1, screen_right - timer_x)
+    search_roi = get_roi("worldmap_search")
+    if not search_roi:
+        log_message("Could not get the world-map search ROI.", level="error")
+        return None
+    screen_right = search_roi[0] + search_roi[2]
     # The timer sits centered between the label and the modal edge, so the empty
-    # padding on both sides is reduced (20% left, 25% right) by using a 55%
-    # centered window of the original span.
+    # padding on both sides is reduced with fixed offsets.
     timer_roi = (
-        timer_x + int(roi_width * 0.20),
+        timer_x + 20,
         max(0, label_y - 10),
-        max(1, int(roi_width * 0.55)),
+        max(1, screen_right - timer_x - 45),
         max(50, label_h + 20),
     )
     return read_screen_time(
