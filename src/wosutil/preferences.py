@@ -15,6 +15,11 @@ KILL_BEAST_MARCH_MIN = 1
 KILL_BEAST_MARCH_MAX = 12
 DEFAULT_KILL_BEAST_MARCH = 1
 
+BEAR_TRAP_MARCH_COUNT = 6
+BEAR_TRAP_MARCH_MIN = 1
+BEAR_TRAP_MARCH_MAX = 12
+DEFAULT_BEAR_TRAP_MARCHES = [1, 2, 3, 4, 5, 6]
+
 MYSTERY_SHOP_LEVEL_FREE = "free"
 MYSTERY_SHOP_LEVEL_WIDGETS_50 = "widgets_50"
 MYSTERY_SHOP_LEVEL_WIDGETS_20 = "widgets_20"
@@ -167,6 +172,37 @@ def get_kill_beast_march_assignment(preferences=None):
     if march < KILL_BEAST_MARCH_MIN or march > KILL_BEAST_MARCH_MAX:
         return None
     return march
+
+
+def get_bear_trap_marches(preferences=None):
+    """Get the marches used to join ally rallies during the bear trap (6 numbers 1-12).
+
+    Each of the six slots keeps its own march number, so a slot always deploys
+    with the same formation.
+
+    Args:
+        preferences (dict, optional): Preferences data. If None, loads from disk.
+
+    Returns:
+        list: Exactly BEAR_TRAP_MARCH_COUNT march numbers, each between
+            BEAR_TRAP_MARCH_MIN and BEAR_TRAP_MARCH_MAX.
+    """
+    if preferences is None:
+        preferences = load_preferences()
+    marches = preferences.get("bear_trap_marches")
+    if not isinstance(marches, list):
+        return list(DEFAULT_BEAR_TRAP_MARCHES)
+    cleaned = []
+    for value in marches[:BEAR_TRAP_MARCH_COUNT]:
+        march = safe_int(value, 0)
+        if BEAR_TRAP_MARCH_MIN <= march <= BEAR_TRAP_MARCH_MAX:
+            cleaned.append(march)
+    while len(cleaned) < BEAR_TRAP_MARCH_COUNT:
+        for candidate in range(BEAR_TRAP_MARCH_MIN, BEAR_TRAP_MARCH_MAX + 1):
+            if candidate not in cleaned:
+                cleaned.append(candidate)
+                break
+    return cleaned
 
 
 def get_emulator(preferences=None):

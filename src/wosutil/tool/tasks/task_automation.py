@@ -2,7 +2,7 @@
 
 import time
 
-from wosutil.config import INTEL_TIMER_MIN_SECONDS
+from wosutil.config import BEAR_TRAP_DURATION_SECONDS, INTEL_TIMER_MIN_SECONDS
 
 # Import functions from emulator_manager
 from wosutil.emulator.emulator_manager import (
@@ -23,12 +23,14 @@ from wosutil.emulator.image_utils import (
 from wosutil.preferences import (
     MYSTERY_SHOP_LEVEL_WIDGETS_20,
     MYSTERY_SHOP_LEVEL_WIDGETS_50,
+    get_bear_trap_marches,
     get_gather_resource,
     get_mystery_shop_level,
 )
 from wosutil.stop import stop_signal
 from wosutil.tool.tasks.task_helpers import (
     _train_troop_camp,
+    activate_battle_pet_skills,
     click_first_found_template,
     click_on_template,
     click_on_text,
@@ -53,6 +55,7 @@ from wosutil.tool.tasks.task_helpers import (
     is_game_on_intel_screen,
     is_game_on_pet_adventure_screen,
     is_game_on_screen,
+    join_bear_rally,
     kill_intel_beast,
     open_pet_adventure_chest,
     recall_march,
@@ -1136,7 +1139,7 @@ def do_intel_missions(instance_index):
 
 
 def play_bear_trap(instance_index):
-    """Recalls every march to prepare the bear trap attack.
+    """Recalls every march, activates the battle pet skills and joins ally bear rallies.
 
     The bear trap must be attacked with all marches available, so every march
     still gathering or marching away from the city is recalled first. The task
@@ -1144,14 +1147,18 @@ def play_bear_trap(instance_index):
     and recalls every march listed in it, then clicks the label to reopen the
     panel, recalls again, and finishes with one last recall pass so a march
     that appeared or was skipped (e.g. because it moved a little) is not left
-    behind.
+    behind. Then the battle pet skills are activated.
+
+    Finally, for the whole bear trap window (BEAR_TRAP_DURATION_SECONDS) it
+    keeps every one of the six marches joining ally rallies against the bear:
+    each march has its own memory of when it can be launched again and always
+    deploys with the same user-selected squad.
 
     Args:
         instance_index (int): Emulator instance index.
 
     Returns:
-        bool: True when the world map was reached and the panel was checked,
-            False otherwise.
+        bool: True when the task ran, False otherwise.
     """
     log_message("Preparing the bear trap attack by recalling all marches...", level="info")
     if not ensure_world_screen(instance_index):
@@ -1174,11 +1181,34 @@ def play_bear_trap(instance_index):
 
     if not found or marching_center is None:
         log_message("No 'Marching' label on the world map, all marches are at the city.", level="success")
-        return True
+    else:
+        recall_march(instance_index)
+        click_on_coordinates(marching_center[0], marching_center[1], instance_index, delay=0.8)
+        recall_march(instance_index)
+        # Final pass: catch any march that appeared or was skipped while recalling.
+        recall_march(instance_index)
 
-    recall_march(instance_index)
-    click_on_coordinates(marching_center[0], marching_center[1], instance_index, delay=0.8)
-    recall_march(instance_index)
-    # Final pass: catch any march that appeared or was skipped while recalling.
-    recall_march(instance_index)
+    activate_battle_pet_skills(instance_index)
+
+    if not ensure_world_screen(instance_index):
+        return False
+
+    marches = [{"number": number, "next_available": time.time()} for number in get_bear_trap_marches()]
+    log_message(f"Joining bear rallies with marches {[m['number'] for m in marches]} for {BEAR_TRAP_DURATION_SECONDS // 60} minutes...", level="info")
+    end = time.time() + BEAR_TRAP_DURATION_SECONDS
+    while time.time() < end:
+        stop_signal.check()
+        now = time.time()
+        for march in marches:
+            if march["next_available"] <= now:
+                wait = join_bear_rally(instance_index, march["number"])
+                march["next_available"] = time.time() + (wait if wait is not None else 25)
+                break
+        else:
+            # No march is ready yet: wait until the next one is, in short
+            # slices so the stop signal is honored promptly.
+            next_ready = min(march["next_available"] for march in marches)
+            timeout = max(1, min(10, int(next_ready - time.time())))
+            if stop_signal.wait(timeout=timeout):
+                break
     return True

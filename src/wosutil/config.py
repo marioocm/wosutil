@@ -174,6 +174,8 @@ TEMPLATE_PATHS = {
     "gather_tile_increase_level": os.path.join(TEMPLATES_DIR, "world", "gather", "gather_tile_increase_level.png"),
     "remove_hero": os.path.join(TEMPLATES_DIR, "world", "march", "remove_hero.png"),
     "recall_march": os.path.join(TEMPLATES_DIR, "world", "march", "recall_march.png"),
+    "worldmap_rallies": os.path.join(TEMPLATES_DIR, "world", "march", "worldmap_rallies.png"),
+    "join_rally": os.path.join(TEMPLATES_DIR, "world", "march", "join_rally.png"),
 }
 
 # --- Automation Parameters ---
@@ -186,6 +188,12 @@ INTEL_BEAST_MAX_WAIT_SECONDS = 1000  # Max wait for a beast march (timer read * 
 INTEL_BEAST_TIMER_MAX_SECONDS = 30 * 60  # Max plausible beast march timer; longer reads are treated as OCR errors
 INTEL_BEAST_MARCH_SENT_WAIT_SECONDS = 240  # Reschedule when the march was sent but the timer could not be read
 INTEL_BEAST_MAX_RETRIES = 3  # Max attempts to confirm the send-march screen before giving up
+
+# --- Bear trap ---
+BEAR_TRAP_DURATION_SECONDS = 30 * 60  # Duration of the bear trap attack window
+BEAR_RALLY_MIN_TIMER_SECONDS = 25  # Discard rallies that start in less than this
+BEAR_RALLY_RETRY_SECONDS = 25  # Wait before retrying when no valid rally is on screen
+BEAR_RALLY_MARGIN_SECONDS = 30  # March cooldown margin added to the read rally timer
 
 # --- City Coordinates (main screen specific points) ---
 COORDINATES = {
@@ -241,4 +249,6 @@ ROI = {
     "worldmap_search": (0, 843, 718, 435),
     "worldmap": (0, 95, 718, 1008),
     "worldmap_marching": (0, 175, 280, 492),
+    "worldmap_rallies": (595, 128, 123, 675),
+    "rally_tab": (393, 173, 323, 817),
 }

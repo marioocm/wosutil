@@ -14,6 +14,8 @@ from wosutil.emulator.backends import (
     detect_installed_emulators,
 )
 from wosutil.preferences import (
+    BEAR_TRAP_MARCH_MAX,
+    BEAR_TRAP_MARCH_MIN,
     GATHER_RESOURCES,
     KILL_BEAST_MARCH_MAX,
     KILL_BEAST_MARCH_MIN,
@@ -21,6 +23,7 @@ from wosutil.preferences import (
     MYSTERY_SHOP_LEVEL_WIDGETS_20,
     MYSTERY_SHOP_LEVEL_WIDGETS_50,
     MYSTERY_SHOP_LEVELS,
+    get_bear_trap_marches,
     get_debug_mode,
     get_emulator,
     get_gather_resource,
@@ -61,8 +64,37 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     preferences_tab = ttk.Frame(notebook)
     notebook.add(preferences_tab, text="Preferences")
 
+    # --- Scrollable container ---
+    # The tab holds many sections; without scrolling the bottom ones (schedule
+    # memory, debug mode, save button) are unreachable on small windows.
+    canvas = tk.Canvas(preferences_tab, highlightthickness=0, bg="#34495E")
+    canvas_scrollbar = ttk.Scrollbar(preferences_tab, orient="vertical", command=canvas.yview)
+    scrollable_frame = ttk.Frame(canvas)
+    scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=canvas_scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    canvas_scrollbar.pack(side="right", fill="y")
+
+    def _stretch_frame(event):
+        # Keep the inner frame as wide as the canvas so no background gap
+        # shows between the content and the scrollbar.
+        canvas.itemconfigure(canvas_window, width=event.width)
+
+    canvas.bind("<Configure>", _stretch_frame)
+
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _bind_mousewheel(widget):
+        widget.bind("<MouseWheel>", _on_mousewheel)
+        for child in widget.winfo_children():
+            _bind_mousewheel(child)
+
+    _bind_mousewheel(scrollable_frame)
+
     # --- Emulator selection ---
-    emulator_frame = ttk.LabelFrame(preferences_tab, text="Emulator")
+    emulator_frame = ttk.LabelFrame(scrollable_frame, text="Emulator")
     emulator_frame.pack(pady=10, padx=10, fill="x")
 
     emulator_row = ttk.Frame(emulator_frame)
@@ -87,7 +119,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     emulator_combo.pack(side="left", padx=5)
 
     # --- Task priorities ---
-    priority_frame = ttk.LabelFrame(preferences_tab, text="Task Priorities")
+    priority_frame = ttk.LabelFrame(scrollable_frame, text="Task Priorities")
     priority_frame.pack(pady=10, padx=10, fill="x")
 
     ttk.Label(
@@ -145,7 +177,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     ttk.Button(move_buttons, text="Move Down", command=lambda: move_selected(1)).pack(side="left", padx=5)
 
     # --- Kill beasts march selection ---
-    kill_beast_frame = ttk.LabelFrame(preferences_tab, text="Kill Beasts")
+    kill_beast_frame = ttk.LabelFrame(scrollable_frame, text="Kill Beasts")
     kill_beast_frame.pack(pady=10, padx=10, fill="x")
 
     march_row = ttk.Frame(kill_beast_frame)
@@ -164,8 +196,33 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     )
     march_spinbox.pack(side="left", padx=5)
 
+    # --- Bear trap squads selection ---
+    bear_trap_frame = ttk.LabelFrame(scrollable_frame, text="Bear Trap")
+    bear_trap_frame.pack(pady=10, padx=10, fill="x")
+
+    bear_trap_row = ttk.Frame(bear_trap_frame)
+    bear_trap_row.pack(anchor="w", padx=10, pady=10)
+
+    ttk.Label(
+        bear_trap_row,
+        text="Select squad to join during bear trap (one per march slot, 1-12):",
+    ).pack(side="left", padx=5)
+
+    bear_march_vars = [tk.IntVar(value=march) for march in get_bear_trap_marches()]
+    for i, var in enumerate(bear_march_vars, start=1):
+        slot_row = ttk.Frame(bear_trap_frame)
+        slot_row.pack(anchor="w", padx=10, pady=(0, 5))
+        ttk.Label(slot_row, text=f"March {i}:").pack(side="left", padx=5)
+        ttk.Spinbox(
+            slot_row,
+            from_=BEAR_TRAP_MARCH_MIN,
+            to=BEAR_TRAP_MARCH_MAX,
+            textvariable=var,
+            width=4,
+        ).pack(side="left", padx=5)
+
     # --- Ox gathering resource selection ---
-    gather_resource_frame = ttk.LabelFrame(preferences_tab, text="Ox Gathering")
+    gather_resource_frame = ttk.LabelFrame(scrollable_frame, text="Ox Gathering")
     gather_resource_frame.pack(pady=10, padx=10, fill="x")
 
     gather_resource_row = ttk.Frame(gather_resource_frame)
@@ -182,7 +239,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     ).pack(side="left", padx=5)
 
     # --- Mystery shop redemption level ---
-    mystery_shop_frame = ttk.LabelFrame(preferences_tab, text="Mystery Shop")
+    mystery_shop_frame = ttk.LabelFrame(scrollable_frame, text="Mystery Shop")
     mystery_shop_frame.pack(pady=10, padx=10, fill="x")
 
     mystery_shop_row = ttk.Frame(mystery_shop_frame)
@@ -199,7 +256,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     ).pack(side="left", padx=5)
 
     # --- Schedule memory ---
-    schedule_frame = ttk.LabelFrame(preferences_tab, text="Scheduling")
+    schedule_frame = ttk.LabelFrame(scrollable_frame, text="Scheduling")
     schedule_frame.pack(pady=10, padx=10, fill="x")
 
     schedule_row = ttk.Frame(schedule_frame)
@@ -215,7 +272,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     ).pack(side="left", fill="x", expand=True)
 
     # --- Debug mode ---
-    debug_frame = ttk.LabelFrame(preferences_tab, text="Debug")
+    debug_frame = ttk.LabelFrame(scrollable_frame, text="Debug")
     debug_frame.pack(pady=10, padx=10, fill="x")
 
     debug_row = ttk.Frame(debug_frame)
@@ -245,6 +302,21 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
             march_var.set(get_kill_beast_march(prefs))
         elif march_touched["value"] or "kill_beast_march" in prefs:
             prefs["kill_beast_march"] = march
+        bear_marches = []
+        invalid_bear = False
+        for var in bear_march_vars:
+            march = var.get()
+            if march < BEAR_TRAP_MARCH_MIN or march > BEAR_TRAP_MARCH_MAX:
+                invalid_bear = True
+                break
+            bear_marches.append(march)
+        if invalid_bear:
+            log_message(
+                f"Bear trap marches must be between {BEAR_TRAP_MARCH_MIN} and {BEAR_TRAP_MARCH_MAX}, keeping the saved values.",
+                "warning",
+            )
+        else:
+            prefs["bear_trap_marches"] = bear_marches
         resource = next(
             (resource for resource, label in _GATHER_RESOURCE_LABELS.items() if label == gather_resource_var.get()),
             get_gather_resource(prefs),
@@ -264,6 +336,6 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         else:
             log_message("Error saving preferences.", "error")
 
-    ttk.Button(preferences_tab, text="Save Preferences", command=save_preferences_action).pack(pady=10)
+    ttk.Button(scrollable_frame, text="Save Preferences", command=save_preferences_action).pack(pady=10)
 
     refresh_list()
