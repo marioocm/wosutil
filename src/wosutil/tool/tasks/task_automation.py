@@ -636,7 +636,8 @@ def claim_vip_daily_rewards(instance_index):
         return False, 12 * 60 * 60
 
     click_on("vip", instance_index, delay=0.7)
-    click_on_coordinates(628, 282, instance_index, delay=0.7)
+    click_on_coordinates(628, 282, instance_index, delay=2)
+    press_android_back_button(instance_index)
     click_on_coordinates(585, 826, instance_index, delay=0.7)
     click_on_coordinates(585, 826, instance_index, delay=0.7)
     click_on_coordinates(585, 826, instance_index, delay=0.7)
