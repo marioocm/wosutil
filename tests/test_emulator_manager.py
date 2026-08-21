@@ -42,17 +42,13 @@ class TestIsWosInstalled(unittest.TestCase):
     def test_installed_when_package_present(self):
         """A reachable device reporting the package is installed."""
         self.verify_adb_connected.return_value = True
-        self.execute_adb_command.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=f"package:{WHITEOUT_PACKAGE}\n"
-        )
+        self.execute_adb_command.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=f"package:{WHITEOUT_PACKAGE}\n")
         self.assertTrue(is_wos_installed(0))
 
     def test_not_installed_when_absent_but_reachable(self):
         """A reachable device without the package is definitively not installed."""
         self.verify_adb_connected.return_value = True
-        self.execute_adb_command.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="package:com.other.app\n"
-        )
+        self.execute_adb_command.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="package:com.other.app\n")
         self.assertFalse(is_wos_installed(0))
 
     def test_assumes_installed_when_adb_unreachable(self):

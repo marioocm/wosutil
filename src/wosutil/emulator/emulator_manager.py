@@ -241,8 +241,7 @@ def is_wos_installed(instance_index, retries=3):
             time.sleep(2)
     # Never confirmed the device: assume installed to avoid a false abort.
     log_message(
-        f"Could not verify whether Whiteout Survival is installed on instance {instance_index} "
-        "(ADB unreachable). Assuming installed to avoid a false 'not installed' abort.",
+        f"Could not verify whether Whiteout Survival is installed on instance {instance_index} (ADB unreachable). Assuming installed to avoid a false 'not installed' abort.",
         level="warning",
     )
     return True
