@@ -207,24 +207,45 @@ def is_wos_running(instance_index, verbose=True):
         return False
 
 
-def is_wos_installed(instance_index):
+def is_wos_installed(instance_index, retries=3):
     """Checks if Whiteout Survival is installed on the emulator.
+
+    The check is resilient to transient ADB drops: it re-verifies the ADB
+    connection and retries the package query before concluding. It only
+    returns ``False`` when the device is reachable AND the package is truly
+    absent. If the connection cannot be established after the retries (e.g.
+    the instance closed mid-check), it returns ``True`` so callers never
+    abort an otherwise-healthy instance on a false negative; the subsequent
+    launch phase will surface a real problem and retry/requeue as needed.
 
     Args:
         instance_index (int): Emulator instance index.
+        retries (int): Number of times to retry the check before giving up.
 
     Returns:
-        bool: True if the game is installed, False otherwise.
+        bool: True if the game is installed (or could not be ruled out),
+            False only when it is confirmed absent.
     """
     log_message("Checking if the game is installed...", level="info")
-    result = execute_adb_command(["shell", "pm", "list", "packages", WHITEOUT_PACKAGE], instance_index)
-
-    if result and WHITEOUT_PACKAGE in result.stdout:
-        log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) is installed.", level="success")
-        return True
-    else:
-        log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) not installed.", level="info")
-        return False
+    for attempt in range(retries):
+        if verify_adb_connected(instance_index, max_attempts=2, wait=2):
+            result = execute_adb_command(["shell", "pm", "list", "packages", WHITEOUT_PACKAGE], instance_index)
+            if result and WHITEOUT_PACKAGE in result.stdout:
+                log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) is installed.", level="success")
+                return True
+            # ADB reachable but the package is absent: definitive.
+            log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) not installed.", level="info")
+            return False
+        # Device unreachable this attempt; wait before retrying (transient).
+        if attempt < retries - 1:
+            time.sleep(2)
+    # Never confirmed the device: assume installed to avoid a false abort.
+    log_message(
+        f"Could not verify whether Whiteout Survival is installed on instance {instance_index} "
+        "(ADB unreachable). Assuming installed to avoid a false 'not installed' abort.",
+        level="warning",
+    )
+    return True
 
 
 def take_screenshot(instance_index):
