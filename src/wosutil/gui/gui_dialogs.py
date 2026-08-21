@@ -19,7 +19,13 @@ def center_window_on_screen(window):
 
 
 def show_centered_dialog(parent, title, text):
-    """Show a modal, screen-centered dialog with a single OK button.
+    """Show a non-blocking, screen-centered dialog with a single OK button.
+
+    The dialog is intentionally non-modal: a blocking (grabbed) dialog would
+    freeze the Tk main loop, which also drives the periodic scheduler that
+    launches and re-launches instances. A popup shown while the user is away
+    (e.g. "game not installed") would then stall every other instance and
+    desynchronize their schedules, so the window must never wait for input.
 
     Args:
         parent: The parent Tk window.
@@ -29,11 +35,10 @@ def show_centered_dialog(parent, title, text):
     top = tk.Toplevel(parent)
     top.title(title)
     top.transient(parent)
-    top.grab_set()
+    top.attributes("-topmost", True)
     top.configure(bg="#2C3E50")
 
     ttk.Label(top, text=text, wraplength=480, justify="center").pack(padx=24, pady=(20, 12))
     ttk.Button(top, text="OK", command=top.destroy).pack(pady=(0, 16))
 
     center_window_on_screen(top)
-    top.wait_window()
