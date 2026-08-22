@@ -14,6 +14,8 @@ from wosutil.emulator.backends import (
     detect_installed_emulators,
 )
 from wosutil.preferences import (
+    BEAR_RALLY_CALL_MARCH_MAX,
+    BEAR_RALLY_CALL_MARCH_MIN,
     BEAR_TRAP_MARCH_MAX,
     BEAR_TRAP_MARCH_MIN,
     GATHER_RESOURCES,
@@ -23,6 +25,7 @@ from wosutil.preferences import (
     MYSTERY_SHOP_LEVEL_WIDGETS_20,
     MYSTERY_SHOP_LEVEL_WIDGETS_50,
     MYSTERY_SHOP_LEVELS,
+    get_bear_rally_call_march,
     get_bear_trap_marches,
     get_debug_mode,
     get_emulator,
@@ -221,6 +224,23 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
             width=4,
         ).pack(side="left", padx=5)
 
+    bear_call_march_row = ttk.Frame(bear_trap_frame)
+    bear_call_march_row.pack(anchor="w", padx=10, pady=(0, 10))
+    bear_call_march_var = tk.IntVar(value=get_bear_rally_call_march())
+    bear_call_march_touched = {"value": False}
+    bear_call_march_var.trace_add("write", lambda *_: bear_call_march_touched.__setitem__("value", True))
+    ttk.Label(
+        bear_call_march_row,
+        text="Select the squad to call your rallies during bear trap:",
+    ).pack(side="left", padx=5)
+    ttk.Spinbox(
+        bear_call_march_row,
+        from_=BEAR_RALLY_CALL_MARCH_MIN,
+        to=BEAR_RALLY_CALL_MARCH_MAX,
+        textvariable=bear_call_march_var,
+        width=4,
+    ).pack(side="left", padx=5)
+
     # --- Ox gathering resource selection ---
     gather_resource_frame = ttk.LabelFrame(scrollable_frame, text="Ox Gathering")
     gather_resource_frame.pack(pady=10, padx=10, fill="x")
@@ -317,6 +337,15 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
             )
         else:
             prefs["bear_trap_marches"] = bear_marches
+        bear_call_march = bear_call_march_var.get()
+        if bear_call_march < BEAR_RALLY_CALL_MARCH_MIN or bear_call_march > BEAR_RALLY_CALL_MARCH_MAX:
+            log_message(
+                f"Bear rally call march must be between {BEAR_RALLY_CALL_MARCH_MIN} and {BEAR_RALLY_CALL_MARCH_MAX}, keeping {get_bear_rally_call_march(prefs)}.",
+                "warning",
+            )
+            bear_call_march_var.set(get_bear_rally_call_march(prefs))
+        elif bear_call_march_touched["value"] or "bear_rally_call_march" in prefs:
+            prefs["bear_rally_call_march"] = bear_call_march
         resource = next(
             (resource for resource, label in _GATHER_RESOURCE_LABELS.items() if label == gather_resource_var.get()),
             get_gather_resource(prefs),

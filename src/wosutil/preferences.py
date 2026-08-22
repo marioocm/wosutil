@@ -20,6 +20,10 @@ BEAR_TRAP_MARCH_MIN = 1
 BEAR_TRAP_MARCH_MAX = 12
 DEFAULT_BEAR_TRAP_MARCHES = [1, 2, 3, 4, 5, 6]
 
+BEAR_RALLY_CALL_MARCH_MIN = 1
+BEAR_RALLY_CALL_MARCH_MAX = 12
+DEFAULT_BEAR_RALLY_CALL_MARCH = 1
+
 MYSTERY_SHOP_LEVEL_FREE = "free"
 MYSTERY_SHOP_LEVEL_WIDGETS_50 = "widgets_50"
 MYSTERY_SHOP_LEVEL_WIDGETS_20 = "widgets_20"
@@ -203,6 +207,22 @@ def get_bear_trap_marches(preferences=None):
                 cleaned.append(candidate)
                 break
     return cleaned
+
+
+def get_bear_rally_call_march(preferences=None):
+    """Get the march used to call rallies during the bear trap (1-12).
+
+    Args:
+        preferences (dict, optional): Preferences data. If None, loads from disk.
+
+    Returns:
+        int: March number between BEAR_RALLY_CALL_MARCH_MIN and
+            BEAR_RALLY_CALL_MARCH_MAX.
+    """
+    if preferences is None:
+        preferences = load_preferences()
+    march = safe_int(preferences.get("bear_rally_call_march"), DEFAULT_BEAR_RALLY_CALL_MARCH)
+    return max(BEAR_RALLY_CALL_MARCH_MIN, min(BEAR_RALLY_CALL_MARCH_MAX, march))
 
 
 def get_emulator(preferences=None):

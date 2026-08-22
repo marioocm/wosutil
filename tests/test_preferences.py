@@ -13,6 +13,7 @@ from wosutil.preferences import (
     GATHER_RESOURCES,
     MYSTERY_SHOP_LEVEL_FREE,
     MYSTERY_SHOP_LEVELS,
+    get_bear_rally_call_march,
     get_bear_trap_marches,
     get_gather_resource,
     get_kill_beast_march,
@@ -144,6 +145,24 @@ class TestPreferences(unittest.TestCase):
         """Test that more than six marches are truncated to six."""
         marches = get_bear_trap_marches({"bear_trap_marches": [1, 2, 3, 4, 5, 6, 7, 8]})
         self.assertEqual(marches, [1, 2, 3, 4, 5, 6])
+
+    def test_get_bear_rally_call_march_default(self):
+        """Test the default bear rally call march value."""
+        self.assertEqual(get_bear_rally_call_march({}), 1)
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            self.assertEqual(get_bear_rally_call_march(None), 1)
+
+    def test_get_bear_rally_call_march_valid(self):
+        """Test that a valid march is returned."""
+        self.assertEqual(get_bear_rally_call_march({"bear_rally_call_march": 5}), 5)
+
+    def test_get_bear_rally_call_march_below_min(self):
+        """Test that a march below the minimum is clamped to the minimum."""
+        self.assertEqual(get_bear_rally_call_march({"bear_rally_call_march": 0}), 1)
+
+    def test_get_bear_rally_call_march_above_max(self):
+        """Test that a march above the maximum is clamped to the maximum."""
+        self.assertEqual(get_bear_rally_call_march({"bear_rally_call_march": 15}), 12)
 
     def test_get_mystery_shop_level_default(self):
         """Test the default mystery shop level."""
