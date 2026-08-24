@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from wosutil.stop import stop_signal
-from wosutil.tool.tool_instances_controller import MultiInstanceToolController
+from wosutil.tool.tool_instances_controller import MultiInstanceToolController, pick_scheduled_task
 
 
 class FakeManager:
@@ -155,6 +155,57 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         mock_launch.assert_not_called()
         self.assertEqual(manager.stop_calls, 2)
         self.assertEqual(controller.instance_launch_attempts, {})
+
+
+class TestPickScheduledTask(unittest.TestCase):
+    """The worker's task selection groups close run times by priority."""
+
+    def _task(self, task_id, name, priority, next_run_time):
+        """Build a running task state dict."""
+        return {"id": task_id, "name": name, "priority": priority, "next_run_time": next_run_time}
+
+    def test_empty_state_returns_nothing(self):
+        """No scheduled tasks: nothing to run or wait for."""
+        self.assertEqual(pick_scheduled_task([], 1000), (None, None))
+
+    def test_due_task_runs_immediately_without_nearby_higher_priority(self):
+        """A due task runs now unless a higher-priority one is within the window."""
+        state = [self._task("a", "Due", 5, 990), self._task("b", "Later", 1, 2000)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "a")
+        self.assertIsNone(wait_until)
+
+    def test_higher_priority_task_within_window_is_wait_target(self):
+        """The higher-priority task due within the window wins over the due one."""
+        state = [self._task("a", "Due first", 6, 990), self._task("b", "Urgent", 1, 1003)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "b")
+        self.assertEqual(wait_until, 1003)
+
+    def test_earliest_of_waited_group_is_the_target(self):
+        """The soonest higher-priority task within the window is the wait target."""
+        state = [
+            self._task("a", "Due first", 6, 990),
+            self._task("b", "Urgent later", 2, 1004),
+            self._task("c", "Urgent sooner", 1, 1002),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "c")
+        self.assertEqual(wait_until, 1002)
+
+    def test_nothing_due_returns_earliest_future_with_time(self):
+        """With nothing due, the earliest future task is the wait target."""
+        state = [self._task("a", "Sooner", 9, 1500), self._task("b", "Later", 1, 2500)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "a")
+        self.assertEqual(wait_until, 1500)
+
+    def test_highest_priority_wins_among_due_tasks(self):
+        """Among due tasks, the smallest priority number runs."""
+        state = [self._task("a", "Low", 10, 900), self._task("b", "High", 1, 1000)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "b")
+        self.assertIsNone(wait_until)
 
 
 TASK_A = {"id": "a", "name": "Task A", "function": lambda instance_index: True, "priority": 1, "reschedule_seconds": 1000}

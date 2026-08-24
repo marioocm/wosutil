@@ -16,7 +16,9 @@ class TestGetNextTaskInfo(unittest.TestCase):
     """Test cases for the next-task preview shown in the instances tab.
 
     The preview must mirror the worker selection: the highest-priority task
-    that is already due, otherwise the earliest future task.
+    that is already due, waiting for a higher-priority task scheduled within
+    the grouping window (5 seconds) if one is close, otherwise the earliest
+    future task.
     """
 
     def _task(self, task_id, name, priority, next_run_time):
@@ -68,6 +70,47 @@ class TestGetNextTaskInfo(unittest.TestCase):
         name, next_time = get_next_task_info(pm, 1000)
         self.assertEqual(name, "Rescheduled sooner")
         self.assertEqual(next_time, 1500)
+
+    def test_higher_priority_task_within_window_is_waited_for(self):
+        """A higher-priority task due within 5s beats the due lower-priority one.
+
+        Timer readings of tasks that belong to the same window (e.g. 00:00 UTC)
+        can differ by a second or two; the priority order must win instead of
+        the task that was read earlier.
+        """
+        pm = _FakePM(
+            [
+                self._task("a", "Due low priority", 10, 990),
+                self._task("b", "Due urgent in 2s", 1, 1002),
+            ]
+        )
+        name, next_time = get_next_task_info(pm, 1000)
+        self.assertEqual(name, "Due urgent in 2s")
+        self.assertEqual(next_time, 1002)
+
+    def test_higher_priority_task_outside_window_does_not_block(self):
+        """A higher-priority task more than 5s away does not delay the due one."""
+        pm = _FakePM(
+            [
+                self._task("a", "Due low priority", 10, 1000),
+                self._task("b", "Urgent much later", 1, 3000),
+            ]
+        )
+        name, next_time = get_next_task_info(pm, 1000)
+        self.assertEqual(name, "Due low priority")
+        self.assertIsNone(next_time)
+
+    def test_lower_priority_task_within_window_does_not_block(self):
+        """A due task is not delayed by a lower-priority task that is close."""
+        pm = _FakePM(
+            [
+                self._task("a", "Due urgent", 1, 1000),
+                self._task("b", "Relaxed close", 10, 1002),
+            ]
+        )
+        name, next_time = get_next_task_info(pm, 1000)
+        self.assertEqual(name, "Due urgent")
+        self.assertIsNone(next_time)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,49 @@ from wosutil.tool.tasks.task_schedule import (
 from wosutil.tool.utc_time import sync_utc_time
 from wosutil.utils import load_json_file, retry_operation, safe_int, save_json_file
 
+# Tasks whose run times are closer than this are considered the same time
+# window: when both are due (or become due within the window), the priority
+# order wins instead of the task that was read a second earlier.
+TASK_GROUPING_WINDOW_SECONDS = 5.0
+
+
+def pick_scheduled_task(task_state, now):
+    """Choose the task to run or wait for, grouping close run times.
+
+    Tasks aimed at the same instant (e.g. several events scheduled for 00:00
+    UTC) can end up with run times a second or two apart because of timer
+    reading noise. Without grouping, the task whose time was read earlier
+    runs first even when another, higher-priority task belongs to the same
+    window. This helper prefers the higher-priority task: when a task is
+    already due, a higher-priority task due within
+    TASK_GROUPING_WINDOW_SECONDS ahead is returned instead, and the caller
+    waits (at most the window) for it.
+
+    Args:
+        task_state (list): Running task state dicts with 'priority' and
+            'next_run_time' keys.
+        now (float): Current timestamp.
+
+    Returns:
+        tuple: (task, wait_until). When the task must run right now,
+            ``wait_until`` is None. When the caller must wait, ``wait_until``
+            is the timestamp the returned task becomes due. (None, None) when
+            no task is scheduled.
+    """
+    due = [t for t in task_state if t.get("next_run_time", 0) <= now]
+    if not due:
+        future = [t for t in task_state if t.get("next_run_time", 0) > now]
+        if not future:
+            return None, None
+        earliest = min(future, key=lambda t: t["next_run_time"])
+        return earliest, earliest["next_run_time"]
+    best = min(due, key=lambda t: t.get("priority", 99))
+    higher_future = [t for t in task_state if t.get("next_run_time", 0) > now and t.get("next_run_time", 0) <= now + TASK_GROUPING_WINDOW_SECONDS and t.get("priority", 99) < best.get("priority", 99)]
+    if not higher_future:
+        return best, None
+    target = min(higher_future, key=lambda t: t["next_run_time"])
+    return target, target["next_run_time"]
+
 
 def load_instance_selection():
     """Loads the instance selection from the JSON file using utility functions.
@@ -556,37 +599,34 @@ class MultiInstanceToolController:
                                 break
                         last_health_check = now
 
-                    # Filter pending tasks
-                    pending_tasks = [t for t in getattr(pm, "running_tasks_state", []) if t.get("next_run_time", 0) <= now]
-                    if not pending_tasks:
-                        # Wait until the next task
-                        future_tasks = [t for t in getattr(pm, "running_tasks_state", []) if t.get("next_run_time", 0) > now]
-                        if future_tasks:
-                            next_time = min(t["next_run_time"] for t in future_tasks)
-                            sleep_time = max(1, int(next_time - now))
-                            # If the next task is more than 120 seconds away, close the emulator, free the slot and requeue
-                            if next_time - now > 120:
-                                self.log_message(
-                                    f"The next task for instance {index} is more than 120 seconds away. Closing the emulator, freeing the slot and requeuing.",
-                                    "info",
-                                )
-                                self.multi_instance_manager.stop_instance(index)
-                                self.active_instances.discard(index)
-                                self.instance_queue.append((index, profile_name))
-                                self.launch_next_instances()
-                                break
-                            pm.current_task_name = None
-                            # Wait reactive to stop
-                            self.tool_should_stop.wait(timeout=min(sleep_time, 10))
-                            continue
-                        else:
-                            # No scheduled tasks, exit
-                            self.log_message(f"No tasks scheduled for profile '{profile_name}' on instance {index}.", "info")
+                    # Choose the task to run or wait for, grouping close run
+                    # times so the priority order wins over timer-reading noise.
+                    next_task, wait_until = pick_scheduled_task(getattr(pm, "running_tasks_state", []), now)
+                    if next_task is None:
+                        # No scheduled tasks, exit
+                        self.log_message(f"No tasks scheduled for profile '{profile_name}' on instance {index}.", "info")
+                        self.active_instances.discard(index)
+                        self.launch_next_instances()
+                        break
+                    if wait_until is not None:
+                        sleep_time = max(1, int(wait_until - now))
+                        # If the next task is more than 120 seconds away, close the emulator, free the slot and requeue
+                        if wait_until - now > 120:
+                            self.log_message(
+                                f"The next task for instance {index} is more than 120 seconds away. Closing the emulator, freeing the slot and requeuing.",
+                                "info",
+                            )
+                            self.multi_instance_manager.stop_instance(index)
                             self.active_instances.discard(index)
+                            self.instance_queue.append((index, profile_name))
                             self.launch_next_instances()
                             break
+                        pm.current_task_name = None
+                        # Wait reactive to stop
+                        self.tool_should_stop.wait(timeout=min(sleep_time, 10))
+                        continue
                     # Run the pending task with the highest priority
-                    task = min(pending_tasks, key=lambda t: t["priority"])
+                    task = next_task
                     pm.current_task_name = task.get("name", "?")
                     self.log_message(f"Executing task '{pm.current_task_name}' on instance {index}...", "info")
                     try:
