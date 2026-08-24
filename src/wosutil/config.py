@@ -239,4 +239,5 @@ ROI = {
     "world_schedule_utc": (99, 0, 264, 42),
     "worldmap_search": (0, 843, 718, 435),
     "worldmap": (0, 95, 718, 1008),
+    "gathering_tile_info": (117, 200, 488, 563),
 }

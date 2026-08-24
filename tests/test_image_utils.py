@@ -12,6 +12,8 @@ from PIL import Image
 from wosutil.emulator.image_utils import (
     _TIME_RE,
     _find_first_non_zero_digit_on_image,
+    _preprocess_fuzzy_text_image,
+    _preprocess_timer_red_text,
     _read_time_native,
     clear_template_cache,
     find_multiple_templates,
@@ -129,6 +131,58 @@ class TestImageUtils(unittest.TestCase):
 
         self.assertEqual(result, 1 * 86400 + 6 * 3600 + 29 * 60 + 8)
         self.assertEqual(image_to_string.call_count, 1)
+
+    def test_read_screen_time_retries_on_red_text_mask(self):
+        """A timer the grayscale pass cannot parse is retried with the red-text mask."""
+        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
+            "wosutil.emulator.image_utils.pytesseract.image_to_string",
+            side_effect=["06:3116", "06:31:16", "06:31:16", "06:31:16", "06:31:16"],
+        ) as image_to_string:
+            result = read_screen_time(0, ocr_psms=(7,))
+
+        self.assertEqual(result, 6 * 3600 + 31 * 60 + 16)
+        # The grayscale pass (psm 7) returns garbage, the red-mask retry (psm 7) succeeds.
+        self.assertEqual(image_to_string.call_count, 2)
+
+    def test_read_screen_time_red_retry_keeps_day_prefix(self):
+        """A red-text timer with a day prefix still adds 24h per day."""
+        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
+            "wosutil.emulator.image_utils.pytesseract.image_to_string",
+            side_effect=["", "1d 06:29:08", "1d 06:29:08", "1d 06:29:08", "1d 06:29:08"],
+        ) as image_to_string:
+            result = read_screen_time(0, ocr_psms=(7,))
+
+        self.assertEqual(result, 1 * 86400 + 6 * 3600 + 29 * 60 + 8)
+        self.assertEqual(image_to_string.call_count, 2)
+
+    def test_read_screen_time_does_not_hit_red_retry_when_grayscale_succeeds(self):
+        """The red-mask retry only runs when the grayscale pass parsed nothing."""
+        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
+            "wosutil.emulator.image_utils.pytesseract.image_to_string",
+            return_value="12:24:29",
+        ) as image_to_string:
+            result = read_screen_time(0, ocr_psms=(7,))
+
+        self.assertEqual(result, 12 * 3600 + 24 * 60 + 29)
+        self.assertEqual(image_to_string.call_count, 1)
+
+    def test_preprocess_timer_red_text_isolates_red_digits(self):
+        """The red-text mask keeps only saturated red (timer digits) pixels."""
+        img = Image.fromarray(
+            cv2.cvtColor(
+                np.array(Image.merge("RGB", (Image.new("L", (40, 20), 120), Image.new("L", (40, 20), 40), Image.new("L", (40, 20), 120)))),
+                cv2.COLOR_RGB2BGR,
+            )
+        )
+        red = np.zeros((20, 40, 3), dtype=np.uint8)
+        red[5:15, 5:15] = (200, 20, 20)  # red square (timer digits)
+        red_img = Image.fromarray(red)
+        mask = np.array(_preprocess_timer_red_text(red_img))
+        self.assertEqual(mask.shape, (40, 80))
+        self.assertGreater((mask > 0).sum(), 0)
+        # A non-red image must yield an empty mask.
+        mask_gray = np.array(_preprocess_timer_red_text(img))
+        self.assertEqual(int((mask_gray > 0).sum()), 0)
 
     def test_find_template_on_screen_not_found(self):
         """Test template not found."""
@@ -415,6 +469,92 @@ class TestTextOcr(unittest.TestCase):
                     self.assertGreater(h, 0)
                     self.assertTrue(0 <= x < self.image.width and 0 <= y < self.image.height)
 
+    def render_resource_label(self, text):
+        """Render a white game-style label over a bright tinted tile edge.
+
+        Mimics the world-map search panel: white glyphs with a dark outline
+        drawn on top of light-cyan tile artwork, snow specks and map text,
+        over the blue world map.
+        """
+        import random
+
+        from PIL import ImageDraw, ImageFont
+
+        font_path = r"C:\Windows\Fonts\arialbd.ttf"
+        if not os.path.exists(font_path):
+            self.skipTest(f"Font not available: {font_path}")
+        img = Image.new("RGB", (200, 80), (70, 130, 180))
+        draw = ImageDraw.Draw(img)
+        for y in range(56):  # tile edge with a vertical gradient
+            draw.line([(0, y), (200, y)], fill=(min(188 + y // 3, 255), 231, min(251, 251 - y // 8)))
+        small_font = ImageFont.truetype(font_path, 12)
+        draw.text((14, 8), "Lv.30", fill=(255, 255, 255), font=small_font, stroke_width=1, stroke_fill=(60, 60, 60))
+        for x, y in ((30, 40), (52, 30), (150, 44), (168, 28), (110, 20)):  # snow specks
+            draw.ellipse([x, y, x + 5, y + 5], fill=(240, 248, 252))
+        font = ImageFont.truetype(font_path, 17)
+        draw.text((100, 40), text, fill=(255, 255, 255), font=font, anchor="mm", stroke_width=1, stroke_fill=(60, 60, 60))
+        rnd = random.Random(42)  # deterministic speckle noise
+        px = img.load()
+        for _ in range(900):
+            x, y = rnd.randrange(img.width), rnd.randrange(img.height)
+            r, g, b = px[x, y]
+            d = rnd.randint(-25, 25)
+            px[x, y] = (max(0, min(255, r + d)), max(0, min(255, g + d)), max(0, min(255, b + d)))
+        return img
+
+    def test_fuzzy_search_reads_resource_labels_over_bright_tiles(self):
+        """Resource labels must stay readable over bright tinted tile artwork.
+
+        Regression: the world-map search labels sit on light-cyan tile edges
+        that a plain brightness mask merged with the white glyphs into one
+        unreadable blob ('Coal' was never found while gathering). The noisy
+        render keeps the raw-upscale fallback from rescuing the old mask.
+        """
+        for target in ("Meat", "Wood", "Coal", "Iron"):
+            with self.subTest(target=target):
+                img = self.render_resource_label(target)
+                found, box = find_text_on_image(img, target, fuzzy=True)
+                self.assertTrue(found, f"'{target}' should be readable over a bright tile edge")
+                self.assertIsNotNone(box)
+                if box is not None:  # Type guard for linter
+                    x, y, w, h = box
+                    self.assertGreater(w, 0)
+                    self.assertGreater(h, 0)
+                    self.assertTrue(0 <= x < img.width and 0 <= y < img.height)
+
+    def render_gather_button(self):
+        """Render a game-style blue button with a white label on the dialog panel."""
+        from PIL import ImageDraw, ImageFont
+
+        font_path = r"C:\Windows\Fonts\arialbd.ttf"
+        if not os.path.exists(font_path):
+            self.skipTest(f"Font not available: {font_path}")
+        img = Image.new("RGB", (300, 160), (239, 249, 255))
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle([44, 58, 264, 118], radius=18, fill=(120, 150, 190))  # drop shadow
+        for i, y in enumerate(range(50, 110)):  # button body with a lighter top gradient
+            t = i / 60
+            draw.line([(42, y), (258, y)], fill=(int(140 + (79 - 140) * t), int(205 + (165 - 205) * t), int(255 + (252 - 255) * t)))
+        draw.rounded_rectangle([42, 50, 258, 110], radius=18, outline=(21, 80, 160), width=2)
+        font = ImageFont.truetype(font_path, 26)
+        draw.text((150, 80), "Gather", fill=(255, 255, 255), font=font, anchor="mm", stroke_width=3, stroke_fill=(35, 35, 35))
+        return img
+
+    def test_fuzzy_search_reads_white_label_on_blue_button(self):
+        """The Gather button label must be found on its blue button.
+
+        Regression: binarized masks leave the label as dark glyphs trapped in
+        a bright button-shaped island that Tesseract's layout analysis refuses
+        to segment; the grayscale-inverted OCR pass recovers it.
+        """
+        img = self.render_gather_button()
+        found, box = find_text_on_image(img, "Gather", last=True, fuzzy=True)
+        self.assertTrue(found, "'Gather' should be readable on a blue button")
+        self.assertIsNotNone(box)
+        if box is not None:  # Type guard for linter
+            self.assertGreater(box[2], 0)
+            self.assertGreater(box[3], 0)
+
     def test_finds_city_tab_entries(self):
         """The City tab capture labels must be found despite the selected tab highlight."""
         targets = ["City", "Training", "Infantry", "Lancer", "Marksman", "Tech Research", "War Academy Research", "Icefire Hunter"]
@@ -455,6 +595,9 @@ class TestTextOcr(unittest.TestCase):
             [[]],
             [[]],
             [[]],
+            [[]],
+            [[]],
+            [[]],
         ]
 
         found, result = find_text_on_image(image, "Coal", fuzzy=True)
@@ -471,6 +614,10 @@ class TestTextOcr(unittest.TestCase):
         ocr_lines.side_effect = [
             [[("Search", upper_box)]],
             [[("Search", lower_box)]],
+            [[]],
+            [[]],
+            [[]],
+            [[]],
             [[]],
             [[]],
             [[]],
@@ -494,6 +641,9 @@ class TestTextOcr(unittest.TestCase):
             [[]],
             [[("Gather", button_box)]],
             [[("ashery", noise_box)]],
+            [[]],
+            [[]],
+            [[]],
             [[]],
             [[]],
             [[]],
@@ -569,6 +719,27 @@ class TestTextOcr(unittest.TestCase):
                 found, _ = find_text_on_screen(screenshot_path, "Nonexistent Entry", debug_label="debug_text")
                 self.assertFalse(found)
                 save_debug.assert_not_called()
+
+
+class TestFuzzyTextMask(unittest.TestCase):
+    """Test the fuzzy-search preprocessing color properties (no Tesseract needed)."""
+
+    def test_drops_tinted_bright_background(self):
+        """The fuzzy mask must keep neutral white glyphs but drop tinted highlights.
+
+        Deterministic root-cause guard: the light-cyan tile edge is bright
+        enough to pass a plain brightness mask, which merged it with the white
+        labels; only its low saturation distinguishes them.
+        """
+        img = Image.new("RGB", (3, 1))
+        img.putpixel((0, 0), (255, 255, 255))  # white glyph fill
+        img.putpixel((1, 0), (188, 231, 251))  # light-cyan tile edge
+        img.putpixel((2, 0), (70, 130, 180))  # blue world map
+        processed = np.array(_preprocess_fuzzy_text_image(img))
+        glyph, tile, map_bg = (int(processed[1, i * 3 + 1]) for i in range(3))
+        self.assertEqual(glyph, 0, "white glyph pixels must be kept as text")
+        self.assertEqual(tile, 255, "tinted tile highlights must be dropped")
+        self.assertEqual(map_bg, 255, "the blue map background must be dropped")
 
 
 if __name__ == "__main__":
