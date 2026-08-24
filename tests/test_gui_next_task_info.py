@@ -112,6 +112,26 @@ class TestGetNextTaskInfo(unittest.TestCase):
         self.assertEqual(name, "Due urgent")
         self.assertIsNone(next_time)
 
+    def test_label_shows_first_executed_task_not_first_timer(self):
+        """The label is the first task executed, not the first timer reading.
+
+        Real 00:00 UTC batch: Stamina is read later (5.48s) but has better
+        priority than the chests/intel tasks read at 2.5s; the worker waits
+        for it within the 5s window, so it executes first and the preview
+        must say so.
+        """
+        pm = _FakePM(
+            [
+                self._task("send_pet_adventure_chests", "Send Pet Adventure Chests", 9, 1787616002.5451596),
+                self._task("claim_pet_adventure_ally_treasure", "Claim Pet Adventure Ally Treasure", 10, 1787616002.6933224),
+                self._task("do_intel_missions", "Hunt All Intel Beasts", 11, 1787616002.9505522),
+                self._task("claim_storehouse_stamina", "Claim Storehouse Stamina", 6, 1787616005.4818602),
+            ]
+        )
+        name, next_time = get_next_task_info(pm, 1787616000.0)
+        self.assertEqual(name, "Claim Storehouse Stamina")
+        self.assertEqual(next_time, 1787616005.4818602)
+
 
 if __name__ == "__main__":
     unittest.main()
