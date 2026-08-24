@@ -37,9 +37,10 @@ def pick_scheduled_task(task_state, now):
     reading noise. Without grouping, the task whose time was read earlier
     runs first even when another, higher-priority task belongs to the same
     window. This helper prefers the higher-priority task: when a task is
-    already due, a higher-priority task due within
+    already due, the highest-priority task due within
     TASK_GROUPING_WINDOW_SECONDS ahead is returned instead, and the caller
-    waits (at most the window) for it.
+    waits (at most the window) for it. Ties on priority keep the earliest
+    time order.
 
     Args:
         task_state (list): Running task state dicts with 'priority' and
@@ -63,7 +64,7 @@ def pick_scheduled_task(task_state, now):
     higher_future = [t for t in task_state if t.get("next_run_time", 0) > now and t.get("next_run_time", 0) <= now + TASK_GROUPING_WINDOW_SECONDS and t.get("priority", 99) < best.get("priority", 99)]
     if not higher_future:
         return best, None
-    target = min(higher_future, key=lambda t: t["next_run_time"])
+    target = min(higher_future, key=lambda t: (t.get("priority", 99), t["next_run_time"]))
     return target, target["next_run_time"]
 
 
