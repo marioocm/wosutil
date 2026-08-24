@@ -52,12 +52,23 @@ _DAY_RE = re.compile(r"(\d{1,2})\s*[dD]")
 _OCR_PSMS = (7, 8, 13, 11)
 _DIGIT_WHITELIST = "0123456789:dD"
 
+# Red timer text settings: some timers (e.g. pet skills) draw red digits over
+# warm-colored artwork, so grayscale cannot separate text from background; the
+# digits are isolated with an HSV filter and the OCR pass is retried on them.
+_TIMER_RED_HUE_MAX = 12
+_TIMER_RED_HUE_MIN = 160
+_TIMER_RED_SAT_MIN = 70
+_TIMER_RED_VAL_MIN = 100
+
 # Menu text OCR settings (side menu tabs/entries, shop labels)
 _TEXT_SCALE = 3
 _TEXT_VALUE_THRESHOLD = 220
 _TEXT_SATURATION_THRESHOLD = 100
 _TEXT_PSM = 6
 _TEXT_FALLBACK_PSM = 11
+# Fuzzy-search OCR settings (world-map search: resource labels over bright tiles)
+_FUZZY_TEXT_VALUE_THRESHOLD = 220
+_FUZZY_TEXT_SATURATION_THRESHOLD = 60
 _FUZZY_TEXT_PSMS = (6, 11, 12)
 _FUZZY_TEXT_MIN_SIMILARITY = 0.55
 
@@ -277,6 +288,28 @@ def _save_ocr_debug_images(
     )
 
 
+def _preprocess_timer_red_text(img: Image.Image) -> Image.Image:
+    """Isolate red timer digits as white glyphs on a black background.
+
+    Some game timers (e.g. the pet skills) draw red digits over warm-colored
+    artwork; the standard grayscale+Otsu pass merges them into the background.
+    This retains only strongly red pixels (hue near 0/180, saturated enough and
+    bright enough), producing the same binary layout the grayscale pass yields,
+    and ``read_screen_time`` retries the OCR sequence on it.
+
+    Args:
+        img (PIL.Image): Source ROI crop containing the red timer text.
+
+    Returns:
+        PIL.Image: Upscaled binary image with the red digits in white.
+    """
+    arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    arr = cv2.resize(arr, (arr.shape[1] * 2, arr.shape[0] * 2), interpolation=cv2.INTER_LANCZOS4)
+    hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)
+    mask = (((hsv[:, :, 0] <= _TIMER_RED_HUE_MAX) | (hsv[:, :, 0] >= _TIMER_RED_HUE_MIN)) & (hsv[:, :, 1] >= _TIMER_RED_SAT_MIN) & (hsv[:, :, 2] >= _TIMER_RED_VAL_MIN)).astype(np.uint8) * 255
+    return Image.fromarray(mask)
+
+
 def read_screen_time(
     instance_index: int,
     roi: Optional[Tuple[int, int, int, int]] = None,
@@ -368,6 +401,38 @@ def read_screen_time(
                     _save_ocr_debug_images(debug_label, instance_index, original_img, processed_img)
                 return None
             log_message(f"Detected timer on screen: {h:02}:{m:02}:{s:02} ({total_seconds} seconds)", level="info")
+            return total_seconds
+        # Retry on red-text timers: some timers (e.g. pet skills) draw red
+        # digits over warm-colored artwork; the grayscale/Otsu pass cannot
+        # separate them, so the OCR sequence is repeated on a red-color mask.
+        processed_img = _preprocess_timer_red_text(original_img)
+        for psm in _OCR_PSMS if ocr_psms is None else ocr_psms:
+            try:
+                text = pytesseract.image_to_string(
+                    processed_img,
+                    config=f"--psm {psm} -c tessedit_char_whitelist={_DIGIT_WHITELIST}",
+                )
+            except Exception:
+                continue
+            match = _TIME_RE.search(text)
+            if not match:
+                continue
+            h, m, s = map(int, match.groups())
+            if h > 99:
+                continue
+            total_seconds = h * 3600 + m * 60 + s
+            day_match = _DAY_RE.search(text)
+            if day_match:
+                total_seconds += int(day_match.group(1)) * 86400
+            if max_seconds is not None and total_seconds > max_seconds:
+                log_message(
+                    f"Timer read {h:02}:{m:02}:{s:02} ({total_seconds}s) exceeds the maximum plausible value of {max_seconds}s, treating it as an invalid timer read.",
+                    level="error",
+                )
+                if debug_label:
+                    _save_ocr_debug_images(debug_label, instance_index, original_img, processed_img)
+                return None
+            log_message(f"Detected timer on screen (red text): {h:02}:{m:02}:{s:02} ({total_seconds} seconds)", level="info")
             return total_seconds
         # Fallback: digit recognition without Tesseract (segmentation + template matching).
         if original_img is not None:
@@ -902,12 +967,13 @@ def _preprocess_text_image(img: Image.Image) -> Image.Image:
 
 
 def _preprocess_fuzzy_text_image(img: Image.Image) -> Image.Image:
-    """Prepare bright text with a looser color filter for cluttered screens.
+    """Keep only neutral (white/gray) bright pixels for cluttered screens.
 
-    Some resource labels share their ROI with bright illustrations. The normal
-    menu mask is intentionally conservative and can remove parts of those
-    labels, so this fallback keeps more bright, low-saturation pixels and lets
-    the OCR segmentation pass distinguish the text.
+    Resource labels in the world-map search panel sit on bright, tinted
+    artwork (light-cyan tile edges). A plain brightness mask merges the label
+    with that artwork into one blob Tesseract cannot segment. This mask also
+    demands near-zero saturation, which drops tinted highlights while keeping
+    the pure white glyphs readable.
 
     Args:
         img (PIL.Image): Source image containing text and UI artwork.
@@ -918,7 +984,7 @@ def _preprocess_fuzzy_text_image(img: Image.Image) -> Image.Image:
     arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
     arr = cv2.resize(arr, (arr.shape[1] * _TEXT_SCALE, arr.shape[0] * _TEXT_SCALE), interpolation=cv2.INTER_LANCZOS4)
     hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)
-    mask = ((hsv[:, :, 2] >= 180) & (hsv[:, :, 1] <= 200)).astype(np.uint8) * 255
+    mask = ((hsv[:, :, 2] >= _FUZZY_TEXT_VALUE_THRESHOLD) & (hsv[:, :, 1] <= _FUZZY_TEXT_SATURATION_THRESHOLD)).astype(np.uint8) * 255
     return Image.fromarray(255 - mask)
 
 
@@ -932,6 +998,26 @@ def _preprocess_raw_text_image(img: Image.Image) -> Image.Image:
         PIL.Image: Upscaled original image.
     """
     return img.resize((img.width * _TEXT_SCALE, img.height * _TEXT_SCALE), resample=Image.Resampling.LANCZOS)
+
+
+def _preprocess_gray_inverted_text_image(img: Image.Image) -> Image.Image:
+    """Invert the grayscale image so bright button labels turn dark-on-light.
+
+    White text on saturated buttons (Gather/Search) survives binarization as
+    dark glyphs trapped inside a bright button-shaped island, which Tesseract's
+    layout analysis often refuses to segment. Plain inverted grayscale keeps
+    the button shading readable instead.
+
+    Args:
+        img (PIL.Image): Source image containing text.
+
+    Returns:
+        PIL.Image: Upscaled, grayscale-inverted image ready for Tesseract.
+    """
+    arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
+    arr = cv2.resize(arr, (arr.shape[1] * _TEXT_SCALE, arr.shape[0] * _TEXT_SCALE), interpolation=cv2.INTER_LANCZOS4)
+    gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+    return Image.fromarray(255 - gray)
 
 
 def _ocr_lines(img: Image.Image, psm: int = _TEXT_PSM, preprocess=None) -> List[List[Tuple[str, Tuple[int, int, int, int]]]]:
@@ -1079,7 +1165,7 @@ def find_text_on_image(img: Image.Image, target: str, last: bool = False, fuzzy:
     if fuzzy and (not matches or last):
         alternate_matches = []
         fuzzy_matches = []
-        for preprocess in (_preprocess_fuzzy_text_image, _preprocess_raw_text_image):
+        for preprocess in (_preprocess_fuzzy_text_image, _preprocess_raw_text_image, _preprocess_gray_inverted_text_image):
             for psm in _FUZZY_TEXT_PSMS:
                 lines = _ocr_lines(img, psm=psm, preprocess=preprocess)
                 alternate_matches.extend(_find_text_matches(lines, target_words))

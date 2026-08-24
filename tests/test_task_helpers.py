@@ -292,7 +292,13 @@ class TestGatherTile(unittest.TestCase):
         ) = self.mocks
         self.go_search.return_value = True
         search_roi = (0, 843, 718, 435)
-        self.get_roi.side_effect = lambda name: search_roi if name == "worldmap_search" else (0, 95, 718, 1008) if name == "worldmap" else (501, 1138, 118, 29)
+        tile_info_roi = (117, 200, 488, 563)
+        roi_by_name = {
+            "worldmap_search": search_roi,
+            "gathering_tile_info": tile_info_roi,
+            "worldmap": (0, 95, 718, 1008),
+        }
+        self.get_roi.side_effect = lambda name: roi_by_name.get(name, (501, 1138, 118, 29))
         self.click_text.return_value = True
         self.click_template_repeatedly.return_value = True
         self.take_screenshot.return_value = "/tmp/march.png"
@@ -311,7 +317,7 @@ class TestGatherTile(unittest.TestCase):
         self.go_search.assert_called_once_with(0)
         self.click_text.assert_any_call("Wood", 0, roi=(0, 843, 718, 435), fuzzy=True)
         self.click_text.assert_any_call("Search", 0, roi=(0, 843, 718, 435), delay=3.0, last=True, fuzzy=True)
-        self.click_text.assert_any_call("Gather", 0, roi=(0, 95, 718, 1008), last=True, fuzzy=True)
+        self.click_text.assert_any_call("Gather", 0, roi=(117, 200, 488, 563), last=True, fuzzy=True)
         self.send_march.assert_called_once_with(0)
         self.click_template_repeatedly.assert_called_once_with(
             "gather_tile_increase_level",

@@ -251,4 +251,5 @@ ROI = {
     "worldmap_marching": (0, 175, 280, 492),
     "worldmap_rallies": (595, 128, 123, 675),
     "rally_tab": (393, 173, 323, 817),
+    "gathering_tile_info": (117, 200, 488, 563),
 }

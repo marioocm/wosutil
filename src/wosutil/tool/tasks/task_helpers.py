@@ -1198,7 +1198,11 @@ def gather_tile(instance_index, resource):
     if gathering_time is None:
         return None
 
-    if not click_on_text("Gather", instance_index, roi=get_roi("worldmap"), last=True, fuzzy=True):
+    gather_roi = get_roi("gathering_tile_info")
+    if not gather_roi:
+        log_message("Could not get the gathering tile info ROI.", level="error")
+        return None
+    if not click_on_text("Gather", instance_index, roi=gather_roi, last=True, fuzzy=True):
         log_message("Gather button NOT found on the resource tile.", level="warning")
         return None
     if not _click_leftmost_template(instance_index, "remove_hero", delay=1.0):
