@@ -106,6 +106,7 @@ class TemplateCreatorApp:
         ttk.Button(btn_frame, text="Load Image", command=self.load_image).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Capture from Emulator", command=self.capture_from_emulator).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Save Template", command=self.save_template).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Save Full Screenshot", command=self.save_full_screenshot).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Zoom +", command=self.zoom_in).pack(side="left", padx=2)
         ttk.Button(btn_frame, text="Zoom -", command=self.zoom_out).pack(side="left", padx=2)
         ttk.Button(btn_frame, text="Reset View", command=self.reset_view).pack(side="left", padx=5)
@@ -515,6 +516,29 @@ class TemplateCreatorApp:
                 print(f"Template saved: {save_path}")
             except Exception as e:
                 messagebox.showerror("Error", f"Error saving template: {str(e)}")
+
+    def save_full_screenshot(self):
+        """Save the currently loaded image as a full screenshot."""
+        if self.image is None:
+            messagebox.showerror("Error", "Load or capture an image first.")
+            return
+
+        os.makedirs(TEMPLATES_DIR, exist_ok=True)
+
+        save_path = filedialog.asksaveasfilename(
+            title="Save full screenshot",
+            defaultextension=".png",
+            initialdir=TEMPLATES_DIR,
+            filetypes=[("PNG Images", "*.png")],
+        )
+
+        if save_path:
+            try:
+                cv2.imwrite(save_path, cv2.cvtColor(self.image, cv2.COLOR_RGB2BGR))
+                messagebox.showinfo("Saved", f"Full screenshot saved to:\n{save_path}")
+                print(f"Full screenshot saved: {save_path}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Error saving screenshot: {str(e)}")
 
     def copy_roi_coordinates(self):
         """Copy the ROI coordinates to the clipboard."""
