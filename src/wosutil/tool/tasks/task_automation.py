@@ -556,12 +556,16 @@ def claim_mystery_shop(instance_index):
     refresh_roi = (403, 146, 317, 343)
 
     mystery_shop_level = get_mystery_shop_level()
-    items = ["mystery_shop_free"]
+    # The free item template matches slightly differently across game
+    # renderings, so it uses a lower threshold; the widget templates must stay
+    # strict because their discount badges (-50%/-20%) are visually similar
+    # to unrelated shop discounts.
+    items = {"mystery_shop_free": 0.93}
     if mystery_shop_level in (MYSTERY_SHOP_LEVEL_WIDGETS_50, MYSTERY_SHOP_LEVEL_WIDGETS_20):
-        items.append("mystery_shop_widget_50")
+        items["mystery_shop_widget_50"] = 0.97
     if mystery_shop_level == MYSTERY_SHOP_LEVEL_WIDGETS_20:
-        items.append("mystery_shop_widget_20")
-    log_message(f"Mystery shop level is '{mystery_shop_level}', searching for: {items}.", level="info")
+        items["mystery_shop_widget_20"] = 0.97
+    log_message(f"Mystery shop level is '{mystery_shop_level}', searching for: {list(items)}.", level="info")
 
     while True:
         # Take a single screenshot per pass and search every item template
@@ -574,13 +578,13 @@ def claim_mystery_shop(instance_index):
 
         try:
             clicked_item = None
-            for item in items:
+            for item, threshold in items.items():
                 template_path = get_template_path(item)
                 if not template_path:
                     log_message(f"Template path for {item} not found.", level="warning")
                     continue
 
-                found, center = find_template_center_on_screen(template_path, screenshot_path, roi=items_roi, threshold=0.97)
+                found, center = find_template_center_on_screen(template_path, screenshot_path, roi=items_roi, threshold=threshold)
                 if found and center:
                     log_message(f"Found {item}, clicking...", level="info")
                     cx, cy = center
