@@ -23,21 +23,28 @@ def get_next_task_info(pm, now):
     The controller executes the highest-priority task that is already due,
     waiting for a higher-priority task scheduled within the grouping window
     (TASK_GROUPING_WINDOW_SECONDS) first, and waits for the earliest future
-    task otherwise.
+    task otherwise. The first pick may not be the first task that executes:
+    while a picked task is not due yet, the worker keeps waiting and
+    re-picking, and a higher-priority in-window task (e.g. another 00:00 UTC
+    event read a second later) can jump ahead. This helper walks that wait
+    chain to find the task the worker will actually execute first.
     """
     if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
         return None, None
 
-    task, wait_until = pick_scheduled_task(pm.running_tasks_state, now)
-    if task is None:
-        return None, None
-    task_name = task.get("name", "?")
-
-    # The task is ready to run: return the name without the wait time
-    if wait_until is None:
-        return task_name, None
-
-    return task_name, wait_until
+    sim_now = now
+    while True:
+        task, wait_until = pick_scheduled_task(pm.running_tasks_state, sim_now)
+        if task is None:
+            return None, None
+        if wait_until is None:
+            task_name = task.get("name", "?")
+            if sim_now == now:
+                # The task is due right now: return it without the wait time
+                return task_name, None
+            # The task executes at sim_now (the end of the wait chain)
+            return task_name, sim_now
+        sim_now = wait_until
 
 
 def format_time_remaining(seconds):
