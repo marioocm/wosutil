@@ -7,7 +7,9 @@ from tkinter import ttk
 
 from wosutil.emulator.instances_controller import load_instance_cache
 from wosutil.gui.gui_dialogs import show_centered_dialog
+from wosutil.gui.gui_tooltip import Tooltip
 from wosutil.tool.tool_instances_controller import (
+    TASK_GROUPING_WINDOW_SECONDS,
     MultiInstanceToolController,
     load_instance_selection,
     pick_scheduled_task,
@@ -36,6 +38,85 @@ def get_next_task_info(pm, now):
         return task_name, None
 
     return task_name, wait_until
+
+
+def format_time_remaining(seconds):
+    """Format remaining time in HH:MM:SS format."""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def get_all_tasks_info(pm, now):
+    """Get every scheduled task of an instance in the real execution order.
+
+    Tasks whose run times fall within the same window
+    (TASK_GROUPING_WINDOW_SECONDS) run grouped by priority, since the worker
+    waits for the highest-priority in-window task instead of the one whose
+    timer was read earlier. This helper group the tasks in windows the same
+    way and lists each window in priority order, so the preview matches the
+    order in which the tasks will actually run; tasks in different windows
+    keep their chronological order.
+
+    Args:
+        pm: The profile manager of the instance (or None).
+        now: Current epoch time.
+
+    Returns:
+        List of (task name, remaining seconds) pairs in execution order;
+        tasks that are already due have a remaining time of 0.
+    """
+    if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
+        return []
+
+    tasks = sorted(pm.running_tasks_state, key=lambda t: (t.get("next_run_time", 0), t.get("priority", 99)))
+
+    clusters = []
+    cluster = []
+    anchor = None
+    for task in tasks:
+        task_time = task.get("next_run_time", 0)
+        if cluster and task_time > anchor + TASK_GROUPING_WINDOW_SECONDS:
+            clusters.append(cluster)
+            cluster = []
+            anchor = None
+        if not cluster:
+            anchor = task_time
+        cluster.append(task)
+    if cluster:
+        clusters.append(cluster)
+
+    infos = []
+    for cluster in clusters:
+        cluster.sort(key=lambda t: (t.get("priority", 99), t.get("next_run_time", 0)))
+        for task in cluster:
+            remaining = max(0, int(task.get("next_run_time", 0) - now))
+            infos.append((task.get("name", "?"), remaining))
+    return infos
+
+
+def format_task_tooltip(pm, now):
+    """Build the tooltip text with the countdown of every scheduled task.
+
+    Args:
+        pm: The profile manager of the instance (or None).
+        now: Current epoch time.
+
+    Returns:
+        One numbered line per task in execution order, "Name: HH:MM:SS" form;
+        tasks that are ready to run are shown as ready.
+    """
+    infos = get_all_tasks_info(pm, now)
+    if not infos:
+        return "No programmed tasks"
+    lines = []
+    for position, (name, remaining) in enumerate(infos, start=1):
+        if remaining <= 0:
+            lines.append(f"{position}. {name}: ready")
+        else:
+            lines.append(f"{position}. {name}: {format_time_remaining(remaining)}")
+    return "\n".join(lines)
 
 
 def setup_instances_tab(
@@ -191,6 +272,12 @@ def setup_instances_tab(
                     combo.pack(side="left", padx=5)
                     task_status_label = ttk.Label(row, text="")
                     task_status_label.pack(side="left", padx=10)
+                    info_icon = ttk.Label(row, text="\u24d8", cursor="hand2")
+                    info_icon.pack(side="left", padx=(0, 2))
+                    Tooltip(
+                        info_icon,
+                        lambda idx=inst["index"]: format_task_tooltip(instances_profile_managers.get(idx), time.time()),
+                    )
                     instance_widgets.append(
                         {
                             "index": inst["index"],
@@ -255,13 +342,6 @@ def setup_instances_tab(
         start_btn.pack(side="left", padx=10, pady=10)
         refresh_instances()
         controller.stop_tool()
-
-    def format_time_remaining(seconds):
-        """Format remaining time in HH:MM:SS format."""
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        seconds = seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     def get_ordinal_number(n):
         """Convert a number to its ordinal form (1st, 2nd, 3rd, etc)."""

@@ -182,16 +182,42 @@ class TestPickScheduledTask(unittest.TestCase):
         self.assertEqual(task["id"], "b")
         self.assertEqual(wait_until, 1003)
 
-    def test_earliest_of_waited_group_is_the_target(self):
-        """The soonest higher-priority task within the window is the wait target."""
+    def test_highest_priority_of_window_is_the_wait_target(self):
+        """Among in-window tasks, the highest priority is waited for, not the nearest.
+
+        A task whose timer was read earlier but with less priority must not
+        jump ahead of a more urgent one read a bit later: the whole batch is
+        grouped by priority.
+        """
         state = [
             self._task("a", "Due first", 6, 990),
-            self._task("b", "Urgent later", 2, 1004),
-            self._task("c", "Urgent sooner", 1, 1002),
+            self._task("b", "Most urgent later", 1, 1004),
+            self._task("c", "Urgent sooner", 2, 1002),
         ]
         task, wait_until = pick_scheduled_task(state, 1000)
-        self.assertEqual(task["id"], "c")
+        self.assertEqual(task["id"], "b")
+        self.assertEqual(wait_until, 1004)
+
+    def test_tied_priorities_keep_earliest_time(self):
+        """Tied priorities within the window keep the earliest time as target."""
+        state = [
+            self._task("a", "Due first", 6, 990),
+            self._task("b", "Urgent read earlier", 4, 1002),
+            self._task("c", "Urgent read later", 4, 1004),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "b")
         self.assertEqual(wait_until, 1002)
+
+    def test_same_priority_does_not_skip_ahead(self):
+        """A same-priority task does not delay the due one."""
+        state = [
+            self._task("a", "Due", 6, 990),
+            self._task("b", "Same priority later", 6, 1003),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "a")
+        self.assertIsNone(wait_until)
 
     def test_nothing_due_returns_earliest_future_with_time(self):
         """With nothing due, the earliest future task is the wait target."""
