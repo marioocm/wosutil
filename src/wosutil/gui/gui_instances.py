@@ -10,6 +10,7 @@ from wosutil.gui.gui_dialogs import show_centered_dialog
 from wosutil.tool.tool_instances_controller import (
     MultiInstanceToolController,
     load_instance_selection,
+    pick_scheduled_task,
     save_instance_selection,
 )
 
@@ -17,23 +18,24 @@ from wosutil.tool.tool_instances_controller import (
 def get_next_task_info(pm, now):
     """Get the task that will actually run next, mirroring the worker.
 
-    The controller executes the highest-priority task that is already due
-    (next_run_time <= now) and waits for the earliest future task otherwise.
+    The controller executes the highest-priority task that is already due,
+    waiting for a higher-priority task scheduled within the grouping window
+    (TASK_GROUPING_WINDOW_SECONDS) first, and waits for the earliest future
+    task otherwise.
     """
     if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
         return None, None
 
-    state = pm.running_tasks_state
-    due_tasks = [t for t in state if t.get("next_run_time", 0) <= now]
-    next_task = min(due_tasks, key=lambda t: t.get("priority", 99)) if due_tasks else min(state, key=lambda t: t.get("next_run_time", now + 99999))
-    task_name = next_task.get("name", "?")
-    next_time = next_task.get("next_run_time")
+    task, wait_until = pick_scheduled_task(pm.running_tasks_state, now)
+    if task is None:
+        return None, None
+    task_name = task.get("name", "?")
 
     # The task is ready to run: return the name without the wait time
-    if next_time and next_time <= now:
+    if wait_until is None:
         return task_name, None
 
-    return task_name, next_time
+    return task_name, wait_until
 
 
 def setup_instances_tab(
