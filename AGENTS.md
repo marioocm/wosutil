@@ -20,6 +20,7 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - Dev mode requires system-installed Tesseract OCR (pytesseract wrapper); the built exe bundles its own copy (resolved in `src/wosutil/emulator/image_utils.py:resolve_tesseract_cmd`).
 - In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil`.
 - Virtual env at `.venv/`.
+- On every ship (feature, fix, release): bump `version` in `pyproject.toml` (patch unless a bigger bump is needed) and build the exe (`.\scripts\build.ps1`) — never ship without it.
 - Templates and ROIs are defined in `src/wosutil/config.py` (TEMPLATE_PATHS, COORDINATES, ROI).
 
 ## Commands

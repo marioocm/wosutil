@@ -19,7 +19,9 @@ from wosutil.emulator.emulator_manager import set_active_backend
 from wosutil.gui.gui_dialogs import center_window_on_screen, show_centered_dialog
 from wosutil.preferences import (
     get_emulator,
+    get_emulator_paths,
     get_requirements_reminder_seen,
+    load_preferences,
     mark_requirements_reminder_seen,
     save_emulator,
 )
@@ -32,7 +34,6 @@ log_text_widget = None
 profile_manager = None
 multi_instance_manager = None
 instances_profile_managers: dict = {}
-opened_by_app: set = set()
 instance_queue: list = []
 active_instances: set = set()
 max_instances_var = None
@@ -131,7 +132,12 @@ def create_log_tab(notebook):
 
 def run_gui():
     """Main GUI initialization and execution."""
-    global profile_manager, multi_instance_manager, instances_profile_managers, opened_by_app, max_instances_var
+    global profile_manager, multi_instance_manager, instances_profile_managers, max_instances_var
+
+    # Configure console + file logging once (entry point of the `wosutil` command).
+    from wosutil.utils import setup_logging
+
+    setup_logging()
 
     # Remove temporary screenshots left behind by crashed sessions.
     from wosutil.emulator.emulator_manager import cleanup_stale_temp_screenshots
@@ -145,7 +151,7 @@ def run_gui():
     profile_manager = ProfileManager(log_message)
 
     log_message("Loading task definitions...", "info")
-    TASK_DEFINITIONS = get_task_definitions(log_message)
+    TASK_DEFINITIONS = get_task_definitions()
 
     log_message("Creating main window...", "info")
     # Create main window
@@ -158,7 +164,6 @@ def run_gui():
 
     # Get screen dimensions
     screen_width = window.winfo_screenwidth()
-    window.winfo_screenheight()
 
     # Calculate position to place window in the top-right corner
     x_position = screen_width - window_width - 10  # 10 pixels from right edge
@@ -189,13 +194,15 @@ def run_gui():
         mark_requirements_reminder_seen()
 
     # --- Emulator selection (first run) ---
-    emulator = get_emulator()
+    preferences = load_preferences()
+    emulator_paths = get_emulator_paths(preferences)
+    emulator = get_emulator(preferences)
     if emulator is None:
-        emulator = _ask_emulator(window, detect_installed_emulators(), log_message)
+        emulator = _ask_emulator(window, detect_installed_emulators(emulator_paths), log_message)
         save_emulator(emulator)
 
     log_message(f"Initializing emulator backend ({emulator})...", "info")
-    multi_instance_manager = create_backend(emulator, log_message)
+    multi_instance_manager = create_backend(emulator, log_message, emulator_paths=emulator_paths)
     set_active_backend(multi_instance_manager)
     set_multi_instance_manager(multi_instance_manager)
 
@@ -204,7 +211,7 @@ def run_gui():
     # re-create the backend and re-enumerate instances without a restart.
     emulator_state = {"backend": multi_instance_manager}
 
-    def switch_emulator(new_emulator):
+    def switch_emulator(new_emulator, new_emulator_paths=None):
         """Apply an emulator change made in the Preferences tab.
 
         Refuses while the tool is running (active instances/queue run against
@@ -212,7 +219,10 @@ def run_gui():
         active manager and forces an instance refresh.
 
         Args:
-            new_emulator (str): Emulator code, "mumu" or "bluestacks".
+            new_emulator (str): Emulator code, "mumu", "bluestacks" or
+                "ldplayer".
+            new_emulator_paths (dict, optional): Configured executable and
+                instance paths. Defaults to the persisted preferences.
         """
         global multi_instance_manager
 
@@ -222,7 +232,8 @@ def run_gui():
         label = _EMULATOR_LABELS.get(new_emulator, new_emulator)
         log_message(f"Switching emulator to {label}...", "info")
         save_emulator(new_emulator)
-        multi_instance_manager = create_backend(new_emulator, log_message)
+        emulator_paths = new_emulator_paths or get_emulator_paths()
+        multi_instance_manager = create_backend(new_emulator, log_message, emulator_paths=emulator_paths)
         set_active_backend(multi_instance_manager)
         set_multi_instance_manager(multi_instance_manager)
         emulator_state["backend"] = multi_instance_manager
@@ -254,7 +265,6 @@ def run_gui():
         log_message,
         TASK_DEFINITIONS,
         instances_profile_managers,
-        opened_by_app,
         instance_queue,
         active_instances,
         emulator_state=emulator_state,

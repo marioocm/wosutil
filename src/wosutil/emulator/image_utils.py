@@ -4,13 +4,12 @@ Provides functions for finding templates on screen, reading text from screenshot
 and managing template caching.
 """
 
-import logging
 import os
 import re
 import sys
 import time
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Tuple, cast
+from typing import Dict, List, Optional, Sequence, Tuple, cast
 
 import cv2
 import numpy as np
@@ -40,8 +39,6 @@ def resolve_tesseract_cmd() -> str:
 
 
 pytesseract.pytesseract.tesseract_cmd = resolve_tesseract_cmd()
-
-logger = logging.getLogger(__name__)
 
 # Template cache to avoid reloading images
 _template_cache: Dict[str, np.ndarray] = {}
@@ -207,13 +204,21 @@ def find_multiple_templates(
         h, w = template.shape[:2]
 
         for pt in zip(*locations[::-1]):
+            match_x, match_y = int(pt[0]), int(pt[1])
             if roi:
-                pt = (pt[0] + roi[0], pt[1] + roi[1])
-            matches.append((pt[0], pt[1], w, h))
+                match_x += roi[0]
+                match_y += roi[1]
+            score = float(res[int(pt[1]), int(pt[0])])
+            matches.append(((match_x, match_y, w, h), score))
 
-        # Apply non-maximum suppression
-        matches_nms = non_max_suppression(matches, overlapThresh=nms_threshold)
-        return matches_nms
+        # Apply non-maximum suppression, keeping the strongest match in each
+        # overlapping group rather than whichever box happens to be last.
+        matches_nms = non_max_suppression(
+            [box for box, _score in matches],
+            overlap_thresh=nms_threshold,
+            scores=[score for _box, score in matches],
+        )
+        return sorted(matches_nms, key=lambda box: (box[1], box[0]))
 
     except Exception as e:
         msg = f"Error in multiple template matching: {e}"
@@ -221,25 +226,30 @@ def find_multiple_templates(
         return []
 
 
-def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlapThresh: float = 0.5) -> List[Tuple[int, int, int, int]]:
+def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: float = 0.5, scores: Optional[Sequence[float]] = None) -> List[Tuple[int, int, int, int]]:
     """Applies non-maximum suppression to avoid overlapping boxes.
 
     Args:
         boxes (list): List of (x, y, w, h) tuples.
-        overlapThresh (float): Overlap threshold for suppression.
+        overlap_thresh (float): Overlap threshold for suppression.
+        scores (sequence, optional): Match confidence for each box. When
+            provided, higher-confidence boxes are kept before lower-confidence
+            overlapping boxes.
 
     Returns:
         list: Filtered list of boxes after NMS.
     """
     if len(boxes) == 0:
         return []
+    if scores is not None and len(scores) != len(boxes):
+        raise ValueError("scores must contain one value per box")
     boxes_np = np.array(boxes)
     x1 = boxes_np[:, 0]
     y1 = boxes_np[:, 1]
     x2 = x1 + boxes_np[:, 2]
     y2 = y1 + boxes_np[:, 3]
     areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(y2)
+    idxs = np.argsort(np.asarray(scores) if scores is not None else y2)
     pick = []
     while len(idxs) > 0:
         last = idxs[-1]
@@ -251,7 +261,7 @@ def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlapThresh: f
         w = np.maximum(0, xx2 - xx1 + 1)
         h = np.maximum(0, yy2 - yy1 + 1)
         overlap = (w * h) / areas[idxs[:-1]]
-        idxs = np.delete(idxs, np.concatenate(([len(idxs) - 1], np.where(overlap > overlapThresh)[0])))
+        idxs = np.delete(idxs, np.concatenate(([len(idxs) - 1], np.where(overlap > overlap_thresh)[0])))
     return [tuple(boxes_np[i]) for i in pick]
 
 
@@ -308,6 +318,21 @@ def _preprocess_timer_red_text(img: Image.Image) -> Image.Image:
     hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)
     mask = (((hsv[:, :, 0] <= _TIMER_RED_HUE_MAX) | (hsv[:, :, 0] >= _TIMER_RED_HUE_MIN)) & (hsv[:, :, 1] >= _TIMER_RED_SAT_MIN) & (hsv[:, :, 2] >= _TIMER_RED_VAL_MIN)).astype(np.uint8) * 255
     return Image.fromarray(mask)
+
+
+def _parse_timer_text(text: str) -> Optional[Tuple[int, int, int, int]]:
+    """Parse a timer only when its hour, minute and second fields are valid."""
+    match = _TIME_RE.search(text)
+    if not match:
+        return None
+    hours, minutes, seconds = map(int, match.groups())
+    if hours > 99 or minutes > 59 or seconds > 59:
+        return None
+    total_seconds = hours * 3600 + minutes * 60 + seconds
+    day_match = _DAY_RE.search(text)
+    if day_match:
+        total_seconds += int(day_match.group(1)) * 86400
+    return hours, minutes, seconds, total_seconds
 
 
 def read_screen_time(
@@ -382,16 +407,10 @@ def read_screen_time(
                 )
             except Exception:
                 continue
-            match = _TIME_RE.search(text)
-            if not match:
+            parsed = _parse_timer_text(text)
+            if parsed is None:
                 continue
-            h, m, s = map(int, match.groups())
-            if h > 99:
-                continue
-            total_seconds = h * 3600 + m * 60 + s
-            day_match = _DAY_RE.search(text)
-            if day_match:
-                total_seconds += int(day_match.group(1)) * 86400
+            h, m, s, total_seconds = parsed
             if max_seconds is not None and total_seconds > max_seconds:
                 log_message(
                     f"Timer read {h:02}:{m:02}:{s:02} ({total_seconds}s) exceeds the maximum plausible value of {max_seconds}s, treating it as an invalid timer read.",
@@ -414,16 +433,10 @@ def read_screen_time(
                 )
             except Exception:
                 continue
-            match = _TIME_RE.search(text)
-            if not match:
+            parsed = _parse_timer_text(text)
+            if parsed is None:
                 continue
-            h, m, s = map(int, match.groups())
-            if h > 99:
-                continue
-            total_seconds = h * 3600 + m * 60 + s
-            day_match = _DAY_RE.search(text)
-            if day_match:
-                total_seconds += int(day_match.group(1)) * 86400
+            h, m, s, total_seconds = parsed
             if max_seconds is not None and total_seconds > max_seconds:
                 log_message(
                     f"Timer read {h:02}:{m:02}:{s:02} ({total_seconds}s) exceeds the maximum plausible value of {max_seconds}s, treating it as an invalid timer read.",
@@ -1091,6 +1104,44 @@ def _find_fuzzy_text_matches(lines: List[List[Tuple[str, Tuple[int, int, int, in
             if similarity >= _FUZZY_TEXT_MIN_SIMILARITY:
                 matches.append((similarity, box))
     return matches
+
+
+def read_words_on_image(
+    img: Image.Image,
+    preprocess=None,
+    psm: int = _TEXT_PSM,
+) -> List[Tuple[str, Tuple[int, int, int, int]]]:
+    """Read every recognized word of an image with OCR, keeping its position.
+
+    Unlike :func:`read_text_lines_on_image`, which groups words into lines,
+    this returns the individual words so the caller can relate them by
+    position (e.g. a label and the value drawn to its right).
+
+    Args:
+        img (PIL.Image): Source image containing text.
+        preprocess (callable, optional): Image preprocessing function. The
+            standard text preprocessing is used when omitted. The preprocessing
+            may upscale the image by any factor; word boxes are always returned
+            in original image coordinates.
+        psm (int): Tesseract page segmentation mode.
+
+    Returns:
+        list: (word, (x, y, w, h)) pairs in original image coordinates.
+            Punctuation-only words are dropped.
+    """
+    processed = _preprocess_text_image(img) if preprocess is None else preprocess(img)
+    scale = processed.width / img.width if img.width else 1.0
+    data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT, config=f"--psm {psm}")
+    words: List[Tuple[str, Tuple[int, int, int, int]]] = []
+    for i, word in enumerate(data["text"]):
+        if not _normalize_word(word):
+            continue
+        x1 = int(data["left"][i] / scale)
+        y1 = int(data["top"][i] / scale)
+        x2 = int((data["left"][i] + data["width"][i]) / scale)
+        y2 = int((data["top"][i] + data["height"][i]) / scale)
+        words.append((word, (x1, y1, x2 - x1, y2 - y1)))
+    return words
 
 
 def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int, int, int]]]:

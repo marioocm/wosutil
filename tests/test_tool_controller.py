@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from wosutil.stop import stop_signal
-from wosutil.tool.tool_instances_controller import MultiInstanceToolController
+from wosutil.tool.tool_instances_controller import MultiInstanceToolController, pick_scheduled_task
 
 
 class FakeManager:
@@ -49,6 +49,14 @@ class FakeManagerRunning(FakeManagerOpen):
 class TestStartToolAbort(unittest.TestCase):
     """Tests for the start-time ADB access guard."""
 
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        stop_signal.clear()
+
+    def tearDown(self):
+        """Do not leak the stop signal into other tests."""
+        stop_signal.clear()
+
     def _make_controller(self, manager):
         """Build a controller with mock dependencies and a log capture."""
         self.logs = []
@@ -58,14 +66,11 @@ class TestStartToolAbort(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
         )
 
     def test_start_tool_aborts_when_adb_blocked(self):
@@ -80,6 +85,45 @@ class TestStartToolAbort(unittest.TestCase):
         controller = self._make_controller(FakeManagerOpen())
         self.assertTrue(controller.start_tool())
         self.assertTrue(controller.tool_running)
+
+    def test_start_tool_refuses_to_overlap_a_running_session(self):
+        """A second start cannot reset the state of the current session."""
+        controller = self._make_controller(FakeManagerOpen())
+        controller.tool_running = True
+
+        self.assertFalse(controller.start_tool())
+        self.assertTrue(controller.tool_running)
+        self.assertTrue(any("already running" in msg for msg, _level in self.logs))
+
+    def test_old_worker_cannot_remove_a_newer_thread_reference(self):
+        """A stale worker must not delete a replacement thread entry."""
+        controller = self._make_controller(FakeManagerOpen())
+        old_thread = object()
+        current_thread = object()
+        controller.instance_threads[0] = current_thread
+
+        controller._remove_thread_reference(0, old_thread)
+
+        self.assertIs(controller.instance_threads[0], current_thread)
+
+    def test_stop_tool_keeps_reference_to_worker_that_is_still_alive(self):
+        """Stopping does not forget a thread that exceeded the join timeout."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        worker = MagicMock()
+        worker.is_alive.return_value = True
+        controller.tool_running = True
+        controller.active_instances.add(0)
+        controller.instance_queue.append((0, "profile_x"))
+        controller.instance_threads[0] = worker
+
+        controller.stop_tool()
+
+        self.assertIs(controller.instance_threads[0], worker)
+        worker.join.assert_called_once_with(timeout=5.0)
+        self.assertEqual(manager.stop_calls, 1)
+        self.assertEqual(controller.active_instances, set())
+        self.assertEqual(controller.instance_queue, [])
 
 
 class TestGameNotInstalledAbort(unittest.TestCase):
@@ -98,14 +142,11 @@ class TestGameNotInstalledAbort(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
             dialog_queue=None,
         )
 
@@ -157,6 +198,118 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         self.assertEqual(controller.instance_launch_attempts, {})
 
 
+class TestLaunchRetryQueue(unittest.TestCase):
+    """The instance queue keeps progressing after a launch is abandoned."""
+
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        stop_signal.clear()
+
+    def tearDown(self):
+        """Do not leak the stop signal into other tests."""
+        stop_signal.clear()
+
+    def test_exhausted_retries_wake_the_next_instance(self):
+        """A failed instance must not leave other queued instances stranded."""
+        controller = MultiInstanceToolController(
+            log_message=lambda _msg, level="info": None,
+            TASK_DEFINITIONS={},
+            multi_instance_manager=FakeManagerOpen(),
+            profile_manager=MagicMock(),
+            instances_profile_managers={},
+            instance_queue=[(1, "profile_y")],
+            active_instances={0},
+            instance_widgets=[],
+            save_instance_selection=lambda _selection: None,
+            load_instance_selection=lambda: {},
+        )
+        controller.max_launch_attempts = 1
+
+        with patch.object(controller, "launch_next_instances") as launch_next:
+            controller._requeue_with_limit(0, "profile_x")
+
+        self.assertNotIn(0, controller.active_instances)
+        self.assertEqual(controller.instance_queue, [(1, "profile_y")])
+        launch_next.assert_called_once_with()
+
+
+class TestPickScheduledTask(unittest.TestCase):
+    """The worker's task selection groups close run times by priority."""
+
+    def _task(self, task_id, name, priority, next_run_time):
+        """Build a running task state dict."""
+        return {"id": task_id, "name": name, "priority": priority, "next_run_time": next_run_time}
+
+    def test_empty_state_returns_nothing(self):
+        """No scheduled tasks: nothing to run or wait for."""
+        self.assertEqual(pick_scheduled_task([], 1000), (None, None))
+
+    def test_due_task_runs_immediately_without_nearby_higher_priority(self):
+        """A due task runs now unless a higher-priority one is within the window."""
+        state = [self._task("a", "Due", 5, 990), self._task("b", "Later", 1, 2000)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "a")
+        self.assertIsNone(wait_until)
+
+    def test_higher_priority_task_within_window_is_wait_target(self):
+        """The higher-priority task due within the window wins over the due one."""
+        state = [self._task("a", "Due first", 6, 990), self._task("b", "Urgent", 1, 1003)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "b")
+        self.assertEqual(wait_until, 1003)
+
+    def test_highest_priority_of_window_is_the_wait_target(self):
+        """Among in-window tasks, the highest priority is waited for, not the nearest.
+
+        A task whose timer was read earlier but with less priority must not
+        jump ahead of a more urgent one read a bit later: the whole batch is
+        grouped by priority.
+        """
+        state = [
+            self._task("a", "Due first", 6, 990),
+            self._task("b", "Most urgent later", 1, 1004),
+            self._task("c", "Urgent sooner", 2, 1002),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "b")
+        self.assertEqual(wait_until, 1004)
+
+    def test_tied_priorities_keep_earliest_time(self):
+        """Tied priorities within the window keep the earliest time as target."""
+        state = [
+            self._task("a", "Due first", 6, 990),
+            self._task("b", "Urgent read earlier", 4, 1002),
+            self._task("c", "Urgent read later", 4, 1004),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "b")
+        self.assertEqual(wait_until, 1002)
+
+    def test_same_priority_does_not_skip_ahead(self):
+        """A same-priority task does not delay the due one."""
+        state = [
+            self._task("a", "Due", 6, 990),
+            self._task("b", "Same priority later", 6, 1003),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "a")
+        self.assertIsNone(wait_until)
+
+    def test_nothing_due_returns_earliest_future_with_time(self):
+        """With nothing due, the earliest future task is the wait target."""
+        state = [self._task("a", "Sooner", 9, 1500), self._task("b", "Later", 1, 2500)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "a")
+        self.assertEqual(wait_until, 1500)
+
+    def test_highest_priority_wins_among_due_tasks(self):
+        """Among due tasks, the smallest priority number runs."""
+        state = [self._task("a", "Low", 10, 900), self._task("b", "High", 1, 1000)]
+        task, wait_until = pick_scheduled_task(state, 1000)
+        self.assertEqual(task["id"], "b")
+        self.assertIsNone(wait_until)
+
+
 TASK_A = {"id": "a", "name": "Task A", "function": lambda instance_index: True, "priority": 1, "reschedule_seconds": 1000}
 TASK_B = {"id": "b", "name": "Task B", "function": lambda instance_index: True, "priority": 2, "reschedule_seconds": 2000}
 TASK_C = {"id": "c", "name": "Task C", "function": lambda instance_index: True, "priority": 3, "reschedule_seconds": 3000}
@@ -178,14 +331,11 @@ class TestScheduleMemory(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
             dialog_queue=None,
         )
 
@@ -311,14 +461,11 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
             dialog_queue=None,
         )
 

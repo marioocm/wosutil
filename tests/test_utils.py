@@ -92,6 +92,17 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(result)
         self.assertTrue(os.path.exists(nested_file))
 
+    def test_save_json_file_preserves_previous_data_on_serialization_failure(self):
+        """A failed save must not truncate the existing JSON file."""
+        original_data = {"existing": True}
+        with open(self.test_file, "w", encoding="utf-8") as f:
+            json.dump(original_data, f)
+
+        self.assertFalse(save_json_file(self.test_file, {"invalid": object()}))
+
+        self.assertEqual(load_json_file(self.test_file), original_data)
+        self.assertEqual(os.listdir(self.temp_dir), ["test.json"])
+
     def test_safe_int_valid(self):
         """Test safe_int with valid values."""
         self.assertEqual(safe_int("42"), 42)
@@ -119,6 +130,31 @@ class TestUtils(unittest.TestCase):
         result = retry_operation(mock_operation, max_attempts=3, delay=0.1)
         self.assertEqual(result, "success")
         self.assertEqual(mock_operation.call_count, 3)
+
+    def test_retry_operation_can_retry_false_results(self):
+        """Boolean failures are retried when explicitly requested."""
+        mock_operation = MagicMock(side_effect=[False, False, "success"])
+
+        result = retry_operation(mock_operation, max_attempts=3, delay=0, retry_on_false=True)
+
+        self.assertEqual(result, "success")
+        self.assertEqual(mock_operation.call_count, 3)
+
+    def test_retry_operation_returns_false_after_false_results_are_exhausted(self):
+        """The final boolean failure is returned instead of raised."""
+        mock_operation = MagicMock(return_value=False)
+
+        result = retry_operation(mock_operation, max_attempts=3, delay=0, retry_on_false=True)
+
+        self.assertFalse(result)
+        self.assertEqual(mock_operation.call_count, 3)
+
+    def test_retry_operation_rejects_invalid_configuration(self):
+        """Invalid retry settings fail early with a useful error."""
+        with self.assertRaises(ValueError):
+            retry_operation(lambda: True, max_attempts=0)
+        with self.assertRaises(ValueError):
+            retry_operation(lambda: True, delay=-1)
 
     def test_retry_operation_all_failures(self):
         """Test retry_operation with all failures."""

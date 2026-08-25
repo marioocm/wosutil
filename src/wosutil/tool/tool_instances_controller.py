@@ -23,6 +23,50 @@ from wosutil.tool.tasks.task_schedule import (
 from wosutil.tool.utc_time import sync_utc_time
 from wosutil.utils import load_json_file, retry_operation, safe_int, save_json_file
 
+# Tasks whose run times are closer than this are considered the same time
+# window: when both are due (or become due within the window), the priority
+# order wins instead of the task that was read a second earlier.
+TASK_GROUPING_WINDOW_SECONDS = 5.0
+
+
+def pick_scheduled_task(task_state, now):
+    """Choose the task to run or wait for, grouping close run times.
+
+    Tasks aimed at the same instant (e.g. several events scheduled for 00:00
+    UTC) can end up with run times a second or two apart because of timer
+    reading noise. Without grouping, the task whose time was read earlier
+    runs first even when another, higher-priority task belongs to the same
+    window. This helper prefers the higher-priority task: when a task is
+    already due, the highest-priority task due within
+    TASK_GROUPING_WINDOW_SECONDS ahead is returned instead, and the caller
+    waits (at most the window) for it. Ties on priority keep the earliest
+    time order.
+
+    Args:
+        task_state (list): Running task state dicts with 'priority' and
+            'next_run_time' keys.
+        now (float): Current timestamp.
+
+    Returns:
+        tuple: (task, wait_until). When the task must run right now,
+            ``wait_until`` is None. When the caller must wait, ``wait_until``
+            is the timestamp the returned task becomes due. (None, None) when
+            no task is scheduled.
+    """
+    due = [t for t in task_state if t.get("next_run_time", 0) <= now]
+    if not due:
+        future = [t for t in task_state if t.get("next_run_time", 0) > now]
+        if not future:
+            return None, None
+        earliest = min(future, key=lambda t: t["next_run_time"])
+        return earliest, earliest["next_run_time"]
+    best = min(due, key=lambda t: t.get("priority", 99))
+    higher_future = [t for t in task_state if t.get("next_run_time", 0) > now and t.get("next_run_time", 0) <= now + TASK_GROUPING_WINDOW_SECONDS and t.get("priority", 99) < best.get("priority", 99)]
+    if not higher_future:
+        return best, None
+    target = min(higher_future, key=lambda t: (t.get("priority", 99), t["next_run_time"]))
+    return target, target["next_run_time"]
+
 
 def load_instance_selection():
     """Loads the instance selection from the JSON file using utility functions.
@@ -58,14 +102,11 @@ class MultiInstanceToolController:
         multi_instance_manager,
         profile_manager,
         instances_profile_managers,
-        opened_by_app,
         instance_queue,
         active_instances,
         instance_widgets,
-        get_profiles,
         save_instance_selection,
         load_instance_selection,
-        refresh_instances_callback,
         dialog_queue=None,
     ):
         """Initialize the multi-instance tool controller.
@@ -76,14 +117,11 @@ class MultiInstanceToolController:
             multi_instance_manager: Multi-instance manager.
             profile_manager: Profile manager.
             instances_profile_managers: Dict of instance to profile managers.
-            opened_by_app: Dict of instances opened by app.
             instance_queue: Queue for instances.
             active_instances: Set of active instances.
             instance_widgets: Dict of instance widgets.
-            get_profiles: Function to get profiles.
             save_instance_selection: Function to save selection.
             load_instance_selection: Function to load selection.
-            refresh_instances_callback: Callback to refresh instances.
             dialog_queue (queue.Queue, optional): Queue where the worker threads
                 push (title, text) pairs the GUI must show as dialogs. None
                 disables dialogs.
@@ -93,14 +131,11 @@ class MultiInstanceToolController:
         self.multi_instance_manager = multi_instance_manager
         self.profile_manager = profile_manager
         self.instances_profile_managers = instances_profile_managers
-        self.opened_by_app = opened_by_app
         self.instance_queue = instance_queue
         self.active_instances = active_instances
         self.instance_widgets = instance_widgets
-        self.get_profiles = get_profiles
         self.save_instance_selection = save_instance_selection
         self.load_instance_selection = load_instance_selection
-        self.refresh_instances_callback = refresh_instances_callback
         self.dialog_queue = dialog_queue
         self.max_instances_var = None
         self.tool_should_stop = stop_signal
@@ -109,6 +144,7 @@ class MultiInstanceToolController:
         self.instance_launch_attempts: Dict[int, int] = {}
 
         # Memory management
+        self._state_lock = threading.RLock()
         self.instance_threads: Dict[int, threading.Thread] = {}
         self.last_memory_cleanup = time.time()
         self.memory_cleanup_interval = 300  # 5 minutes
@@ -117,6 +153,23 @@ class MultiInstanceToolController:
         self._schedule_lock = threading.Lock()
         self._task_schedule = None
         self._selected_instances: set = set()
+
+    def _discard_active_instance(self, index):
+        """Remove an instance from the active set while holding the state lock."""
+        with self._state_lock:
+            self.active_instances.discard(index)
+
+    def _enqueue_instance(self, index, profile_name):
+        """Queue an instance once so concurrent retries cannot duplicate it."""
+        with self._state_lock:
+            if not any(queued_index == index for queued_index, _ in self.instance_queue):
+                self.instance_queue.append((index, profile_name))
+
+    def _remove_thread_reference(self, index, thread):
+        """Remove a worker reference only when it still belongs to that worker."""
+        with self._state_lock:
+            if self.instance_threads.get(index) is thread:
+                del self.instance_threads[index]
 
     def set_max_instances_var(self, max_instances_var):
         """Sets the variable that controls the maximum number of simultaneous instances.
@@ -142,13 +195,11 @@ class MultiInstanceToolController:
             gc.collect()
 
             # Clean up completed threads
-            completed_threads = []
-            for instance_id, thread in self.instance_threads.items():
-                if not thread.is_alive():
-                    completed_threads.append(instance_id)
-
-            for instance_id in completed_threads:
-                del self.instance_threads[instance_id]
+            with self._state_lock:
+                completed_threads = [(instance_id, thread) for instance_id, thread in self.instance_threads.items() if not thread.is_alive()]
+                for instance_id, thread in completed_threads:
+                    if self.instance_threads.get(instance_id) is thread:
+                        del self.instance_threads[instance_id]
 
             self.last_memory_cleanup = current_time
             self.log_message("Memory cleanup completed", level="debug")
@@ -164,11 +215,21 @@ class MultiInstanceToolController:
         Returns:
             bool: True if the tool started, False if it was aborted.
         """
-        self.tool_running = True
+        with self._state_lock:
+            if self.tool_running:
+                self.log_message("The tool is already running.", level="warning")
+                return False
+            live_threads = [thread for thread in self.instance_threads.values() if thread.is_alive()]
+            if live_threads:
+                self.log_message("The previous tool session is still stopping. Try again in a moment.", level="warning")
+                return False
+            self.tool_running = True
+            self.instance_queue.clear()
+            self.active_instances.clear()
+            self.instance_launch_attempts.clear()
+            self.instance_threads.clear()
+
         self.tool_should_stop.clear()
-        self.instance_queue.clear()
-        self.active_instances.clear()
-        self.instance_launch_attempts.clear()
 
         # Refuse to start when the backend cannot control the emulator.
         adb_warnings = self.multi_instance_manager.check_adb_access()
@@ -179,11 +240,9 @@ class MultiInstanceToolController:
                 "Tool start aborted: ADB access to the emulator is blocked. Fix the error above and press Start again.",
                 level="error",
             )
-            self.tool_running = False
+            with self._state_lock:
+                self.tool_running = False
             return False
-
-        # Clear any existing threads
-        self.instance_threads.clear()
 
         # Load the persisted schedule when the schedule memory is enabled;
         # otherwise keep the legacy behavior (every task scheduled at startup).
@@ -234,7 +293,7 @@ class MultiInstanceToolController:
                 else:
                     pm.next_run_time = None
                 pm.current_task_name = None
-                self.instance_queue.append((idx, profile_name))
+                self._enqueue_instance(idx, profile_name)
 
         if self._task_schedule is not None and self._selected_instances:
             self._persist_schedules()
@@ -280,32 +339,36 @@ class MultiInstanceToolController:
 
     def launch_next_instances(self):
         """Launches the next set of emulator instances up to the maximum allowed."""
-        if self.tool_should_stop.is_set():
-            return
-
         max_simul = safe_int(self.max_instances_var.get() if self.max_instances_var else 2, 2)
 
-        while len(self.active_instances) < max_simul and self.instance_queue:
-            # Prioritize the instance whose next task is soonest, not the one that
-            # arrived first to the queue. Ties keep the arrival order.
-            self.instance_queue.sort(key=self._queue_sort_key)
-            idx, profile_name = self.instance_queue[0]  # Look at the first without dequeuing yet
-            pm = self.instances_profile_managers.get(idx)
-            next_run_time = None
-            now = time.time()
-            if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
-                next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
-            if next_run_time is not None and next_run_time - now > 120:
-                # If the next task is more than 120 seconds away, do not launch the instance yet
-                break
-            # Otherwise, launch the instance normally
-            self.instance_queue.pop(0)
-            if idx not in self.active_instances:
+        while not self.tool_should_stop.is_set():
+            with self._state_lock:
+                if len(self.active_instances) >= max_simul or not self.instance_queue:
+                    return
+                # Prioritize the instance whose next task is soonest, not the one
+                # that arrived first to the queue. Ties keep the arrival order.
+                self.instance_queue.sort(key=self._queue_sort_key)
+                idx, profile_name = self.instance_queue.pop(0)
+                if idx in self.active_instances:
+                    continue
+                pm = self.instances_profile_managers.get(idx)
+                next_run_time = None
+                now = time.time()
+                if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
+                    next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
+                if next_run_time is not None and next_run_time - now > 120:
+                    self.instance_queue.insert(0, (idx, profile_name))
+                    return
                 self.active_instances.add(idx)
-                thread = threading.Thread(target=self.run_profile_on_instance_with_slot, args=(idx, profile_name), daemon=True, name=f"Instance-{idx}")
+                thread = threading.Thread(
+                    target=self.run_profile_on_instance_with_slot,
+                    args=(idx, profile_name),
+                    daemon=True,
+                    name=f"Instance-{idx}",
+                )
                 self.instance_threads[idx] = thread
-                thread.start()
-                self.cleanup_memory()
+            thread.start()
+            self.cleanup_memory()
 
     def _requeue_with_limit(self, index, profile_name):
         """Re-queues an instance for retry, giving up after max_launch_attempts.
@@ -313,16 +376,20 @@ class MultiInstanceToolController:
         Prevents the infinite loop of starting/closing the emulator when the
         game or ADB keeps failing to come up.
         """
-        attempts = self.instance_launch_attempts.get(index, 0) + 1
-        self.instance_launch_attempts[index] = attempts
-        self.active_instances.discard(index)
+        with self._state_lock:
+            attempts = self.instance_launch_attempts.get(index, 0) + 1
+            self.instance_launch_attempts[index] = attempts
+            self.active_instances.discard(index)
         if attempts >= self.max_launch_attempts:
             self.log_message(
                 f"Instance {index} has failed {attempts} consecutive startup attempts. Stopping it to avoid an infinite loop.",
                 level="error",
             )
+            # The failed instance already released its slot above. Wake the
+            # queue so another selected instance can use that slot.
+            self.launch_next_instances()
             return
-        self.instance_queue.append((index, profile_name))
+        self._enqueue_instance(index, profile_name)
         self.launch_next_instances()
 
     def run_profile_on_instance_with_slot(self, index, profile_name):
@@ -363,7 +430,7 @@ class MultiInstanceToolController:
                     return True
 
                 # Retry emulator startup with exponential backoff
-                if not retry_operation(start_emulator, max_attempts=3, delay=5.0):
+                if not retry_operation(start_emulator, max_attempts=3, delay=5.0, retry_on_false=True):
                     self.log_message(f"Failed to start emulator on instance {index}. Closing any partial startup and trying next instance.", "error")
                     # Try to close the emulator if it was partially started
                     try:
@@ -371,7 +438,7 @@ class MultiInstanceToolController:
                         self.log_message(f"Emulator instance {index} closed due to startup failure.", "info")
                     except Exception as e:
                         self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                    self.active_instances.discard(index)
+                    self._discard_active_instance(index)
                     self.launch_next_instances()
                     return
 
@@ -384,7 +451,7 @@ class MultiInstanceToolController:
                 adb_timeout = 60  # 60 seconds max for ADB connection phase
 
                 # Reduce max attempts from 10 to 5 to avoid long hangs
-                if not retry_operation(connect_adb, max_attempts=5, delay=3.0):
+                if not retry_operation(connect_adb, max_attempts=5, delay=3.0, retry_on_false=True):
                     # Check if we've exceeded the timeout for ADB connection phase
                     if time.time() - adb_start_time > adb_timeout:
                         self.log_message(
@@ -408,7 +475,7 @@ class MultiInstanceToolController:
                         # Try force restart
                         if force_restart_emulator(index, self.multi_instance_manager):
                             # Try ADB connection again after restart
-                            if retry_operation(connect_adb, max_attempts=3, delay=2.0):
+                            if retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
                                 self.log_message(f"ADB connection successful after force restart for instance {index}.", "success")
                             else:
                                 self.log_message(f"ADB connection still failed after force restart for instance {index}. Re-queuing instance for retry.", "error")
@@ -428,7 +495,7 @@ class MultiInstanceToolController:
                             time.sleep(5)  # Wait for emulator to start
 
                             # Try ADB connection again after restart
-                            if retry_operation(connect_adb, max_attempts=3, delay=2.0):
+                            if retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
                                 self.log_message(f"ADB connection successful after manual restart for instance {index}.", "success")
                             else:
                                 self.log_message(f"ADB connection still failed after manual restart for instance {index}. Re-queuing instance for retry.", "error")
@@ -440,7 +507,7 @@ class MultiInstanceToolController:
                             return
 
                 if self.tool_should_stop.is_set():
-                    self.active_instances.discard(index)
+                    self._discard_active_instance(index)
                     return
 
                 # The game missing is a permanent condition: closing/restarting
@@ -467,7 +534,7 @@ class MultiInstanceToolController:
                         self.log_message(f"Emulator instance {index} closed because the game is not installed.", "info")
                     except Exception as e:
                         self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                    self.active_instances.discard(index)
+                    self._discard_active_instance(index)
                     return
 
                 # Retry game launch usando retry_operation
@@ -478,7 +545,7 @@ class MultiInstanceToolController:
                 game_launch_start_time = time.time()
                 game_launch_timeout = 120  # 120 seconds max for game launch phase
 
-                if not retry_operation(try_launch_game, max_attempts=3, delay=5.0):
+                if not retry_operation(try_launch_game, max_attempts=3, delay=5.0, retry_on_false=True):
                     # Check if we've exceeded the timeout for game launch phase
                     if time.time() - game_launch_start_time > game_launch_timeout:
                         self.log_message(
@@ -507,14 +574,15 @@ class MultiInstanceToolController:
                     return
 
                 # Game launched successfully: reset consecutive launch failure counter
-                self.instance_launch_attempts[index] = 0
+                with self._state_lock:
+                    self.instance_launch_attempts[index] = 0
                 pm.opening_state = False
 
                 # The game clock (UTC date and time) is the first thing to sync
                 # every time an instance is opened: several tasks reschedule to
                 # 00:00 UTC and need the clock to compute the exact delay.
                 if self.tool_should_stop.is_set():
-                    self.active_instances.discard(index)
+                    self._discard_active_instance(index)
                     return
                 try:
                     sync_utc_time(index)
@@ -544,49 +612,46 @@ class MultiInstanceToolController:
                             if force_restart_emulator(index, self.multi_instance_manager):
                                 self.log_message(f"Emulator instance {index} restarted successfully during operation.", "success")
                                 # Re-verify ADB connection after restart
-                                if not retry_operation(connect_adb, max_attempts=3, delay=2.0):
+                                if not retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
                                     self.log_message(f"ADB connection failed after restart during operation for instance {index}. Closing instance.", "error")
-                                    self.active_instances.discard(index)
+                                    self._discard_active_instance(index)
                                     self.launch_next_instances()
                                     break
                             else:
                                 self.log_message(f"Force restart failed during operation for instance {index}. Closing instance.", "error")
-                                self.active_instances.discard(index)
+                                self._discard_active_instance(index)
                                 self.launch_next_instances()
                                 break
                         last_health_check = now
 
-                    # Filter pending tasks
-                    pending_tasks = [t for t in getattr(pm, "running_tasks_state", []) if t.get("next_run_time", 0) <= now]
-                    if not pending_tasks:
-                        # Wait until the next task
-                        future_tasks = [t for t in getattr(pm, "running_tasks_state", []) if t.get("next_run_time", 0) > now]
-                        if future_tasks:
-                            next_time = min(t["next_run_time"] for t in future_tasks)
-                            sleep_time = max(1, int(next_time - now))
-                            # If the next task is more than 120 seconds away, close the emulator, free the slot and requeue
-                            if next_time - now > 120:
-                                self.log_message(
-                                    f"The next task for instance {index} is more than 120 seconds away. Closing the emulator, freeing the slot and requeuing.",
-                                    "info",
-                                )
-                                self.multi_instance_manager.stop_instance(index)
-                                self.active_instances.discard(index)
-                                self.instance_queue.append((index, profile_name))
-                                self.launch_next_instances()
-                                break
-                            pm.current_task_name = None
-                            # Wait reactive to stop
-                            self.tool_should_stop.wait(timeout=min(sleep_time, 10))
-                            continue
-                        else:
-                            # No scheduled tasks, exit
-                            self.log_message(f"No tasks scheduled for profile '{profile_name}' on instance {index}.", "info")
-                            self.active_instances.discard(index)
+                    # Choose the task to run or wait for, grouping close run
+                    # times so the priority order wins over timer-reading noise.
+                    next_task, wait_until = pick_scheduled_task(getattr(pm, "running_tasks_state", []), now)
+                    if next_task is None:
+                        # No scheduled tasks, exit
+                        self.log_message(f"No tasks scheduled for profile '{profile_name}' on instance {index}.", "info")
+                        self._discard_active_instance(index)
+                        self.launch_next_instances()
+                        break
+                    if wait_until is not None:
+                        sleep_time = max(1, int(wait_until - now))
+                        # If the next task is more than 120 seconds away, close the emulator, free the slot and requeue
+                        if wait_until - now > 120:
+                            self.log_message(
+                                f"The next task for instance {index} is more than 120 seconds away. Closing the emulator, freeing the slot and requeuing.",
+                                "info",
+                            )
+                            self.multi_instance_manager.stop_instance(index)
+                            self._discard_active_instance(index)
+                            self._enqueue_instance(index, profile_name)
                             self.launch_next_instances()
                             break
+                        pm.current_task_name = None
+                        # Wait reactive to stop
+                        self.tool_should_stop.wait(timeout=min(sleep_time, 10))
+                        continue
                     # Run the pending task with the highest priority
-                    task = min(pending_tasks, key=lambda t: t["priority"])
+                    task = next_task
                     pm.current_task_name = task.get("name", "?")
                     self.log_message(f"Executing task '{pm.current_task_name}' on instance {index}...", "info")
                     try:
@@ -620,7 +685,7 @@ class MultiInstanceToolController:
 
             except ToolStopped:
                 self.log_message(f"Tool stopped while working on instance {index}.", "info")
-                self.active_instances.discard(index)
+                self._discard_active_instance(index)
 
             except Exception as e:
                 self.log_message(f"Error in instance {index}: {e}", "error")
@@ -630,22 +695,24 @@ class MultiInstanceToolController:
                     self.log_message(f"Emulator instance {index} closed due to error.", "info")
                 except Exception as close_error:
                     self.log_message(f"Error closing emulator instance {index}: {close_error}", "error")
-                self.active_instances.discard(index)
+                self._discard_active_instance(index)
                 self.launch_next_instances()
             finally:
-                # Clean up thread reference
-                if index in self.instance_threads:
-                    del self.instance_threads[index]
+                self._discard_active_instance(index)
+                self._remove_thread_reference(index, threading.current_thread())
 
         instance_worker()
 
     def stop_tool(self):
         """Stops the automation tool and cleans up resources."""
-        self.tool_running = False
-        self.tool_should_stop.set()
+        with self._state_lock:
+            self.tool_running = False
+            self.tool_should_stop.set()
+            active_instances = list(self.active_instances)
+            worker_threads = list(self.instance_threads.items())
 
         # Close all active emulators before cleaning up
-        for idx in list(self.active_instances):
+        for idx in active_instances:
             try:
                 self.log_message(f"Closing emulator of instance {idx} while stopping the tool...", "info")
                 self.multi_instance_manager.stop_instance(idx)
@@ -653,17 +720,24 @@ class MultiInstanceToolController:
                 self.log_message(f"Error closing emulator of instance {idx}: {e}", "error")
 
         # Wait for threads to finish
-        for thread in self.instance_threads.values():
+        for _index, thread in worker_threads:
             if thread.is_alive():
                 thread.join(timeout=5.0)
 
-        # Clear all collections
-        self.instance_threads.clear()
-        self.active_instances.clear()
-        self.instance_queue.clear()
-        self.instance_launch_attempts.clear()
+        with self._state_lock:
+            live_threads = [thread for thread in self.instance_threads.values() if thread.is_alive()]
+            self.active_instances.clear()
+            self.instance_queue.clear()
+            self.instance_launch_attempts.clear()
+            if not live_threads:
+                self.instance_threads.clear()
 
         # Force garbage collection
         gc.collect()
 
+        if live_threads:
+            self.log_message(
+                f"Tool stop requested, but {len(live_threads)} worker thread(s) are still finishing.",
+                level="warning",
+            )
         self.log_message("Tool stopped and resources cleaned up", level="info")

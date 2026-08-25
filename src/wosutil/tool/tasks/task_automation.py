@@ -186,7 +186,7 @@ def claim_island_idle(instance_index):
 
     # Search for life essence
     found_any = False
-    clicked_positions = set()  # Para evitar clicks duplicados
+    clicked_positions = set()  # Prevent duplicate clicks
 
     essence_template_path = get_template_path("life_essence")
     essence_roi = get_roi("island_life_essence")
@@ -423,7 +423,7 @@ def claim_storehouse_stamina(instance_index):
     if not roi:
         log_message("Could not get ROI for storehouse_claim_stamina.", level="error")
         press_android_back_button(instance_index)
-        return (False,)
+        return False
 
     if not click_on_template("storehouse_claim_stamina", instance_index, roi=roi, delay=0.7):
         log_message("Stamina was already claimed, reescheduling task.", level="info")

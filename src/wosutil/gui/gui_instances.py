@@ -7,9 +7,12 @@ from tkinter import ttk
 
 from wosutil.emulator.instances_controller import load_instance_cache
 from wosutil.gui.gui_dialogs import show_centered_dialog
+from wosutil.gui.gui_tooltip import Tooltip
 from wosutil.tool.tool_instances_controller import (
+    TASK_GROUPING_WINDOW_SECONDS,
     MultiInstanceToolController,
     load_instance_selection,
+    pick_scheduled_task,
     save_instance_selection,
 )
 
@@ -17,23 +20,110 @@ from wosutil.tool.tool_instances_controller import (
 def get_next_task_info(pm, now):
     """Get the task that will actually run next, mirroring the worker.
 
-    The controller executes the highest-priority task that is already due
-    (next_run_time <= now) and waits for the earliest future task otherwise.
+    The controller executes the highest-priority task that is already due,
+    waiting for a higher-priority task scheduled within the grouping window
+    (TASK_GROUPING_WINDOW_SECONDS) first, and waits for the earliest future
+    task otherwise. The first pick may not be the first task that executes:
+    while a picked task is not due yet, the worker keeps waiting and
+    re-picking, and a higher-priority in-window task (e.g. another 00:00 UTC
+    event read a second later) can jump ahead. This helper walks that wait
+    chain to find the task the worker will actually execute first.
     """
     if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
         return None, None
 
-    state = pm.running_tasks_state
-    due_tasks = [t for t in state if t.get("next_run_time", 0) <= now]
-    next_task = min(due_tasks, key=lambda t: t.get("priority", 99)) if due_tasks else min(state, key=lambda t: t.get("next_run_time", now + 99999))
-    task_name = next_task.get("name", "?")
-    next_time = next_task.get("next_run_time")
+    sim_now = now
+    while True:
+        task, wait_until = pick_scheduled_task(pm.running_tasks_state, sim_now)
+        if task is None:
+            return None, None
+        if wait_until is None:
+            task_name = task.get("name", "?")
+            if sim_now == now:
+                # The task is due right now: return it without the wait time
+                return task_name, None
+            # The task executes at sim_now (the end of the wait chain)
+            return task_name, sim_now
+        sim_now = wait_until
 
-    # The task is ready to run: return the name without the wait time
-    if next_time and next_time <= now:
-        return task_name, None
 
-    return task_name, next_time
+def format_time_remaining(seconds):
+    """Format remaining time in HH:MM:SS format."""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def get_all_tasks_info(pm, now):
+    """Get every scheduled task of an instance in the real execution order.
+
+    Tasks whose run times fall within the same window
+    (TASK_GROUPING_WINDOW_SECONDS) run grouped by priority, since the worker
+    waits for the highest-priority in-window task instead of the one whose
+    timer was read earlier. This helper group the tasks in windows the same
+    way and lists each window in priority order, so the preview matches the
+    order in which the tasks will actually run; tasks in different windows
+    keep their chronological order.
+
+    Args:
+        pm: The profile manager of the instance (or None).
+        now: Current epoch time.
+
+    Returns:
+        List of (task name, remaining seconds) pairs in execution order;
+        tasks that are already due have a remaining time of 0.
+    """
+    if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
+        return []
+
+    tasks = sorted(pm.running_tasks_state, key=lambda t: (t.get("next_run_time", 0), t.get("priority", 99)))
+
+    clusters = []
+    cluster = []
+    anchor = None
+    for task in tasks:
+        task_time = task.get("next_run_time", 0)
+        if cluster and task_time > anchor + TASK_GROUPING_WINDOW_SECONDS:
+            clusters.append(cluster)
+            cluster = []
+            anchor = None
+        if not cluster:
+            anchor = task_time
+        cluster.append(task)
+    if cluster:
+        clusters.append(cluster)
+
+    infos = []
+    for cluster in clusters:
+        cluster.sort(key=lambda t: (t.get("priority", 99), t.get("next_run_time", 0)))
+        for task in cluster:
+            remaining = max(0, int(task.get("next_run_time", 0) - now))
+            infos.append((task.get("name", "?"), remaining))
+    return infos
+
+
+def format_task_tooltip(pm, now):
+    """Build the tooltip text with the countdown of every scheduled task.
+
+    Args:
+        pm: The profile manager of the instance (or None).
+        now: Current epoch time.
+
+    Returns:
+        One numbered line per task in execution order, "Name: HH:MM:SS" form;
+        tasks that are ready to run are shown as ready.
+    """
+    infos = get_all_tasks_info(pm, now)
+    if not infos:
+        return "No programmed tasks"
+    lines = []
+    for position, (name, remaining) in enumerate(infos, start=1):
+        if remaining <= 0:
+            lines.append(f"{position}. {name}: ready")
+        else:
+            lines.append(f"{position}. {name}: {format_time_remaining(remaining)}")
+    return "\n".join(lines)
 
 
 def setup_instances_tab(
@@ -43,7 +133,6 @@ def setup_instances_tab(
     log_message,
     TASK_DEFINITIONS,
     instances_profile_managers,
-    opened_by_app,
     instance_queue,
     active_instances,
     emulator_state=None,
@@ -57,7 +146,6 @@ def setup_instances_tab(
         log_message: Logging function.
         TASK_DEFINITIONS: Dictionary of task definitions.
         instances_profile_managers: Dictionary mapping instances to profile managers.
-        opened_by_app: Set of instances opened by the app.
         instance_queue: Queue of instances to process.
         active_instances: Set of currently active instances.
         emulator_state (dict, optional): Shared emulator state. When provided,
@@ -118,14 +206,11 @@ def setup_instances_tab(
         log_message=log_message,
         TASK_DEFINITIONS=TASK_DEFINITIONS,
         instances_profile_managers=instances_profile_managers,
-        opened_by_app=opened_by_app,
         instance_queue=instance_queue,
         active_instances=active_instances,
         instance_widgets=instance_widgets,
-        get_profiles=get_profiles,
         save_instance_selection=save_instance_selection,
         load_instance_selection=load_instance_selection,
-        refresh_instances_callback=lambda: refresh_instances(),
         dialog_queue=dialog_queue,
     )
     emulator_state["controller"] = controller
@@ -136,7 +221,6 @@ def setup_instances_tab(
     # --- Tool state ---
     tool_running = emulator_state.get("tool_running") or {"value": False}
     emulator_state["tool_running"] = tool_running
-    selected_indices_profiles = []
 
     def refresh_instances():
         for widget in instance_list_frame.winfo_children():
@@ -189,6 +273,12 @@ def setup_instances_tab(
                     combo.pack(side="left", padx=5)
                     task_status_label = ttk.Label(row, text="")
                     task_status_label.pack(side="left", padx=10)
+                    info_icon = ttk.Label(row, text="\u24d8", cursor="hand2")
+                    info_icon.pack(side="left", padx=(0, 2))
+                    Tooltip(
+                        info_icon,
+                        lambda idx=inst["index"]: format_task_tooltip(instances_profile_managers.get(idx), time.time()),
+                    )
                     instance_widgets.append(
                         {
                             "index": inst["index"],
@@ -229,14 +319,7 @@ def setup_instances_tab(
             if isinstance(child, ttk.Label):
                 child.pack_forget()
         stop_btn.pack(side="left", padx=10, pady=10)
-        # Save selected instances changes the showed instances
-        instance_selection = load_instance_selection()
-        selected_indices_profiles.clear()
-        for idx_str, val in instance_selection.items():
-            if idx_str == "max_emulators":
-                continue
-            if val.get("checked"):
-                selected_indices_profiles.append((int(idx_str), val.get("profile")))
+        # Refresh the shown instance rows to the running state
         refresh_instances()
         controller.start_tool()
 
@@ -253,13 +336,6 @@ def setup_instances_tab(
         start_btn.pack(side="left", padx=10, pady=10)
         refresh_instances()
         controller.stop_tool()
-
-    def format_time_remaining(seconds):
-        """Format remaining time in HH:MM:SS format."""
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        seconds = seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     def get_ordinal_number(n):
         """Convert a number to its ordinal form (1st, 2nd, 3rd, etc)."""

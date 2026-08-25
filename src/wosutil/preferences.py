@@ -7,7 +7,15 @@ editing task_definitions.py.
 
 import os
 
-from wosutil.config import PREFERENCES_FILE
+from wosutil.config import (
+    BLUESTACKS_BASE_PATH,
+    BLUESTACKS_CONF,
+    LDPLAYER_BASE_PATH,
+    LDPLAYER_INSTANCE_CONFIG_DIR,
+    MUMU_BASE_PATH,
+    MUMU_INSTANCE_BASE_PATH,
+    PREFERENCES_FILE,
+)
 from wosutil.emulator.backends import EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER, EMULATOR_MUMU
 from wosutil.utils import load_json_file, safe_int, save_json_file
 
@@ -34,6 +42,21 @@ GATHER_RESOURCES = ("meat", "wood", "coal", "iron")
 DEFAULT_GATHER_RESOURCE = "meat"
 
 DEBUG_MODE_ENV = "WOSUTIL_DEBUG"
+
+DEFAULT_EMULATOR_PATHS = {
+    EMULATOR_MUMU: {
+        "base_path": MUMU_BASE_PATH,
+        "instance_base_path": MUMU_INSTANCE_BASE_PATH,
+    },
+    EMULATOR_BLUESTACKS: {
+        "base_path": BLUESTACKS_BASE_PATH,
+        "config_path": BLUESTACKS_CONF,
+    },
+    EMULATOR_LDPLAYER: {
+        "base_path": LDPLAYER_BASE_PATH,
+        "instance_config_dir": LDPLAYER_INSTANCE_CONFIG_DIR,
+    },
+}
 
 
 def get_remember_schedule(preferences=None):
@@ -240,6 +263,39 @@ def get_emulator(preferences=None):
     if emulator not in (EMULATOR_MUMU, EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER):
         return None
     return emulator
+
+
+def get_emulator_paths(preferences=None):
+    """Return normalized executable and instance paths for every emulator.
+
+    Missing or malformed persisted values fall back to the standard Windows
+    installation paths, so older preference files remain fully compatible.
+
+    Args:
+        preferences (dict, optional): Preferences data. If None, loads from disk.
+
+    Returns:
+        dict: Mapping of emulator identifiers to their configured paths.
+    """
+    if preferences is None:
+        preferences = load_preferences()
+    configured_paths = preferences.get("emulator_paths", {})
+    if not isinstance(configured_paths, dict):
+        configured_paths = {}
+
+    def normalized_path(emulator_config, key, default):
+        value = emulator_config.get(key)
+        if isinstance(value, str) and value.strip():
+            return os.path.normpath(value.strip())
+        return os.path.normpath(default)
+
+    paths = {}
+    for emulator, defaults in DEFAULT_EMULATOR_PATHS.items():
+        emulator_config = configured_paths.get(emulator, {})
+        if not isinstance(emulator_config, dict):
+            emulator_config = {}
+        paths[emulator] = {key: normalized_path(emulator_config, key, default) for key, default in defaults.items()}
+    return paths
 
 
 def get_mystery_shop_level(preferences=None):

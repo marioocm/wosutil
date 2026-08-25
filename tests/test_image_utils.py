@@ -12,6 +12,7 @@ from PIL import Image
 from wosutil.emulator.image_utils import (
     _TIME_RE,
     _find_first_non_zero_digit_on_image,
+    _parse_timer_text,
     _preprocess_fuzzy_text_image,
     _preprocess_timer_red_text,
     _read_time_native,
@@ -308,7 +309,7 @@ class TestImageUtils(unittest.TestCase):
         ]
 
         # Apply NMS
-        filtered_boxes = non_max_suppression(boxes, overlapThresh=0.5)
+        filtered_boxes = non_max_suppression(boxes, overlap_thresh=0.5)
 
         # Should reduce the number of boxes
         self.assertLess(len(filtered_boxes), len(boxes))
@@ -338,6 +339,37 @@ class TestImageUtils(unittest.TestCase):
         self.assertIsNone(position)
 
 
+class TestTemplateConfidence(unittest.TestCase):
+    """Template NMS must prefer the strongest overlapping match."""
+
+    def test_nms_prefers_higher_confidence_box(self):
+        """A stronger overlapping detection is kept over a weaker one."""
+        boxes = [(10, 10, 20, 20), (12, 12, 20, 20)]
+
+        matches = non_max_suppression(boxes, overlap_thresh=0.5, scores=[0.75, 0.95])
+
+        self.assertEqual(matches, [boxes[1]])
+
+    def test_find_multiple_templates_uses_match_confidence(self):
+        """The best score survives when several response pixels overlap."""
+        screenshot = np.zeros((12, 12, 3), dtype=np.uint8)
+        template = np.zeros((10, 10, 3), dtype=np.uint8)
+        response = np.array(
+            [
+                [0.95, 0.90, 0.80],
+                [0.85, 0.70, 0.60],
+                [0.55, 0.50, 0.40],
+            ],
+            dtype=np.float32,
+        )
+        with patch("wosutil.emulator.image_utils.cv2.imread", return_value=screenshot), patch("wosutil.emulator.image_utils.load_template", return_value=template), patch(
+            "wosutil.emulator.image_utils.cv2.matchTemplate", return_value=response
+        ):
+            matches = find_multiple_templates("template.png", "screenshot.png", threshold=0.5)
+
+        self.assertEqual(matches, [(0, 0, 10, 10)])
+
+
 class TestTimeRegex(unittest.TestCase):
     """Test cases for the timer regex used in OCR."""
 
@@ -362,6 +394,15 @@ class TestTimeRegex(unittest.TestCase):
     def test_no_match_without_colons(self):
         """A timer without colons must not match."""
         self.assertIsNone(_TIME_RE.search("08 02 23"))
+
+    def test_parser_rejects_impossible_minutes_and_seconds(self):
+        """OCR values outside the clock ranges are not accepted as timers."""
+        self.assertIsNone(_parse_timer_text("08:60:00"))
+        self.assertIsNone(_parse_timer_text("08:00:60"))
+
+    def test_parser_keeps_day_prefix_for_valid_timer(self):
+        """A valid timer with a day prefix is converted to total seconds."""
+        self.assertEqual(_parse_timer_text("1d 06:29:08"), (6, 29, 8, 1 * 86400 + 6 * 3600 + 29 * 60 + 8))
 
 
 class TestNativeTimerOcr(unittest.TestCase):

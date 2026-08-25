@@ -27,6 +27,8 @@ The distributed `WosUtil.exe` bundles Tesseract OCR, so nothing else needs to be
 
 Download the latest `WosUtil.exe` from the [Releases](https://github.com/marioocm/WosUtil/releases) page and run it. No installation required.
 
+For non-default emulator installations, open the Preferences tab, select the required folders or configuration file with the `Browse...` buttons, and click `Save Preferences`.
+
 ## Usage
 
 1. Select your emulator type in the Preferences tab.

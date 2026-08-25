@@ -10,11 +10,13 @@ from wosutil.preferences import (
     BEAR_TRAP_MARCH_COUNT,
     BEAR_TRAP_MARCH_MAX,
     BEAR_TRAP_MARCH_MIN,
+    DEFAULT_EMULATOR_PATHS,
     GATHER_RESOURCES,
     MYSTERY_SHOP_LEVEL_FREE,
     MYSTERY_SHOP_LEVELS,
     get_bear_rally_call_march,
     get_bear_trap_marches,
+    get_emulator_paths,
     get_gather_resource,
     get_kill_beast_march,
     get_kill_beast_march_assignment,
@@ -42,6 +44,24 @@ class TestPreferences(unittest.TestCase):
         import shutil
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_emulator_paths_default_to_standard_locations(self):
+        """Missing emulator path settings use the standard locations."""
+        self.assertEqual(get_emulator_paths({}), DEFAULT_EMULATOR_PATHS)
+
+    def test_emulator_paths_normalize_valid_values_and_ignore_invalid_values(self):
+        """Custom paths are normalized while malformed values use defaults."""
+        preferences = {
+            "emulator_paths": {
+                "mumu": {"base_path": "D:/MuMu/../MuMuPlayer", "instance_base_path": 123},
+                "bluestacks": {"base_path": "  E:/BlueStacks  ", "config_path": ""},
+            }
+        }
+        paths = get_emulator_paths(preferences)
+        self.assertEqual(paths["mumu"]["base_path"], os.path.normpath("D:/MuMuPlayer"))
+        self.assertEqual(paths["mumu"]["instance_base_path"], DEFAULT_EMULATOR_PATHS["mumu"]["instance_base_path"])
+        self.assertEqual(paths["bluestacks"]["base_path"], os.path.normpath("E:/BlueStacks"))
+        self.assertEqual(paths["bluestacks"]["config_path"], DEFAULT_EMULATOR_PATHS["bluestacks"]["config_path"])
 
     def test_get_task_priorities_empty(self):
         """Test that missing preferences yield no overrides."""
@@ -250,7 +270,7 @@ class TestTaskDefinitionsPriorities(unittest.TestCase):
         self._write_preferences(preferences)
 
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
-            task_defs = get_task_definitions(None)
+            task_defs = get_task_definitions()
         self.assertEqual(task_defs["claim_triumph"]["priority"], 1)
         self.assertEqual(task_defs["claim_idle"]["priority"], 15)
 
@@ -259,7 +279,7 @@ class TestTaskDefinitionsPriorities(unittest.TestCase):
         self.assertFalse(os.path.exists(self.prefs_file))
 
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
-            task_defs = get_task_definitions(None)
+            task_defs = get_task_definitions()
         self.assertEqual(task_defs["claim_idle"]["priority"], 4)
         self.assertEqual(task_defs["claim_triumph"]["priority"], 17)
 
@@ -268,12 +288,12 @@ class TestTaskDefinitionsPriorities(unittest.TestCase):
         self._write_preferences({"task_priorities": {"nonexistent_task": 1}})
 
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
-            task_defs = get_task_definitions(None)
+            task_defs = get_task_definitions()
         self.assertEqual(task_defs["claim_idle"]["priority"], 4)
 
     def test_mystery_shop_task_registered(self):
         """Test that the mystery shop task is registered with a function."""
-        task_defs = get_task_definitions(None)
+        task_defs = get_task_definitions()
         self.assertIn("claim_mystery_shop", task_defs)
         self.assertEqual(task_defs["claim_mystery_shop"]["category"], "shop")
 

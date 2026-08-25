@@ -170,6 +170,11 @@ class TestLDPlayerHelpers(unittest.TestCase):
         path = tempfile_helper("{not valid json")
         self.assertEqual(backends.parse_ldplayer_config(path), {})
 
+    def test_parse_non_object_config_returns_empty(self):
+        """A valid JSON list is not a usable LDPlayer configuration."""
+        path = tempfile_helper("[1, 2, 3]")
+        self.assertEqual(backends.parse_ldplayer_config(path), {})
+
     def test_list_instances_from_config_dir(self):
         """Instances are parsed from leidianN.config files, sorted by index."""
         config_dir = ldplayer_config_dir_helper({"leidian1.config": LDPLAYER_INSTANCE_1, "leidian0.config": LDPLAYER_INSTANCE_0, "other.txt": ""})
@@ -271,6 +276,24 @@ class TestBackendFactory(unittest.TestCase):
         with patch.object(backends.os.path, "exists", side_effect=exists):
             self.assertEqual(backends.detect_installed_emulators(), [backends.EMULATOR_LDPLAYER])
 
+    def test_detect_installed_uses_custom_paths(self):
+        """Detection checks the configured executable and config locations."""
+        paths = {
+            backends.EMULATOR_MUMU: {"base_path": "D:/MuMu", "instance_base_path": "D:/MuMu/vms"},
+            backends.EMULATOR_BLUESTACKS: {"base_path": "E:/BlueStacks", "config_path": "E:/Data/bluestacks.conf"},
+            backends.EMULATOR_LDPLAYER: {"base_path": "F:/LDPlayer", "instance_config_dir": "F:/LDPlayer/vms/config"},
+        }
+        existing = {
+            os.path.normpath(os.path.join("D:/MuMu", "MuMuManager.exe")),
+            os.path.normpath("E:/Data/bluestacks.conf"),
+            os.path.normpath(os.path.join("F:/LDPlayer", "ldconsole.exe")),
+        }
+        with patch.object(backends.os.path, "exists", side_effect=lambda path: path in existing):
+            self.assertEqual(
+                backends.detect_installed_emulators(paths),
+                [backends.EMULATOR_MUMU, backends.EMULATOR_BLUESTACKS, backends.EMULATOR_LDPLAYER],
+            )
+
     def test_create_bluestacks(self):
         """Alternatively named backends are honored."""
         self.assertIsInstance(backends.create_backend(backends.EMULATOR_BLUESTACKS), backends.BlueStacksBackend)
@@ -282,6 +305,71 @@ class TestBackendFactory(unittest.TestCase):
     def test_create_mumu_default(self):
         """create_backend defaults to the MuMu backend."""
         self.assertIsInstance(backends.create_backend(), backends.MuMuBackend)
+
+    def test_create_backend_uses_custom_paths(self):
+        """Each backend receives the paths selected in Preferences."""
+        paths = {
+            backends.EMULATOR_MUMU: {"base_path": "D:/MuMu", "instance_base_path": "D:/MuMu/vms"},
+            backends.EMULATOR_BLUESTACKS: {"base_path": "E:/BlueStacks", "config_path": "E:/Data/bluestacks.conf"},
+            backends.EMULATOR_LDPLAYER: {"base_path": "F:/LDPlayer", "instance_config_dir": "F:/LDPlayer/vms/config"},
+        }
+
+        mumu = backends.create_backend(backends.EMULATOR_MUMU, emulator_paths=paths)
+        self.assertEqual(mumu.manager_path, os.path.normpath(os.path.join("D:/MuMu", "MuMuManager.exe")))
+        self.assertEqual(mumu.adb_path, os.path.normpath(os.path.join("D:/MuMu", "adb.exe")))
+        self.assertEqual(mumu.instance_base_path, os.path.normpath("D:/MuMu/vms"))
+
+        bluestacks = backends.create_backend(backends.EMULATOR_BLUESTACKS, emulator_paths=paths)
+        self.assertEqual(bluestacks.conf_path, os.path.normpath("E:/Data/bluestacks.conf"))
+        self.assertEqual(bluestacks.adb_path, os.path.normpath(os.path.join("E:/BlueStacks", "HD-Adb.exe")))
+        self.assertEqual(bluestacks.player_path, os.path.normpath(os.path.join("E:/BlueStacks", "HD-Player.exe")))
+
+        ldplayer = backends.create_backend(backends.EMULATOR_LDPLAYER, emulator_paths=paths)
+        self.assertEqual(ldplayer.config_dir, os.path.normpath("F:/LDPlayer/vms/config"))
+        self.assertEqual(ldplayer.adb_path, os.path.normpath(os.path.join("F:/LDPlayer", "adb.exe")))
+        self.assertEqual(ldplayer.console_path, os.path.normpath(os.path.join("F:/LDPlayer", "ldconsole.exe")))
+
+
+class TestProcessMatching(unittest.TestCase):
+    """Process matching must select only the requested emulator instance."""
+
+    def test_ldplayer_index_one_does_not_match_index_ten(self):
+        """LDPlayer instance 1 is distinct from instance 10."""
+        backend = backends.LDPlayerBackend.__new__(backends.LDPlayerBackend)
+        backend._index_map = {1: {"index": 1, "display_name": "Instance 1"}}
+        expected = object()
+        equals_form = object()
+        wrong_instance = object()
+        with patch.object(
+            backends,
+            "_iter_processes",
+            return_value=[
+                (expected, "dnplayer.exe", ["dnplayer.exe", "--index", "1"]),
+                (equals_form, "dnplayer.exe", ["dnplayer.exe", "--index=1"]),
+                (wrong_instance, "dnplayer.exe", ["dnplayer.exe", "--index", "10"]),
+            ],
+        ):
+            matches = backend._matching_processes(1)
+
+        self.assertEqual(matches, [expected, equals_form])
+
+    def test_bluestacks_instance_name_is_compared_as_an_argument(self):
+        """A similarly named BlueStacks instance is not selected."""
+        backend = backends.BlueStacksBackend.__new__(backends.BlueStacksBackend)
+        backend._index_map = {0: {"name": "Pie64"}}
+        expected = object()
+        wrong_instance = object()
+        with patch.object(
+            backends,
+            "_iter_processes",
+            return_value=[
+                (expected, "HD-Player.exe", ["HD-Player.exe", "--instance", "Pie64"]),
+                (wrong_instance, "HD-Player.exe", ["HD-Player.exe", "--instance", "Pie640"]),
+            ],
+        ):
+            matches = backend._matching_processes(0)
+
+        self.assertEqual(matches, [expected])
 
 
 class TestActiveBackend(unittest.TestCase):

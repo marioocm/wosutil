@@ -28,7 +28,7 @@ class ProfileManager:
                 f"No profiles found. Creating the default '{DEFAULT_PROFILE_NAME}' profile with all tasks.",
                 "info",
             )
-            self.profiles = {DEFAULT_PROFILE_NAME: get_all_task_ids(self.log)}
+            self.profiles = {DEFAULT_PROFILE_NAME: get_all_task_ids()}
             self.save_profiles()
         self.running_tasks_state = []
         self.next_run_time = None
@@ -42,11 +42,24 @@ class ProfileManager:
             dict: Dictionary of profiles.
         """
         profiles = load_json_file(PROFILES_FILE, default_value={})
+        if not isinstance(profiles, dict):
+            self.log("Profiles file has an invalid structure. A default profile will be created.", "warning")
+            return {}
         if not profiles:
             self.log(f"Profiles file not found at {PROFILES_FILE}. A new one will be created.", "info")
         else:
             self.log("Profiles loaded successfully.", "info")
-        return profiles
+
+        valid_profiles = {}
+        for profile_name, task_names in profiles.items():
+            if not isinstance(profile_name, str) or not profile_name.strip():
+                self.log("Ignoring a profile with an invalid name.", "warning")
+                continue
+            if not isinstance(task_names, list):
+                self.log(f"Ignoring profile '{profile_name}' because its task list is invalid.", "warning")
+                continue
+            valid_profiles[profile_name] = [task_name for task_name in task_names if isinstance(task_name, str)]
+        return valid_profiles
 
     def save_profiles(self):
         """Saves the current profiles to the JSON file using utility functions.

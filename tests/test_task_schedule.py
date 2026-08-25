@@ -1,5 +1,6 @@
 """Unit tests for the task schedule persistence module."""
 
+import math
 import os
 import tempfile
 import unittest
@@ -37,7 +38,16 @@ class TestLoadSavedTasks(unittest.TestCase):
 
     def test_ignores_entries_without_valid_next_run_time(self):
         """Entries without a numeric next_run_time are ignored."""
-        schedule = {"0": {"ok": {"next_run_time": 100.0}, "bad": {}, "nan": {"next_run_time": "x"}}}
+        schedule = {
+            "0": {
+                "ok": {"next_run_time": 100.0},
+                "bad": {},
+                "text": {"next_run_time": "x"},
+                "nan": {"next_run_time": math.nan},
+                "infinite": {"next_run_time": math.inf},
+                "boolean": {"next_run_time": True},
+            }
+        }
         self.assertEqual(load_saved_tasks(schedule, 0), {"ok": {"next_run_time": 100.0}})
 
     def test_ignores_malformed_structure(self):
@@ -54,6 +64,11 @@ class TestBuildTaskState(unittest.TestCase):
         """Without saved state every task runs at startup."""
         state = build_task_state([_task("a"), _task("b")], {}, now=1000.0)
         self.assertEqual([t["next_run_time"] for t in state], [1000.0, 1000.0])
+
+    def test_preserves_zero_as_explicit_current_time(self):
+        """A zero timestamp is valid in deterministic scheduling tests."""
+        state = build_task_state([_task("a")], {}, now=0.0)
+        self.assertEqual(state[0]["next_run_time"], 0.0)
 
     def test_restores_saved_next_run_time(self):
         """A saved future time keeps the remaining wait of the task."""
@@ -80,6 +95,14 @@ class TestBuildTaskState(unittest.TestCase):
         saved = {"a": {"next_run_time": 5000.0, "reschedule_seconds": "x"}}
         state = build_task_state([_task("a", 3600)], saved, now=1000.0)
         self.assertEqual(state[0]["reschedule_seconds"], 3600)
+
+    def test_ignores_non_finite_saved_reschedule(self):
+        """NaN and infinity cannot poison a restored task interval."""
+        for value in (math.nan, math.inf, True):
+            with self.subTest(value=value):
+                saved = {"a": {"next_run_time": 5000.0, "reschedule_seconds": value}}
+                state = build_task_state([_task("a", 3600)], saved, now=1000.0)
+                self.assertEqual(state[0]["reschedule_seconds"], 3600)
 
     def test_does_not_mutate_the_definition_dict(self):
         """The returned tasks are copies, not the definition dicts."""
@@ -114,6 +137,23 @@ class TestSnapshotInstanceSchedule(unittest.TestCase):
         tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "function": lambda: None}]
         snapshot = snapshot_instance_schedule(tasks)
         self.assertEqual(set(snapshot["a"].keys()), {"next_run_time", "reschedule_seconds"})
+
+    def test_replaces_invalid_values_with_safe_defaults(self):
+        """Runtime corruption is normalized before it reaches JSON storage."""
+        snapshot = snapshot_instance_schedule(
+            [
+                {"id": "a", "next_run_time": math.nan, "reschedule_seconds": math.inf},
+                {"id": "b", "next_run_time": True, "reschedule_seconds": 0},
+                {"id": "invalid", "next_run_time": "x", "reschedule_seconds": "x"},
+                {"next_run_time": 1.0, "reschedule_seconds": 2.0},
+            ]
+        )
+        self.assertTrue(math.isfinite(snapshot["a"]["next_run_time"]))
+        self.assertEqual(snapshot["a"]["reschedule_seconds"], 3600)
+        self.assertTrue(math.isfinite(snapshot["b"]["next_run_time"]))
+        self.assertEqual(snapshot["b"]["reschedule_seconds"], 3600)
+        self.assertEqual(snapshot["invalid"]["reschedule_seconds"], 3600)
+        self.assertNotIn("", snapshot)
 
 
 class TestSaveAndLoadRoundTrip(unittest.TestCase):

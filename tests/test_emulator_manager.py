@@ -6,9 +6,13 @@ from unittest.mock import patch
 
 from wosutil.emulator.emulator_manager import (
     WHITEOUT_PACKAGE,
+    AdbCommandError,
     _scroll_with_hold,
+    click_on_coordinates,
+    force_stop_game,
     is_wos_installed,
     scroll_screen,
+    take_screenshot,
 )
 
 SHELL = "shell"
@@ -70,6 +74,7 @@ class TestScrollScreen(unittest.TestCase):
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.execute_adb_command, self.time_sleep = self.mocks
+        self.execute_adb_command.return_value = _ok()
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
     def test_plain_swipe_without_hold(self):
@@ -103,6 +108,63 @@ class TestScrollScreen(unittest.TestCase):
                 [SHELL, INPUT, "swipe", "13", "0", "13", "0", "150"],
             ],
         )
+
+    def test_plain_swipe_failure_is_reported(self):
+        """A failed regular swipe cannot be reported as successful."""
+        self.execute_adb_command.return_value = _fail()
+
+        with self.assertRaises(AdbCommandError):
+            scroll_screen(13, 500, 13, 0, 200, 0)
+
+    def test_fallback_failure_is_reported(self):
+        """A failed fallback swipe is surfaced to the task runner."""
+        self.execute_adb_command.side_effect = [_fail(), _fail()]
+
+        with self.assertRaises(AdbCommandError):
+            _scroll_with_hold(13, 500, 13, 0, 400, 150, 0, steps=4)
+
+
+class TestInputAndScreenshotFailures(unittest.TestCase):
+    """Input commands and screenshots fail safely instead of reporting success."""
+
+    def test_click_raises_when_adb_fails(self):
+        """A failed ADB tap is surfaced to the caller."""
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="device offline")
+        with patch("wosutil.emulator.emulator_manager.execute_adb_command", return_value=failed), patch("wosutil.emulator.emulator_manager.time.sleep") as sleep, self.assertRaisesRegex(
+            AdbCommandError, "device offline"
+        ):
+            click_on_coordinates(10, 20, 0)
+        sleep.assert_not_called()
+
+    def test_force_stop_raises_when_adb_fails(self):
+        """A failed force-stop is surfaced instead of being ignored."""
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="permission denied")
+        with patch("wosutil.emulator.emulator_manager.execute_adb_command", return_value=failed), self.assertRaisesRegex(AdbCommandError, "permission denied"):
+            force_stop_game(0)
+
+    def test_take_screenshot_removes_local_file_when_screencap_fails(self):
+        """A failed remote capture removes the local placeholder and remote path."""
+        local_path = "temporary/wosutil_test.png"
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="capture failed")
+        cleanup = subprocess.CompletedProcess(args=[], returncode=0)
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
+            "wosutil.emulator.emulator_manager.os.close"
+        ), patch("wosutil.emulator.emulator_manager.execute_adb_command", side_effect=[failed, cleanup]) as execute, patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
+            self.assertIsNone(take_screenshot(0))
+
+        delete.assert_called_once_with(local_path)
+        self.assertEqual(execute.call_args_list[1].args[0], ["shell", "rm", "/sdcard/wosutil_test.png"])
+
+    def test_take_screenshot_keeps_local_file_after_success(self):
+        """A successful capture keeps the downloaded file for its caller."""
+        local_path = "temporary/wosutil_test.png"
+        success = subprocess.CompletedProcess(args=[], returncode=0)
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
+            "wosutil.emulator.emulator_manager.os.close"
+        ), patch("wosutil.emulator.emulator_manager.execute_adb_command", side_effect=[success, success, success]), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
+            self.assertEqual(take_screenshot(0), local_path)
+
+        delete.assert_not_called()
 
 
 if __name__ == "__main__":

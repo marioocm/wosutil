@@ -49,6 +49,29 @@ class TestProfileManagerDefaultProfile(unittest.TestCase):
         pm = ProfileManager(log_func=lambda *args, **kwargs: None)
         self.assertEqual(pm.profiles, existing)
 
+    def test_invalid_top_level_json_creates_a_default_profile(self):
+        """A valid JSON list must not be treated as a profile mapping."""
+        with patch(
+            "wosutil.tool.profiles.profile_manager.load_json_file",
+            return_value=["not", "profiles"],
+        ), patch("wosutil.tool.profiles.profile_manager.save_json_file", return_value=True):
+            pm = ProfileManager(log_func=lambda *args, **kwargs: None)
+
+        self.assertEqual(pm.profiles, {DEFAULT_PROFILE_NAME: get_all_task_ids()})
+
+    def test_invalid_profile_entries_are_ignored_but_valid_entries_are_kept(self):
+        """Malformed profiles do not make the whole profile file unusable."""
+        profiles = {
+            "Good": ["claim_idle", 123, None],
+            "Empty": [],
+            "Wrong type": "claim_idle",
+            "   ": ["claim_idle"],
+        }
+        with patch("wosutil.tool.profiles.profile_manager.load_json_file", return_value=profiles):
+            pm = ProfileManager(log_func=lambda *args, **kwargs: None)
+
+        self.assertEqual(pm.profiles, {"Good": ["claim_idle"], "Empty": []})
+
 
 if __name__ == "__main__":
     unittest.main()

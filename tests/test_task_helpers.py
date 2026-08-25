@@ -220,8 +220,9 @@ class TestGoWorldMapSearch(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.ensure_world_screen"),
             patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
             patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
+            patch("wosutil.tool.tasks.task_helpers.time.sleep"),
         ]
-        self.ensure_world, self.click_coords, self.scroll_screen = [p.start() for p in self.patchers]
+        self.ensure_world, self.click_coords, self.scroll_screen, self.sleep = [p.start() for p in self.patchers]
         self.ensure_world.return_value = True
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
@@ -239,6 +240,8 @@ class TestGoWorldMapSearch(unittest.TestCase):
             WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
             0,
         )
+        # The scroll animation must settle before the caller OCRs or clicks.
+        self.sleep.assert_called_once_with(1.0)
 
     def test_opens_search_without_scroll_when_disabled(self):
         """The caller can open the search without changing the resource row."""
@@ -246,6 +249,7 @@ class TestGoWorldMapSearch(unittest.TestCase):
 
         self.click_coords.assert_called_once_with(44, 878, 0)
         self.scroll_screen.assert_not_called()
+        self.sleep.assert_not_called()
 
     def test_returns_false_when_world_map_cannot_be_reached(self):
         """Navigation fails without opening the search when the map is unavailable."""
