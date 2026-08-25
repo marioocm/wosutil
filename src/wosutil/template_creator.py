@@ -559,9 +559,11 @@ class TemplateCreatorApp:
 
 def main():
     """Main function."""
-    print("=== Template Creator - WoS Util ===")
-    print("Application for creating image templates")
-    print()
+    from wosutil.utils import log_message, setup_logging
+
+    setup_logging()
+    log_message("=== Template Creator - WoS Util ===", "info")
+    log_message("Application for creating image templates", "info")
 
     app = TemplateCreatorApp()
     app.run()

@@ -195,7 +195,7 @@ class TestTaskDefinitionsPriorities(unittest.TestCase):
         self._write_preferences(preferences)
 
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
-            task_defs = get_task_definitions(None)
+            task_defs = get_task_definitions()
         self.assertEqual(task_defs["claim_triumph"]["priority"], 1)
         self.assertEqual(task_defs["claim_idle"]["priority"], 15)
 
@@ -204,7 +204,7 @@ class TestTaskDefinitionsPriorities(unittest.TestCase):
         self.assertFalse(os.path.exists(self.prefs_file))
 
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
-            task_defs = get_task_definitions(None)
+            task_defs = get_task_definitions()
         self.assertEqual(task_defs["claim_idle"]["priority"], 4)
         self.assertEqual(task_defs["claim_triumph"]["priority"], 17)
 
@@ -213,12 +213,12 @@ class TestTaskDefinitionsPriorities(unittest.TestCase):
         self._write_preferences({"task_priorities": {"nonexistent_task": 1}})
 
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
-            task_defs = get_task_definitions(None)
+            task_defs = get_task_definitions()
         self.assertEqual(task_defs["claim_idle"]["priority"], 4)
 
     def test_mystery_shop_task_registered(self):
         """Test that the mystery shop task is registered with a function."""
-        task_defs = get_task_definitions(None)
+        task_defs = get_task_definitions()
         self.assertIn("claim_mystery_shop", task_defs)
         self.assertEqual(task_defs["claim_mystery_shop"]["category"], "shop")
 

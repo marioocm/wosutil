@@ -191,6 +191,15 @@ def list_ldplayer_instances(config_dir=LDPLAYER_INSTANCE_CONFIG_DIR):
     return sorted(instances, key=lambda inst: inst["index"])
 
 
+def _iter_processes():
+    """Yield (process, name, joined cmdline) for every inspectable process."""
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            yield proc, proc.info["name"] or "", " ".join(proc.info["cmdline"] or [])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+
 class EmulatorBackend(ABC):
     """Uniform interface implemented by every supported emulator."""
 
@@ -396,16 +405,7 @@ class BlueStacksBackend(EmulatorBackend):
     def _matching_processes(self, instance_index):
         """Return the HD-Player processes launched for an instance."""
         instance_name = self._instance_name(instance_index)
-        matches = []
-        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                cmdline = " ".join(proc.info["cmdline"] or [])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-            process_name = proc.info["name"] or ""
-            if "HD-Player" in process_name and "--instance" in cmdline and instance_name in cmdline:
-                matches.append(proc)
-        return matches
+        return [proc for proc, name, cmdline in _iter_processes() if "HD-Player" in name and "--instance" in cmdline and instance_name in cmdline]
 
     def _is_instance_running(self, instance_index):
         """Check whether the instance is booting/running via its processes."""
@@ -598,17 +598,8 @@ class LDPlayerBackend(EmulatorBackend):
 
     def _matching_processes(self, instance_index):
         """Return the dnplayer processes launched for an instance."""
-        matches = []
         marker = f"index={instance_index}"
-        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                cmdline = " ".join(proc.info["cmdline"] or [])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-            process_name = proc.info["name"] or ""
-            if "dnplayer" in process_name and marker in cmdline:
-                matches.append(proc)
-        return matches
+        return [proc for proc, name, cmdline in _iter_processes() if "dnplayer" in name and marker in cmdline]
 
     def _is_instance_running(self, instance_index):
         """Check whether the instance is running via its dnplayer process."""

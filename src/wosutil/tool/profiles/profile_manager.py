@@ -28,7 +28,7 @@ class ProfileManager:
                 f"No profiles found. Creating the default '{DEFAULT_PROFILE_NAME}' profile with all tasks.",
                 "info",
             )
-            self.profiles = {DEFAULT_PROFILE_NAME: get_all_task_ids(self.log)}
+            self.profiles = {DEFAULT_PROFILE_NAME: get_all_task_ids()}
             self.save_profiles()
         self.running_tasks_state = []
         self.next_run_time = None

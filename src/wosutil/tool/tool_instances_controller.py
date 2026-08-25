@@ -102,14 +102,11 @@ class MultiInstanceToolController:
         multi_instance_manager,
         profile_manager,
         instances_profile_managers,
-        opened_by_app,
         instance_queue,
         active_instances,
         instance_widgets,
-        get_profiles,
         save_instance_selection,
         load_instance_selection,
-        refresh_instances_callback,
         dialog_queue=None,
     ):
         """Initialize the multi-instance tool controller.
@@ -120,14 +117,11 @@ class MultiInstanceToolController:
             multi_instance_manager: Multi-instance manager.
             profile_manager: Profile manager.
             instances_profile_managers: Dict of instance to profile managers.
-            opened_by_app: Dict of instances opened by app.
             instance_queue: Queue for instances.
             active_instances: Set of active instances.
             instance_widgets: Dict of instance widgets.
-            get_profiles: Function to get profiles.
             save_instance_selection: Function to save selection.
             load_instance_selection: Function to load selection.
-            refresh_instances_callback: Callback to refresh instances.
             dialog_queue (queue.Queue, optional): Queue where the worker threads
                 push (title, text) pairs the GUI must show as dialogs. None
                 disables dialogs.
@@ -137,14 +131,11 @@ class MultiInstanceToolController:
         self.multi_instance_manager = multi_instance_manager
         self.profile_manager = profile_manager
         self.instances_profile_managers = instances_profile_managers
-        self.opened_by_app = opened_by_app
         self.instance_queue = instance_queue
         self.active_instances = active_instances
         self.instance_widgets = instance_widgets
-        self.get_profiles = get_profiles
         self.save_instance_selection = save_instance_selection
         self.load_instance_selection = load_instance_selection
-        self.refresh_instances_callback = refresh_instances_callback
         self.dialog_queue = dialog_queue
         self.max_instances_var = None
         self.tool_should_stop = stop_signal

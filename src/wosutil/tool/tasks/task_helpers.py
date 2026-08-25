@@ -55,6 +55,31 @@ def is_game_on_city_screen(instance_index):
     return is_game_on_screen(instance_index, "city_icon", "city")
 
 
+def _reach_city_screen(instance_index, attempt_label):
+    """Press back / navigate until the main city screen is detected.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        attempt_label (str): Label for the attempt counter in the log, e.g.
+            "Attempt" or "Retry".
+
+    Returns:
+        bool: True if the city screen was detected.
+    """
+    for attempt in range(1, MAIN_SCREEN_MAX_ATTEMPTS + 1):
+        stop_signal.check()
+        if is_game_on_city_screen(instance_index):
+            log_message("Successfully on main screen ('city')!", level="success")
+            return True
+        if is_game_on_world_screen(instance_index):
+            log_message("Game is on world screen.", level="info")
+            go_cityworld(instance_index)
+        else:
+            log_message(f"Not on main screen. Pressing back ({attempt_label} {attempt}/{MAIN_SCREEN_MAX_ATTEMPTS}).", level="info")
+            press_android_back_button(instance_index)
+    return False
+
+
 def ensure_city_screen(instance_index):
     """Ensures the game is on the main city screen. If the game is not open, it launches it.
 
@@ -99,18 +124,10 @@ def ensure_city_screen(instance_index):
             log_message(f"Game successfully launched on instance {instance_index}.", "success")
     else:
         log_message(f"Game already running on instance {instance_index}.", "info")
+
     # Step 2: Check if on main city screen
-    for attempt in range(1, MAIN_SCREEN_MAX_ATTEMPTS + 1):
-        stop_signal.check()
-        if is_game_on_city_screen(instance_index):
-            log_message("Successfully on main screen ('city')!", level="success")
-            return True
-        if is_game_on_world_screen(instance_index):
-            log_message("Game is on world screen.", level="info")
-            go_cityworld(instance_index)
-        else:
-            log_message(f"Not on main screen. Pressing back (Attempt {attempt}/{MAIN_SCREEN_MAX_ATTEMPTS}).", level="info")
-            press_android_back_button(instance_index)
+    if _reach_city_screen(instance_index, "Attempt"):
+        return True
 
     # If we reach here, we failed to get to the city screen. Restart the game once and retry.
     log_message("Could not reach city screen after all attempts. Restarting game and retrying...", level="warning")
@@ -122,17 +139,8 @@ def ensure_city_screen(instance_index):
         return False
 
     # Retry once more after restart
-    for attempt in range(1, MAIN_SCREEN_MAX_ATTEMPTS + 1):
-        stop_signal.check()
-        if is_game_on_city_screen(instance_index):
-            log_message("Successfully on main screen ('city')!", level="success")
-            return True
-        if is_game_on_world_screen(instance_index):
-            log_message("Game is on world screen.", level="info")
-            go_cityworld(instance_index)
-        else:
-            log_message(f"Not on main screen. Pressing back (Retry {attempt}/{MAIN_SCREEN_MAX_ATTEMPTS}).", level="info")
-            press_android_back_button(instance_index)
+    if _reach_city_screen(instance_index, "Retry"):
+        return True
 
     log_message("Failed to reach city screen even after restarting the game.", level="error")
     return False
@@ -148,6 +156,29 @@ def is_game_on_world_screen(instance_index):
         bool: True if on world screen, False otherwise.
     """
     return is_game_on_screen(instance_index, "world", "world")
+
+
+def _locate_template_center(template_name, screenshot_path, roi, gray, threshold):
+    """Find a template on a screenshot and return its center.
+
+    Args:
+        template_name (str): Template name in TEMPLATE_PATHS.
+        screenshot_path (str): Path to an existing screenshot.
+        roi (tuple or None): Region of interest (x, y, w, h).
+        gray (bool): Use gray-scale matching when True.
+        threshold (float): Minimum confidence threshold for a match.
+
+    Returns:
+        tuple or None: (cx, cy) center of the match, or None when not found.
+    """
+    template_path = get_template_path(template_name)
+    if not template_path:
+        return None
+    finder = find_gray_template_center_on_screen if gray else find_template_center_on_screen
+    found, center = finder(template_path, screenshot_path, threshold=threshold, roi=roi)
+    if not found or not center:
+        return None
+    return center[0], center[1]
 
 
 def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY, gray=False, screenshot_path=None, threshold=SCREEN_CHECK_THRESHOLD):
@@ -174,22 +205,16 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
     owned_screenshot = screenshot_path is None
     if screenshot_path is None:
         screenshot_path = take_screenshot(instance_index)
-    template_path = get_template_path(template_name)
-    if not screenshot_path or not template_path:
-        log_message(f"Could not get screenshot or template for '{template_name}'.", level="error")
+    if not screenshot_path:
+        log_message("Could not take a screenshot to search the templates.", level="error")
         return False
 
     try:
-        if gray:
-            found, center = find_gray_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
-        else:
-            found, center = find_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
-        if not found or not center:
+        center = _locate_template_center(template_name, screenshot_path, roi=roi, gray=gray, threshold=threshold)
+        if center is None:
             return False
-
-        cx, cy = center
-        click_on_coordinates(cx, cy, instance_index, delay=delay)
-        log_message(f"Template '{template_name}' found, clicking at ({cx}, {cy}).", level="success")
+        click_on_coordinates(center[0], center[1], instance_index, delay=delay)
+        log_message(f"Template '{template_name}' found, clicking at ({center[0]}, {center[1]}).", level="success")
         return True
     finally:
         if owned_screenshot:
@@ -221,18 +246,13 @@ def _click_template_repeatedly(
         bool: True when the template was found and all clicks were sent.
     """
     screenshot_path = take_screenshot(instance_index)
-    template_path = get_template_path(template_name)
-    if not screenshot_path or not template_path:
-        log_message(f"Could not get screenshot or template for '{template_name}'.", level="error")
-        delete_temp_screenshot(screenshot_path)
+    if not screenshot_path:
+        log_message("Could not take a screenshot to search the templates.", level="error")
         return False
 
     try:
-        if gray:
-            found, center = find_gray_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
-        else:
-            found, center = find_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
-        if not found or not center:
+        center = _locate_template_center(template_name, screenshot_path, roi=roi, gray=gray, threshold=threshold)
+        if center is None:
             return False
         for _ in range(clicks):
             click_on_coordinates(center[0], center[1], instance_index, delay=delay)
@@ -760,13 +780,11 @@ def merge_pet_adventure_chest_matches(chests, positions, chest_type, state):
     most frequent one, with "start" breaking ties over "ready" over "filling".
 
     Args:
-        chests (dict): Accumulator mapping position key -> chest dict.
+        chests (dict): Accumulator mapping position key -> chest dict. Updated
+            in place.
         positions (list): List of (x, y, w, h) template matches.
         chest_type (int): Chest type (1, 2 or 3).
         state (str): Chest state ("start", "ready" or "filling").
-
-    Returns:
-        dict: The updated chest accumulator.
     """
     for x, y, w, h in positions:
         key = (x // 10, y // 10)
@@ -792,7 +810,6 @@ def merge_pet_adventure_chest_matches(chests, positions, chest_type, state):
                 chest["state_counts"],
                 key=lambda s: (chest["state_counts"][s], PET_ADVENTURE_CHEST_STATE_PRECEDENCE[s]),
             )
-    return chests
 
 
 def detect_pet_adventure_chests(instance_index):
