@@ -430,7 +430,7 @@ class MultiInstanceToolController:
                     return True
 
                 # Retry emulator startup with exponential backoff
-                if not retry_operation(start_emulator, max_attempts=3, delay=5.0):
+                if not retry_operation(start_emulator, max_attempts=3, delay=5.0, retry_on_false=True):
                     self.log_message(f"Failed to start emulator on instance {index}. Closing any partial startup and trying next instance.", "error")
                     # Try to close the emulator if it was partially started
                     try:
@@ -451,7 +451,7 @@ class MultiInstanceToolController:
                 adb_timeout = 60  # 60 seconds max for ADB connection phase
 
                 # Reduce max attempts from 10 to 5 to avoid long hangs
-                if not retry_operation(connect_adb, max_attempts=5, delay=3.0):
+                if not retry_operation(connect_adb, max_attempts=5, delay=3.0, retry_on_false=True):
                     # Check if we've exceeded the timeout for ADB connection phase
                     if time.time() - adb_start_time > adb_timeout:
                         self.log_message(
@@ -475,7 +475,7 @@ class MultiInstanceToolController:
                         # Try force restart
                         if force_restart_emulator(index, self.multi_instance_manager):
                             # Try ADB connection again after restart
-                            if retry_operation(connect_adb, max_attempts=3, delay=2.0):
+                            if retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
                                 self.log_message(f"ADB connection successful after force restart for instance {index}.", "success")
                             else:
                                 self.log_message(f"ADB connection still failed after force restart for instance {index}. Re-queuing instance for retry.", "error")
@@ -495,7 +495,7 @@ class MultiInstanceToolController:
                             time.sleep(5)  # Wait for emulator to start
 
                             # Try ADB connection again after restart
-                            if retry_operation(connect_adb, max_attempts=3, delay=2.0):
+                            if retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
                                 self.log_message(f"ADB connection successful after manual restart for instance {index}.", "success")
                             else:
                                 self.log_message(f"ADB connection still failed after manual restart for instance {index}. Re-queuing instance for retry.", "error")
@@ -545,7 +545,7 @@ class MultiInstanceToolController:
                 game_launch_start_time = time.time()
                 game_launch_timeout = 120  # 120 seconds max for game launch phase
 
-                if not retry_operation(try_launch_game, max_attempts=3, delay=5.0):
+                if not retry_operation(try_launch_game, max_attempts=3, delay=5.0, retry_on_false=True):
                     # Check if we've exceeded the timeout for game launch phase
                     if time.time() - game_launch_start_time > game_launch_timeout:
                         self.log_message(
@@ -612,7 +612,7 @@ class MultiInstanceToolController:
                             if force_restart_emulator(index, self.multi_instance_manager):
                                 self.log_message(f"Emulator instance {index} restarted successfully during operation.", "success")
                                 # Re-verify ADB connection after restart
-                                if not retry_operation(connect_adb, max_attempts=3, delay=2.0):
+                                if not retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
                                     self.log_message(f"ADB connection failed after restart during operation for instance {index}. Closing instance.", "error")
                                     self._discard_active_instance(index)
                                     self.launch_next_instances()

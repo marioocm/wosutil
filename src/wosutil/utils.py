@@ -203,7 +203,13 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def retry_operation(operation, max_attempts: int = 3, delay: float = 1.0, exceptions: tuple = (Exception,)):
+def retry_operation(
+    operation,
+    max_attempts: int = 3,
+    delay: float = 1.0,
+    exceptions: tuple = (Exception,),
+    retry_on_false: bool = False,
+):
     """Retry an operation with exponential backoff.
 
     Args:
@@ -211,6 +217,8 @@ def retry_operation(operation, max_attempts: int = 3, delay: float = 1.0, except
         max_attempts (int): Maximum number of attempts.
         delay (float): Initial delay between attempts.
         exceptions (tuple): Exceptions to catch and retry.
+        retry_on_false (bool): Retry when the operation returns exactly
+            ``False``. The final ``False`` is returned after all attempts.
 
     Returns:
         Any: Result of the operation.
@@ -218,22 +226,31 @@ def retry_operation(operation, max_attempts: int = 3, delay: float = 1.0, except
     Raises:
         Exception: Last exception if all attempts fail.
     """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+    if delay < 0:
+        raise ValueError("delay must not be negative")
+
     last_exception = None
 
     for attempt in range(max_attempts):
         try:
-            return operation()
+            result = operation()
+            if result is not False or not retry_on_false or attempt == max_attempts - 1:
+                return result
         except ToolStopped:
             raise
         except exceptions as e:
             last_exception = e
             if attempt < max_attempts - 1:
                 time.sleep(delay * (2**attempt))  # Exponential backoff
+        else:
+            if attempt < max_attempts - 1:
+                time.sleep(delay * (2**attempt))
 
     if last_exception:
         raise last_exception
-    else:
-        raise Exception("Operation failed after all attempts")
+    return False
 
 
 def _terminate_process_tree(process):

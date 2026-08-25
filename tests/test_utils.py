@@ -131,6 +131,31 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(result, "success")
         self.assertEqual(mock_operation.call_count, 3)
 
+    def test_retry_operation_can_retry_false_results(self):
+        """Boolean failures are retried when explicitly requested."""
+        mock_operation = MagicMock(side_effect=[False, False, "success"])
+
+        result = retry_operation(mock_operation, max_attempts=3, delay=0, retry_on_false=True)
+
+        self.assertEqual(result, "success")
+        self.assertEqual(mock_operation.call_count, 3)
+
+    def test_retry_operation_returns_false_after_false_results_are_exhausted(self):
+        """The final boolean failure is returned instead of raised."""
+        mock_operation = MagicMock(return_value=False)
+
+        result = retry_operation(mock_operation, max_attempts=3, delay=0, retry_on_false=True)
+
+        self.assertFalse(result)
+        self.assertEqual(mock_operation.call_count, 3)
+
+    def test_retry_operation_rejects_invalid_configuration(self):
+        """Invalid retry settings fail early with a useful error."""
+        with self.assertRaises(ValueError):
+            retry_operation(lambda: True, max_attempts=0)
+        with self.assertRaises(ValueError):
+            retry_operation(lambda: True, delay=-1)
+
     def test_retry_operation_all_failures(self):
         """Test retry_operation with all failures."""
         mock_operation = MagicMock(side_effect=Exception("fail"))

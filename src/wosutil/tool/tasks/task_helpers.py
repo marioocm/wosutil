@@ -100,6 +100,7 @@ def ensure_city_screen(instance_index):
             lambda: launch_and_verify_game(instance_index),
             max_attempts=3,
             delay=2.0,
+            retry_on_false=True,
         ):
             log_message(f"Failed to launch game after 3 attempts on instance {instance_index}. Restarting emulator...", "error")
             if multi_instance_manager:
