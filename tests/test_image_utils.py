@@ -339,6 +339,37 @@ class TestImageUtils(unittest.TestCase):
         self.assertIsNone(position)
 
 
+class TestTemplateConfidence(unittest.TestCase):
+    """Template NMS must prefer the strongest overlapping match."""
+
+    def test_nms_prefers_higher_confidence_box(self):
+        """A stronger overlapping detection is kept over a weaker one."""
+        boxes = [(10, 10, 20, 20), (12, 12, 20, 20)]
+
+        matches = non_max_suppression(boxes, overlap_thresh=0.5, scores=[0.75, 0.95])
+
+        self.assertEqual(matches, [boxes[1]])
+
+    def test_find_multiple_templates_uses_match_confidence(self):
+        """The best score survives when several response pixels overlap."""
+        screenshot = np.zeros((12, 12, 3), dtype=np.uint8)
+        template = np.zeros((10, 10, 3), dtype=np.uint8)
+        response = np.array(
+            [
+                [0.95, 0.90, 0.80],
+                [0.85, 0.70, 0.60],
+                [0.55, 0.50, 0.40],
+            ],
+            dtype=np.float32,
+        )
+        with patch("wosutil.emulator.image_utils.cv2.imread", return_value=screenshot), patch("wosutil.emulator.image_utils.load_template", return_value=template), patch(
+            "wosutil.emulator.image_utils.cv2.matchTemplate", return_value=response
+        ):
+            matches = find_multiple_templates("template.png", "screenshot.png", threshold=0.5)
+
+        self.assertEqual(matches, [(0, 0, 10, 10)])
+
+
 class TestTimeRegex(unittest.TestCase):
     """Test cases for the timer regex used in OCR."""
 

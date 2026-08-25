@@ -9,7 +9,7 @@ import re
 import sys
 import time
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Tuple, cast
+from typing import Dict, List, Optional, Sequence, Tuple, cast
 
 import cv2
 import numpy as np
@@ -204,13 +204,21 @@ def find_multiple_templates(
         h, w = template.shape[:2]
 
         for pt in zip(*locations[::-1]):
+            match_x, match_y = int(pt[0]), int(pt[1])
             if roi:
-                pt = (pt[0] + roi[0], pt[1] + roi[1])
-            matches.append((pt[0], pt[1], w, h))
+                match_x += roi[0]
+                match_y += roi[1]
+            score = float(res[int(pt[1]), int(pt[0])])
+            matches.append(((match_x, match_y, w, h), score))
 
-        # Apply non-maximum suppression
-        matches_nms = non_max_suppression(matches, overlap_thresh=nms_threshold)
-        return matches_nms
+        # Apply non-maximum suppression, keeping the strongest match in each
+        # overlapping group rather than whichever box happens to be last.
+        matches_nms = non_max_suppression(
+            [box for box, _score in matches],
+            overlap_thresh=nms_threshold,
+            scores=[score for _box, score in matches],
+        )
+        return sorted(matches_nms, key=lambda box: (box[1], box[0]))
 
     except Exception as e:
         msg = f"Error in multiple template matching: {e}"
@@ -218,25 +226,30 @@ def find_multiple_templates(
         return []
 
 
-def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: float = 0.5) -> List[Tuple[int, int, int, int]]:
+def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: float = 0.5, scores: Optional[Sequence[float]] = None) -> List[Tuple[int, int, int, int]]:
     """Applies non-maximum suppression to avoid overlapping boxes.
 
     Args:
         boxes (list): List of (x, y, w, h) tuples.
         overlap_thresh (float): Overlap threshold for suppression.
+        scores (sequence, optional): Match confidence for each box. When
+            provided, higher-confidence boxes are kept before lower-confidence
+            overlapping boxes.
 
     Returns:
         list: Filtered list of boxes after NMS.
     """
     if len(boxes) == 0:
         return []
+    if scores is not None and len(scores) != len(boxes):
+        raise ValueError("scores must contain one value per box")
     boxes_np = np.array(boxes)
     x1 = boxes_np[:, 0]
     y1 = boxes_np[:, 1]
     x2 = x1 + boxes_np[:, 2]
     y2 = y1 + boxes_np[:, 3]
     areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(y2)
+    idxs = np.argsort(np.asarray(scores) if scores is not None else y2)
     pick = []
     while len(idxs) > 0:
         last = idxs[-1]
