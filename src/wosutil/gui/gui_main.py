@@ -19,7 +19,9 @@ from wosutil.emulator.emulator_manager import set_active_backend
 from wosutil.gui.gui_dialogs import center_window_on_screen, show_centered_dialog
 from wosutil.preferences import (
     get_emulator,
+    get_emulator_paths,
     get_requirements_reminder_seen,
+    load_preferences,
     mark_requirements_reminder_seen,
     save_emulator,
 )
@@ -192,13 +194,15 @@ def run_gui():
         mark_requirements_reminder_seen()
 
     # --- Emulator selection (first run) ---
-    emulator = get_emulator()
+    preferences = load_preferences()
+    emulator_paths = get_emulator_paths(preferences)
+    emulator = get_emulator(preferences)
     if emulator is None:
-        emulator = _ask_emulator(window, detect_installed_emulators(), log_message)
+        emulator = _ask_emulator(window, detect_installed_emulators(emulator_paths), log_message)
         save_emulator(emulator)
 
     log_message(f"Initializing emulator backend ({emulator})...", "info")
-    multi_instance_manager = create_backend(emulator, log_message)
+    multi_instance_manager = create_backend(emulator, log_message, emulator_paths=emulator_paths)
     set_active_backend(multi_instance_manager)
     set_multi_instance_manager(multi_instance_manager)
 
@@ -207,7 +211,7 @@ def run_gui():
     # re-create the backend and re-enumerate instances without a restart.
     emulator_state = {"backend": multi_instance_manager}
 
-    def switch_emulator(new_emulator):
+    def switch_emulator(new_emulator, new_emulator_paths=None):
         """Apply an emulator change made in the Preferences tab.
 
         Refuses while the tool is running (active instances/queue run against
@@ -215,7 +219,10 @@ def run_gui():
         active manager and forces an instance refresh.
 
         Args:
-            new_emulator (str): Emulator code, "mumu" or "bluestacks".
+            new_emulator (str): Emulator code, "mumu", "bluestacks" or
+                "ldplayer".
+            new_emulator_paths (dict, optional): Configured executable and
+                instance paths. Defaults to the persisted preferences.
         """
         global multi_instance_manager
 
@@ -225,7 +232,8 @@ def run_gui():
         label = _EMULATOR_LABELS.get(new_emulator, new_emulator)
         log_message(f"Switching emulator to {label}...", "info")
         save_emulator(new_emulator)
-        multi_instance_manager = create_backend(new_emulator, log_message)
+        emulator_paths = new_emulator_paths or get_emulator_paths()
+        multi_instance_manager = create_backend(new_emulator, log_message, emulator_paths=emulator_paths)
         set_active_backend(multi_instance_manager)
         set_multi_instance_manager(multi_instance_manager)
         emulator_state["backend"] = multi_instance_manager

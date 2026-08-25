@@ -25,15 +25,19 @@ from wosutil.config import (
     ADB_PORT,
     ADB_PORT_STEP,
     BLUESTACKS_ADB_PATH,
+    BLUESTACKS_BASE_PATH,
     BLUESTACKS_CONF,
     BLUESTACKS_HD_PLAYER_PATH,
     LDPLAYER_ADB_PATH,
     LDPLAYER_ADB_PORT,
     LDPLAYER_ADB_PORT_STEP,
+    LDPLAYER_BASE_PATH,
     LDPLAYER_CONSOLE_PATH,
     LDPLAYER_INSTANCE_CONFIG_DIR,
     LDPLAYER_PLAYER_PATH,
     MUMU_ADB_PATH,
+    MUMU_BASE_PATH,
+    MUMU_INSTANCE_BASE_PATH,
     MUMU_MULTI_PLAYER_PATH,
 )
 from wosutil.emulator.instances_controller import MultiInstanceManager, save_instance_cache
@@ -151,7 +155,8 @@ def parse_ldplayer_config(config_path):
     """
     try:
         with open(config_path, encoding="utf-8") as f:
-            return json.load(f)
+            values = json.load(f)
+            return values if isinstance(values, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -192,12 +197,38 @@ def list_ldplayer_instances(config_dir=LDPLAYER_INSTANCE_CONFIG_DIR):
 
 
 def _iter_processes():
-    """Yield (process, name, joined cmdline) for every inspectable process."""
+    """Yield (process, name, argv) for every inspectable process."""
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            yield proc, proc.info["name"] or "", " ".join(proc.info["cmdline"] or [])
+            yield proc, proc.info["name"] or "", proc.info["cmdline"] or []
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
+
+
+def _is_process_named(name, expected_name):
+    """Compare process basenames without accepting similarly named programs."""
+    return os.path.splitext(os.path.basename(name))[0].casefold() == expected_name.casefold()
+
+
+def _has_process_option(cmdline, option, expected_value):
+    """Return whether an option has the exact expected value in an argv list.
+
+    Supports the forms used by emulator processes: ``--option value``,
+    ``--option=value`` and the equivalent form without leading dashes.
+    Exact token comparison prevents instance ``1`` from matching ``10``.
+    """
+    option = option.lstrip("-").casefold()
+    expected_value = str(expected_value).casefold()
+    for position, argument in enumerate(cmdline):
+        normalized = str(argument).strip('"').lstrip("-")
+        key, separator, value = normalized.partition("=")
+        if separator and key.casefold() == option and value.casefold() == expected_value:
+            return True
+        if not separator and normalized.casefold() == option and position + 1 < len(cmdline):
+            next_value = str(cmdline[position + 1]).strip('"').casefold()
+            if next_value == expected_value:
+                return True
+    return False
 
 
 class EmulatorBackend(ABC):
@@ -271,6 +302,12 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
 
     name = EMULATOR_MUMU
 
+    def __init__(self, log_func=None, manager_path=MUMU_MULTI_PLAYER_PATH, adb_path=MUMU_ADB_PATH, instance_base_path=MUMU_INSTANCE_BASE_PATH):
+        """Initialize MuMu with the configured executable and instance paths."""
+        super().__init__(log_func=log_func, multi_player_path=manager_path, instance_base_path=instance_base_path)
+        self.manager_path = manager_path
+        self.adb_path = adb_path
+
     def get_serial(self, instance_index):
         """Return the MuMu ADB serial for the instance index.
 
@@ -293,27 +330,27 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
         Returns:
             list: Full argv, e.g. [MuMuManager.exe, "adb", "-v", "0", ...].
         """
-        return [MUMU_MULTI_PLAYER_PATH, "adb", "-v", str(instance_index)] + command_parts
+        return [self.manager_path, "adb", "-v", str(instance_index)] + command_parts
 
     def list_devices(self):
         """List devices using MuMu's bundled adb binary."""
-        result = run_process_robust([MUMU_ADB_PATH, "devices"], timeout=15)
+        result = run_process_robust([self.adb_path, "devices"], timeout=15)
         if not result:
             return {}
         return parse_devices_output(result.stdout)
 
     def connect(self, serial):
         """Connect the MuMu adb server to the given serial."""
-        run_process_robust([MUMU_ADB_PATH, "connect", serial], timeout=10)
+        run_process_robust([self.adb_path, "connect", serial], timeout=10)
 
     def kill_server(self):
         """Stop the MuMu adb server."""
-        run_process_robust([MUMU_ADB_PATH, "kill-server"], timeout=10)
+        run_process_robust([self.adb_path, "kill-server"], timeout=10)
 
     def restart_server(self):
         """Restart the MuMu adb server."""
         self.kill_server()
-        run_process_robust([MUMU_ADB_PATH, "start-server"], timeout=10)
+        run_process_robust([self.adb_path, "start-server"], timeout=10)
 
     def check_adb_access(self):
         """MuMu does not restrict out-of-the-box ADB usage."""
@@ -405,7 +442,7 @@ class BlueStacksBackend(EmulatorBackend):
     def _matching_processes(self, instance_index):
         """Return the HD-Player processes launched for an instance."""
         instance_name = self._instance_name(instance_index)
-        return [proc for proc, name, cmdline in _iter_processes() if "HD-Player" in name and "--instance" in cmdline and instance_name in cmdline]
+        return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "HD-Player") and _has_process_option(cmdline, "instance", instance_name)]
 
     def _is_instance_running(self, instance_index):
         """Check whether the instance is booting/running via its processes."""
@@ -598,8 +635,7 @@ class LDPlayerBackend(EmulatorBackend):
 
     def _matching_processes(self, instance_index):
         """Return the dnplayer processes launched for an instance."""
-        marker = f"index={instance_index}"
-        return [proc for proc, name, cmdline in _iter_processes() if "dnplayer" in name and marker in cmdline]
+        return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "dnplayer") and _has_process_option(cmdline, "index", instance_index)]
 
     def _is_instance_running(self, instance_index):
         """Check whether the instance is running via its dnplayer process."""
@@ -693,34 +729,75 @@ class LDPlayerBackend(EmulatorBackend):
         return [warning]
 
 
-def detect_installed_emulators():
+def _configured_path(emulator_paths, emulator, key, default):
+    """Return one normalized path from persisted emulator settings."""
+    if isinstance(emulator_paths, dict):
+        emulator_config = emulator_paths.get(emulator, {})
+        if isinstance(emulator_config, dict):
+            value = emulator_config.get(key)
+            if isinstance(value, str) and value.strip():
+                return os.path.normpath(value.strip())
+    return default
+
+
+def detect_installed_emulators(emulator_paths=None):
     """Return the emulators installed, in a stable order.
+
+    Args:
+        emulator_paths (dict, optional): Configured paths by emulator. When
+            omitted, the standard installation paths are used.
 
     Returns:
         list: e.g. ["mumu", "bluestacks", "ldplayer"]; empty if none is detected.
     """
+    mumu_base_path = _configured_path(emulator_paths, EMULATOR_MUMU, "base_path", MUMU_BASE_PATH)
+    bluestacks_conf = _configured_path(emulator_paths, EMULATOR_BLUESTACKS, "config_path", BLUESTACKS_CONF)
+    ldplayer_base_path = _configured_path(emulator_paths, EMULATOR_LDPLAYER, "base_path", LDPLAYER_BASE_PATH)
     installed = []
-    if os.path.exists(MUMU_MULTI_PLAYER_PATH):
+    if os.path.exists(os.path.join(mumu_base_path, "MuMuManager.exe")):
         installed.append(EMULATOR_MUMU)
-    if os.path.exists(BLUESTACKS_CONF):
+    if os.path.exists(bluestacks_conf):
         installed.append(EMULATOR_BLUESTACKS)
-    if os.path.exists(LDPLAYER_CONSOLE_PATH):
+    if os.path.exists(os.path.join(ldplayer_base_path, "ldconsole.exe")):
         installed.append(EMULATOR_LDPLAYER)
     return installed
 
 
-def create_backend(emulator=None, log_func=None):
+def create_backend(emulator=None, log_func=None, emulator_paths=None):
     """Create an emulator backend by name (defaults to MuMu).
 
     Args:
         emulator (str, optional): "mumu", "bluestacks", "ldplayer" or None.
         log_func (callable, optional): Logging function.
+        emulator_paths (dict, optional): Configured paths by emulator.
 
     Returns:
         EmulatorBackend: The chosen backend instance.
     """
+    mumu_base_path = _configured_path(emulator_paths, EMULATOR_MUMU, "base_path", MUMU_BASE_PATH)
+    mumu_instance_base_path = _configured_path(emulator_paths, EMULATOR_MUMU, "instance_base_path", MUMU_INSTANCE_BASE_PATH)
+    bluestacks_base_path = _configured_path(emulator_paths, EMULATOR_BLUESTACKS, "base_path", BLUESTACKS_BASE_PATH)
+    bluestacks_conf = _configured_path(emulator_paths, EMULATOR_BLUESTACKS, "config_path", BLUESTACKS_CONF)
+    ldplayer_base_path = _configured_path(emulator_paths, EMULATOR_LDPLAYER, "base_path", LDPLAYER_BASE_PATH)
+    ldplayer_config_dir = _configured_path(emulator_paths, EMULATOR_LDPLAYER, "instance_config_dir", LDPLAYER_INSTANCE_CONFIG_DIR)
     if emulator == EMULATOR_BLUESTACKS:
-        return BlueStacksBackend(log_func=log_func)
+        return BlueStacksBackend(
+            log_func=log_func,
+            conf_path=bluestacks_conf,
+            adb_path=os.path.join(bluestacks_base_path, "HD-Adb.exe"),
+            player_path=os.path.join(bluestacks_base_path, "HD-Player.exe"),
+        )
     if emulator == EMULATOR_LDPLAYER:
-        return LDPlayerBackend(log_func=log_func)
-    return MuMuBackend(log_func=log_func)
+        return LDPlayerBackend(
+            log_func=log_func,
+            config_dir=ldplayer_config_dir,
+            console_path=os.path.join(ldplayer_base_path, "ldconsole.exe"),
+            adb_path=os.path.join(ldplayer_base_path, "adb.exe"),
+            player_path=os.path.join(ldplayer_base_path, "dnplayer.exe"),
+        )
+    return MuMuBackend(
+        log_func=log_func,
+        manager_path=os.path.join(mumu_base_path, "MuMuManager.exe"),
+        adb_path=os.path.join(mumu_base_path, "adb.exe"),
+        instance_base_path=mumu_instance_base_path,
+    )

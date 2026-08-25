@@ -47,7 +47,6 @@ def _templates_dir() -> str:
 
 
 # --- Paths Configuration ---
-# IMPORTANT: Update these paths to match your MuMu Player installation
 MUMU_BASE_PATH = os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "nx_main")
 MUMU_ADB_PATH = os.path.join(MUMU_BASE_PATH, "adb.exe")
 MUMU_MULTI_PLAYER_PATH = os.path.join(MUMU_BASE_PATH, "MuMuManager.exe")

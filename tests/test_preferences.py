@@ -7,9 +7,11 @@ import unittest
 from unittest.mock import patch
 
 from wosutil.preferences import (
+    DEFAULT_EMULATOR_PATHS,
     GATHER_RESOURCES,
     MYSTERY_SHOP_LEVEL_FREE,
     MYSTERY_SHOP_LEVELS,
+    get_emulator_paths,
     get_gather_resource,
     get_kill_beast_march,
     get_kill_beast_march_assignment,
@@ -37,6 +39,24 @@ class TestPreferences(unittest.TestCase):
         import shutil
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_emulator_paths_default_to_standard_locations(self):
+        """Missing emulator path settings use the standard locations."""
+        self.assertEqual(get_emulator_paths({}), DEFAULT_EMULATOR_PATHS)
+
+    def test_emulator_paths_normalize_valid_values_and_ignore_invalid_values(self):
+        """Custom paths are normalized while malformed values use defaults."""
+        preferences = {
+            "emulator_paths": {
+                "mumu": {"base_path": "D:/MuMu/../MuMuPlayer", "instance_base_path": 123},
+                "bluestacks": {"base_path": "  E:/BlueStacks  ", "config_path": ""},
+            }
+        }
+        paths = get_emulator_paths(preferences)
+        self.assertEqual(paths["mumu"]["base_path"], os.path.normpath("D:/MuMuPlayer"))
+        self.assertEqual(paths["mumu"]["instance_base_path"], DEFAULT_EMULATOR_PATHS["mumu"]["instance_base_path"])
+        self.assertEqual(paths["bluestacks"]["base_path"], os.path.normpath("E:/BlueStacks"))
+        self.assertEqual(paths["bluestacks"]["config_path"], DEFAULT_EMULATOR_PATHS["bluestacks"]["config_path"])
 
     def test_get_task_priorities_empty(self):
         """Test that missing preferences yield no overrides."""

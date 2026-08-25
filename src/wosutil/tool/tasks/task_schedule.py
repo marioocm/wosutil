@@ -9,10 +9,16 @@ switches the profile of an instance, the tasks that exist in both profiles
 keep their remembered schedule and only the new ones start from scratch.
 """
 
+import math
 import time
 
 from wosutil.config import TASK_SCHEDULE_FILE
 from wosutil.utils import load_json_file, save_json_file
+
+
+def _is_finite_number(value):
+    """Return whether a value is a real, finite schedule number."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def load_task_schedule():
@@ -57,7 +63,7 @@ def load_saved_tasks(schedule, instance_index):
         return {}
     saved_tasks = {}
     for task_id, entry in instance_entry.items():
-        if isinstance(entry, dict) and isinstance(entry.get("next_run_time"), (int, float)):
+        if isinstance(entry, dict) and _is_finite_number(entry.get("next_run_time")):
             saved_tasks[task_id] = entry
     return saved_tasks
 
@@ -78,15 +84,15 @@ def build_task_state(sorted_task_defs, saved_tasks, now=None):
     Returns:
         list: Task dicts (copies of the definitions) with 'next_run_time' set.
     """
-    now = now or time.time()
+    now = now if _is_finite_number(now) else time.time()
     tasks = []
     for task_def in sorted_task_defs:
         task = task_def.copy()
         saved = saved_tasks.get(task["id"])
-        if saved and isinstance(saved.get("next_run_time"), (int, float)):
+        if saved and _is_finite_number(saved.get("next_run_time")):
             task["next_run_time"] = float(saved["next_run_time"])
             saved_reschedule = saved.get("reschedule_seconds")
-            if isinstance(saved_reschedule, (int, float)) and saved_reschedule > 0:
+            if _is_finite_number(saved_reschedule) and saved_reschedule > 0:
                 task["reschedule_seconds"] = float(saved_reschedule)
         else:
             task["next_run_time"] = now
@@ -103,10 +109,19 @@ def snapshot_instance_schedule(tasks):
     Returns:
         dict: Mapping of task id -> {"next_run_time", "reschedule_seconds"}.
     """
-    return {
-        task["id"]: {
-            "next_run_time": task.get("next_run_time", time.time()),
-            "reschedule_seconds": task.get("reschedule_seconds", 3600),
+    snapshot = {}
+    for task in tasks:
+        task_id = task.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        next_run_time = task.get("next_run_time")
+        if not _is_finite_number(next_run_time):
+            next_run_time = time.time()
+        reschedule_seconds = task.get("reschedule_seconds")
+        if not _is_finite_number(reschedule_seconds) or reschedule_seconds <= 0:
+            reschedule_seconds = 3600
+        snapshot[task_id] = {
+            "next_run_time": next_run_time,
+            "reschedule_seconds": reschedule_seconds,
         }
-        for task in tasks
-    }
+    return snapshot

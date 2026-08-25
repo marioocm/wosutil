@@ -7,6 +7,7 @@ files for screenshots. The image_utils functions expect temporary file
 paths and do not delete the files themselves.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -143,7 +144,7 @@ def load_json_file(file_path: str, default_value: Any = None) -> Any:
 
 
 def save_json_file(file_path: str, data: Any, indent: int = 2) -> bool:
-    """Save data to a JSON file with error handling.
+    """Save data to a JSON file atomically with error handling.
 
     Args:
         file_path (str): Path to the JSON file.
@@ -153,18 +154,37 @@ def save_json_file(file_path: str, data: Any, indent: int = 2) -> bool:
     Returns:
         bool: True if saved successfully.
     """
+    temporary_path = None
     try:
         # Ensure directory exists
         directory = os.path.dirname(file_path)
         if directory and not ensure_directory_exists(directory):
             return False
 
-        with open(file_path, "w", encoding="utf-8") as f:
+        target_path = os.path.abspath(file_path)
+        target_directory = os.path.dirname(target_path)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target_directory,
+            prefix=f".{os.path.basename(target_path)}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            temporary_path = f.name
             json.dump(data, f, indent=indent, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary_path, target_path)
+        temporary_path = None
         return True
     except Exception as e:
         logging.error(f"Failed to save JSON file {file_path}: {e}")
         return False
+    finally:
+        if temporary_path:
+            with contextlib.suppress(OSError):
+                os.remove(temporary_path)
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -183,7 +203,13 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def retry_operation(operation, max_attempts: int = 3, delay: float = 1.0, exceptions: tuple = (Exception,)):
+def retry_operation(
+    operation,
+    max_attempts: int = 3,
+    delay: float = 1.0,
+    exceptions: tuple = (Exception,),
+    retry_on_false: bool = False,
+):
     """Retry an operation with exponential backoff.
 
     Args:
@@ -191,6 +217,8 @@ def retry_operation(operation, max_attempts: int = 3, delay: float = 1.0, except
         max_attempts (int): Maximum number of attempts.
         delay (float): Initial delay between attempts.
         exceptions (tuple): Exceptions to catch and retry.
+        retry_on_false (bool): Retry when the operation returns exactly
+            ``False``. The final ``False`` is returned after all attempts.
 
     Returns:
         Any: Result of the operation.
@@ -198,22 +226,31 @@ def retry_operation(operation, max_attempts: int = 3, delay: float = 1.0, except
     Raises:
         Exception: Last exception if all attempts fail.
     """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+    if delay < 0:
+        raise ValueError("delay must not be negative")
+
     last_exception = None
 
     for attempt in range(max_attempts):
         try:
-            return operation()
+            result = operation()
+            if result is not False or not retry_on_false or attempt == max_attempts - 1:
+                return result
         except ToolStopped:
             raise
         except exceptions as e:
             last_exception = e
             if attempt < max_attempts - 1:
                 time.sleep(delay * (2**attempt))  # Exponential backoff
+        else:
+            if attempt < max_attempts - 1:
+                time.sleep(delay * (2**attempt))
 
     if last_exception:
         raise last_exception
-    else:
-        raise Exception("Operation failed after all attempts")
+    return False
 
 
 def _terminate_process_tree(process):

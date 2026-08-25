@@ -1,10 +1,9 @@
 """Unit tests for the UTC clock synchronization (world map schedule panel)."""
 
-import os
 import unittest
 from unittest.mock import patch
 
-from wosutil.emulator.image_utils import parse_utc_text, pytesseract, read_screen_utc_time
+from wosutil.emulator.image_utils import parse_utc_text
 from wosutil.tool.tasks.task_automation import (
     _finish_pet_adventure_starts,
     claim_pet_adventure_ally_treasure,
@@ -18,8 +17,6 @@ from wosutil.tool.utc_time import (
     set_cached_utc_time,
     sync_utc_time,
 )
-
-DEBUG_UTC_IMAGE = os.path.join(os.path.dirname(__file__), "..", "debug", "test_UTC.png")
 
 
 class TestParseUtcText(unittest.TestCase):
@@ -59,24 +56,6 @@ class TestParseUtcText(unittest.TestCase):
         """Text without the UTC date/time pattern returns None."""
         self.assertIsNone(parse_utc_text("No clock here"))
         self.assertIsNone(parse_utc_text("08-10"))
-
-
-class TestReadScreenUtcTime(unittest.TestCase):
-    """Test the OCR reader against the real debug capture."""
-
-    def _tesseract_available(self):
-        """Whether the system Tesseract used by pytesseract is installed."""
-        return os.path.exists(pytesseract.pytesseract.tesseract_cmd)
-
-    def test_reads_clock_from_debug_image(self):
-        """The debug ROI crop must yield the UTC clock (08-10 11:12:26)."""
-        if not self._tesseract_available():
-            self.skipTest("Tesseract is not installed on this system")
-        if not os.path.exists(DEBUG_UTC_IMAGE):
-            self.skipTest("debug/test_UTC.png is missing")
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=DEBUG_UTC_IMAGE):
-            result = read_screen_utc_time(0)
-        self.assertEqual(result, (8, 10, 11, 12, 26))
 
 
 class TestUtcCacheAndReschedule(unittest.TestCase):

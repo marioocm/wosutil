@@ -18,13 +18,17 @@ logger = logging.getLogger(__name__)
 class MultiInstanceManager:
     """Manages multiple MuMu emulator instances: listing, starting, and stopping."""
 
-    def __init__(self, log_func=None):
+    def __init__(self, log_func=None, multi_player_path=MUMU_MULTI_PLAYER_PATH, instance_base_path=MUMU_INSTANCE_BASE_PATH):
         """Initializes the MultiInstanceManager.
 
         Args:
             log_func (callable): Optional logging function.
+            multi_player_path (str): Path to MuMuManager.exe.
+            instance_base_path (str): Directory containing MuMu instance folders.
         """
         self.log = log_func or logger.info
+        self.multi_player_path = multi_player_path
+        self.instance_base_path = instance_base_path
         self.instances = []
 
     def _execute_mumu_cli(self, args):
@@ -36,10 +40,10 @@ class MultiInstanceManager:
         Returns:
             str: The stdout output of the command.
         """
-        if not os.path.exists(MUMU_MULTI_PLAYER_PATH):
-            self.log(f"MuMuManager.exe not found at {MUMU_MULTI_PLAYER_PATH}", "error")
+        if not os.path.exists(self.multi_player_path):
+            self.log(f"MuMuManager.exe not found at {self.multi_player_path}", "error")
             return ""
-        command = [MUMU_MULTI_PLAYER_PATH, "api"] + args
+        command = [self.multi_player_path, "api"] + args
         try:
             result = run_process_robust(command, timeout=30)
             if not result:
@@ -67,13 +71,13 @@ class MultiInstanceManager:
             guess (``MuMuPlayerGlobal-12.0-{idx}``) is returned when no folder
             matches, so a missing file still surfaces as a warning.
         """
-        if not os.path.isdir(MUMU_INSTANCE_BASE_PATH):
-            return os.path.join(MUMU_INSTANCE_BASE_PATH, f"MuMuPlayerGlobal-12.0-{idx}", "configs", "extra_config.json")
+        if not os.path.isdir(self.instance_base_path):
+            return os.path.join(self.instance_base_path, f"MuMuPlayerGlobal-12.0-{idx}", "configs", "extra_config.json")
         try:
-            version_dir = next(folder for folder in os.listdir(MUMU_INSTANCE_BASE_PATH) if re.fullmatch(rf"MuMuPlayerGlobal-[\d.]+-{idx}", folder))
+            version_dir = next(folder for folder in os.listdir(self.instance_base_path) if re.fullmatch(rf"MuMuPlayerGlobal-[\d.]+-{idx}", folder))
         except StopIteration:
             version_dir = f"MuMuPlayerGlobal-12.0-{idx}"
-        return os.path.join(MUMU_INSTANCE_BASE_PATH, version_dir, "configs", "extra_config.json")
+        return os.path.join(self.instance_base_path, version_dir, "configs", "extra_config.json")
 
     def get_instances(self):
         """Retrieves the list of emulator instances and their names.
@@ -180,4 +184,17 @@ def load_instance_cache():
     instances = load_json_file(INSTANCE_CACHE_FILE, default_value=[])
     if not isinstance(instances, list):
         return []
-    return instances
+    valid_instances = []
+    seen_indices = set()
+    for instance in instances:
+        if not isinstance(instance, dict):
+            continue
+        index = instance.get("index")
+        name = instance.get("name")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            continue
+        if not isinstance(name, str) or not name.strip() or index in seen_indices:
+            continue
+        valid_instances.append({"index": index, "name": name})
+        seen_indices.add(index)
+    return valid_instances
