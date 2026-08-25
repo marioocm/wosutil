@@ -170,6 +170,11 @@ class TestLDPlayerHelpers(unittest.TestCase):
         path = tempfile_helper("{not valid json")
         self.assertEqual(backends.parse_ldplayer_config(path), {})
 
+    def test_parse_non_object_config_returns_empty(self):
+        """A valid JSON list is not a usable LDPlayer configuration."""
+        path = tempfile_helper("[1, 2, 3]")
+        self.assertEqual(backends.parse_ldplayer_config(path), {})
+
     def test_list_instances_from_config_dir(self):
         """Instances are parsed from leidianN.config files, sorted by index."""
         config_dir = ldplayer_config_dir_helper({"leidian1.config": LDPLAYER_INSTANCE_1, "leidian0.config": LDPLAYER_INSTANCE_0, "other.txt": ""})

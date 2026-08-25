@@ -151,7 +151,8 @@ def parse_ldplayer_config(config_path):
     """
     try:
         with open(config_path, encoding="utf-8") as f:
-            return json.load(f)
+            values = json.load(f)
+            return values if isinstance(values, dict) else {}
     except (OSError, ValueError):
         return {}
 
