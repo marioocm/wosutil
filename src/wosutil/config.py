@@ -167,6 +167,8 @@ TEMPLATE_PATHS = {
     "intel_fcexploration": os.path.join(TEMPLATES_DIR, "world", "intel", "intel_fcexploration.png"),
     "intel_claim_all": os.path.join(TEMPLATES_DIR, "world", "intel", "intel_claim_all.png"),
     "exploration_victory": os.path.join(TEMPLATES_DIR, "world", "intel", "exploration_victory.png"),
+    # Task list (world map schedule panel)
+    "task_list_time": os.path.join(TEMPLATES_DIR, "world", "task_list_time.png"),
     # March
     "no_troops_left": os.path.join(TEMPLATES_DIR, "world", "march", "no_troops_left.png"),
     "send_march_screen": os.path.join(TEMPLATES_DIR, "world", "march", "send_march_screen.png"),
@@ -236,6 +238,7 @@ ROI = {
     "troop_promote_text": (3, 768, 717, 28),
     "train_troop_promote": (561, 394, 159, 274),
     "world_schedule_utc": (99, 0, 264, 42),
+    "task_list": (0, 396, 720, 883),
     "worldmap_search": (0, 843, 718, 435),
     "worldmap": (0, 95, 718, 1008),
     "gathering_tile_info": (117, 200, 488, 563),

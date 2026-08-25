@@ -1106,6 +1106,44 @@ def _find_fuzzy_text_matches(lines: List[List[Tuple[str, Tuple[int, int, int, in
     return matches
 
 
+def read_words_on_image(
+    img: Image.Image,
+    preprocess=None,
+    psm: int = _TEXT_PSM,
+) -> List[Tuple[str, Tuple[int, int, int, int]]]:
+    """Read every recognized word of an image with OCR, keeping its position.
+
+    Unlike :func:`read_text_lines_on_image`, which groups words into lines,
+    this returns the individual words so the caller can relate them by
+    position (e.g. a label and the value drawn to its right).
+
+    Args:
+        img (PIL.Image): Source image containing text.
+        preprocess (callable, optional): Image preprocessing function. The
+            standard text preprocessing is used when omitted. The preprocessing
+            may upscale the image by any factor; word boxes are always returned
+            in original image coordinates.
+        psm (int): Tesseract page segmentation mode.
+
+    Returns:
+        list: (word, (x, y, w, h)) pairs in original image coordinates.
+            Punctuation-only words are dropped.
+    """
+    processed = _preprocess_text_image(img) if preprocess is None else preprocess(img)
+    scale = processed.width / img.width if img.width else 1.0
+    data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT, config=f"--psm {psm}")
+    words: List[Tuple[str, Tuple[int, int, int, int]]] = []
+    for i, word in enumerate(data["text"]):
+        if not _normalize_word(word):
+            continue
+        x1 = int(data["left"][i] / scale)
+        y1 = int(data["top"][i] / scale)
+        x2 = int((data["left"][i] + data["width"][i]) / scale)
+        y2 = int((data["top"][i] + data["height"][i]) / scale)
+        words.append((word, (x1, y1, x2 - x1, y2 - y1)))
+    return words
+
+
 def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int, int, int]]]:
     """Read the text lines of an image with OCR.
 
