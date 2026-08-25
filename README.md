@@ -27,6 +27,8 @@ The distributed `WosUtil.exe` bundles Tesseract OCR, so nothing else needs to be
 
 Download the latest `WosUtil.exe` from the [Releases](https://github.com/marioocm/WosUtil/releases) page and run it. No installation required.
 
+For non-default emulator installations, set the matching `WOSUTIL_*` environment variable before launching the app: `WOSUTIL_MUMU_BASE_PATH`, `WOSUTIL_MUMU_INSTANCE_BASE_PATH`, `WOSUTIL_BLUESTACKS_BASE_PATH`, `WOSUTIL_BLUESTACKS_CONF`, `WOSUTIL_LDPLAYER_BASE_PATH`, or `WOSUTIL_LDPLAYER_INSTANCE_CONFIG_DIR`.
+
 ## Usage
 
 1. Select your emulator type in the Preferences tab.
