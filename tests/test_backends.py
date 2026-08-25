@@ -284,6 +284,48 @@ class TestBackendFactory(unittest.TestCase):
         self.assertIsInstance(backends.create_backend(), backends.MuMuBackend)
 
 
+class TestProcessMatching(unittest.TestCase):
+    """Process matching must select only the requested emulator instance."""
+
+    def test_ldplayer_index_one_does_not_match_index_ten(self):
+        """LDPlayer instance 1 is distinct from instance 10."""
+        backend = backends.LDPlayerBackend.__new__(backends.LDPlayerBackend)
+        backend._index_map = {1: {"index": 1, "display_name": "Instance 1"}}
+        expected = object()
+        equals_form = object()
+        wrong_instance = object()
+        with patch.object(
+            backends,
+            "_iter_processes",
+            return_value=[
+                (expected, "dnplayer.exe", ["dnplayer.exe", "--index", "1"]),
+                (equals_form, "dnplayer.exe", ["dnplayer.exe", "--index=1"]),
+                (wrong_instance, "dnplayer.exe", ["dnplayer.exe", "--index", "10"]),
+            ],
+        ):
+            matches = backend._matching_processes(1)
+
+        self.assertEqual(matches, [expected, equals_form])
+
+    def test_bluestacks_instance_name_is_compared_as_an_argument(self):
+        """A similarly named BlueStacks instance is not selected."""
+        backend = backends.BlueStacksBackend.__new__(backends.BlueStacksBackend)
+        backend._index_map = {0: {"name": "Pie64"}}
+        expected = object()
+        wrong_instance = object()
+        with patch.object(
+            backends,
+            "_iter_processes",
+            return_value=[
+                (expected, "HD-Player.exe", ["HD-Player.exe", "--instance", "Pie64"]),
+                (wrong_instance, "HD-Player.exe", ["HD-Player.exe", "--instance", "Pie640"]),
+            ],
+        ):
+            matches = backend._matching_processes(0)
+
+        self.assertEqual(matches, [expected])
+
+
 class TestActiveBackend(unittest.TestCase):
     """Tests for the emulator_manager active backend delegation."""
 

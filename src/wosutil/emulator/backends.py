@@ -192,12 +192,38 @@ def list_ldplayer_instances(config_dir=LDPLAYER_INSTANCE_CONFIG_DIR):
 
 
 def _iter_processes():
-    """Yield (process, name, joined cmdline) for every inspectable process."""
+    """Yield (process, name, argv) for every inspectable process."""
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            yield proc, proc.info["name"] or "", " ".join(proc.info["cmdline"] or [])
+            yield proc, proc.info["name"] or "", proc.info["cmdline"] or []
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
+
+
+def _is_process_named(name, expected_name):
+    """Compare process basenames without accepting similarly named programs."""
+    return os.path.splitext(os.path.basename(name))[0].casefold() == expected_name.casefold()
+
+
+def _has_process_option(cmdline, option, expected_value):
+    """Return whether an option has the exact expected value in an argv list.
+
+    Supports the forms used by emulator processes: ``--option value``,
+    ``--option=value`` and the equivalent form without leading dashes.
+    Exact token comparison prevents instance ``1`` from matching ``10``.
+    """
+    option = option.lstrip("-").casefold()
+    expected_value = str(expected_value).casefold()
+    for position, argument in enumerate(cmdline):
+        normalized = str(argument).strip('"').lstrip("-")
+        key, separator, value = normalized.partition("=")
+        if separator and key.casefold() == option and value.casefold() == expected_value:
+            return True
+        if not separator and normalized.casefold() == option and position + 1 < len(cmdline):
+            next_value = str(cmdline[position + 1]).strip('"').casefold()
+            if next_value == expected_value:
+                return True
+    return False
 
 
 class EmulatorBackend(ABC):
@@ -405,7 +431,7 @@ class BlueStacksBackend(EmulatorBackend):
     def _matching_processes(self, instance_index):
         """Return the HD-Player processes launched for an instance."""
         instance_name = self._instance_name(instance_index)
-        return [proc for proc, name, cmdline in _iter_processes() if "HD-Player" in name and "--instance" in cmdline and instance_name in cmdline]
+        return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "HD-Player") and _has_process_option(cmdline, "instance", instance_name)]
 
     def _is_instance_running(self, instance_index):
         """Check whether the instance is booting/running via its processes."""
@@ -598,8 +624,7 @@ class LDPlayerBackend(EmulatorBackend):
 
     def _matching_processes(self, instance_index):
         """Return the dnplayer processes launched for an instance."""
-        marker = f"index={instance_index}"
-        return [proc for proc, name, cmdline in _iter_processes() if "dnplayer" in name and marker in cmdline]
+        return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "dnplayer") and _has_process_option(cmdline, "index", instance_index)]
 
     def _is_instance_running(self, instance_index):
         """Check whether the instance is running via its dnplayer process."""
