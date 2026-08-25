@@ -107,18 +107,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     )
     emulator_combo.pack(side="left", padx=5)
 
-    # --- Emulator paths ---
-    paths_frame = ttk.LabelFrame(preferences_tab, text="Emulator paths")
-    paths_frame.pack(pady=10, padx=10, fill="x")
-
-    ttk.Label(
-        paths_frame,
-        text="Use Browse to select custom locations. Changes apply when you save preferences.",
-        wraplength=700,
-        justify="left",
-    ).pack(anchor="w", padx=10, pady=(5, 8))
-
-    path_vars = {}
+    path_vars = {emulator: {key: tk.StringVar(value=emulator_paths[emulator][key]) for key, _, _ in fields} for emulator, fields in _EMULATOR_PATH_FIELDS.items()}
     path_parent = notebook.winfo_toplevel()
 
     def browse_path(variable, path_type, title):
@@ -133,18 +122,38 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         if selected_path:
             variable.set(os.path.normpath(selected_path))
 
-    for emulator, fields in _EMULATOR_PATH_FIELDS.items():
-        emulator_path_frame = ttk.LabelFrame(paths_frame, text=_EMULATOR_LABELS[emulator])
-        emulator_path_frame.pack(fill="x", padx=10, pady=(0, 8))
-        path_vars[emulator] = {}
-        for key, label, path_type in fields:
+    def selected_emulator_code():
+        """Return the emulator code currently shown in the selector."""
+        return next((code for code, label in _EMULATOR_LABELS.items() if label == emulator_var.get()), EMULATOR_MUMU)
+
+    def open_emulator_paths():
+        """Open the path editor for the emulator currently selected."""
+        emulator = selected_emulator_code()
+        dialog = tk.Toplevel(path_parent)
+        dialog.title(f"Configure {_EMULATOR_LABELS[emulator]} paths")
+        dialog.transient(path_parent)
+        dialog.grab_set()
+
+        ttk.Label(
+            dialog,
+            text="Select the custom folders or configuration file, then click OK.",
+            wraplength=600,
+            justify="left",
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+
+        emulator_path_frame = ttk.LabelFrame(dialog, text=_EMULATOR_LABELS[emulator])
+        emulator_path_frame.pack(fill="x", padx=15, pady=5)
+        for key, label, path_type in _EMULATOR_PATH_FIELDS[emulator]:
             path_row = ttk.Frame(emulator_path_frame)
             path_row.pack(fill="x", padx=5, pady=3)
-            path_var = tk.StringVar(value=emulator_paths[emulator][key])
-            path_vars[emulator][key] = path_var
+            path_var = path_vars[emulator][key]
             ttk.Label(path_row, text=f"{label}:", width=38).pack(side="left", padx=(0, 5))
             ttk.Entry(path_row, textvariable=path_var, width=48).pack(side="left", fill="x", expand=True, padx=(0, 5))
             ttk.Button(path_row, text="Browse...", command=lambda var=path_var, kind=path_type, name=label: browse_path(var, kind, f"Select {name}")).pack(side="left")
+
+        ttk.Button(dialog, text="OK", command=dialog.destroy).pack(pady=(10, 15))
+
+    ttk.Button(emulator_row, text="Configure paths...", command=open_emulator_paths).pack(side="left", padx=5)
 
     # --- Task priorities ---
     priority_frame = ttk.LabelFrame(preferences_tab, text="Task Priorities")
