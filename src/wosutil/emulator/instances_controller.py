@@ -180,4 +180,17 @@ def load_instance_cache():
     instances = load_json_file(INSTANCE_CACHE_FILE, default_value=[])
     if not isinstance(instances, list):
         return []
-    return instances
+    valid_instances = []
+    seen_indices = set()
+    for instance in instances:
+        if not isinstance(instance, dict):
+            continue
+        index = instance.get("index")
+        name = instance.get("name")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            continue
+        if not isinstance(name, str) or not name.strip() or index in seen_indices:
+            continue
+        valid_instances.append({"index": index, "name": name})
+        seen_indices.add(index)
+    return valid_instances

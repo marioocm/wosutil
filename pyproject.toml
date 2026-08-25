@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wosutil"
-version = "1.1.19"
+version = "1.1.20"
 description = "Python automation tool for Whiteout Survival using Android emulators (MuMu, BlueStacks, LDPlayer)"
 readme = "README.md"
 license = "MIT"
