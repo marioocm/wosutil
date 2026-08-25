@@ -500,6 +500,7 @@ def go_worldmap_search(instance_index, scroll=True):
             WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
             instance_index,
         )
+        time.sleep(1.0)
     return True
 
 
