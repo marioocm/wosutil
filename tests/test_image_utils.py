@@ -12,6 +12,7 @@ from PIL import Image
 from wosutil.emulator.image_utils import (
     _TIME_RE,
     _find_first_non_zero_digit_on_image,
+    _parse_timer_text,
     _preprocess_fuzzy_text_image,
     _preprocess_timer_red_text,
     _read_time_native,
@@ -362,6 +363,15 @@ class TestTimeRegex(unittest.TestCase):
     def test_no_match_without_colons(self):
         """A timer without colons must not match."""
         self.assertIsNone(_TIME_RE.search("08 02 23"))
+
+    def test_parser_rejects_impossible_minutes_and_seconds(self):
+        """OCR values outside the clock ranges are not accepted as timers."""
+        self.assertIsNone(_parse_timer_text("08:60:00"))
+        self.assertIsNone(_parse_timer_text("08:00:60"))
+
+    def test_parser_keeps_day_prefix_for_valid_timer(self):
+        """A valid timer with a day prefix is converted to total seconds."""
+        self.assertEqual(_parse_timer_text("1d 06:29:08"), (6, 29, 8, 1 * 86400 + 6 * 3600 + 29 * 60 + 8))
 
 
 class TestNativeTimerOcr(unittest.TestCase):

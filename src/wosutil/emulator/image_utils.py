@@ -307,6 +307,21 @@ def _preprocess_timer_red_text(img: Image.Image) -> Image.Image:
     return Image.fromarray(mask)
 
 
+def _parse_timer_text(text: str) -> Optional[Tuple[int, int, int, int]]:
+    """Parse a timer only when its hour, minute and second fields are valid."""
+    match = _TIME_RE.search(text)
+    if not match:
+        return None
+    hours, minutes, seconds = map(int, match.groups())
+    if hours > 99 or minutes > 59 or seconds > 59:
+        return None
+    total_seconds = hours * 3600 + minutes * 60 + seconds
+    day_match = _DAY_RE.search(text)
+    if day_match:
+        total_seconds += int(day_match.group(1)) * 86400
+    return hours, minutes, seconds, total_seconds
+
+
 def read_screen_time(
     instance_index: int,
     roi: Optional[Tuple[int, int, int, int]] = None,
@@ -379,16 +394,10 @@ def read_screen_time(
                 )
             except Exception:
                 continue
-            match = _TIME_RE.search(text)
-            if not match:
+            parsed = _parse_timer_text(text)
+            if parsed is None:
                 continue
-            h, m, s = map(int, match.groups())
-            if h > 99:
-                continue
-            total_seconds = h * 3600 + m * 60 + s
-            day_match = _DAY_RE.search(text)
-            if day_match:
-                total_seconds += int(day_match.group(1)) * 86400
+            h, m, s, total_seconds = parsed
             if max_seconds is not None and total_seconds > max_seconds:
                 log_message(
                     f"Timer read {h:02}:{m:02}:{s:02} ({total_seconds}s) exceeds the maximum plausible value of {max_seconds}s, treating it as an invalid timer read.",
@@ -411,16 +420,10 @@ def read_screen_time(
                 )
             except Exception:
                 continue
-            match = _TIME_RE.search(text)
-            if not match:
+            parsed = _parse_timer_text(text)
+            if parsed is None:
                 continue
-            h, m, s = map(int, match.groups())
-            if h > 99:
-                continue
-            total_seconds = h * 3600 + m * 60 + s
-            day_match = _DAY_RE.search(text)
-            if day_match:
-                total_seconds += int(day_match.group(1)) * 86400
+            h, m, s, total_seconds = parsed
             if max_seconds is not None and total_seconds > max_seconds:
                 log_message(
                     f"Timer read {h:02}:{m:02}:{s:02} ({total_seconds}s) exceeds the maximum plausible value of {max_seconds}s, treating it as an invalid timer read.",
