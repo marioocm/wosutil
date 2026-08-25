@@ -198,6 +198,41 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         self.assertEqual(controller.instance_launch_attempts, {})
 
 
+class TestLaunchRetryQueue(unittest.TestCase):
+    """The instance queue keeps progressing after a launch is abandoned."""
+
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        stop_signal.clear()
+
+    def tearDown(self):
+        """Do not leak the stop signal into other tests."""
+        stop_signal.clear()
+
+    def test_exhausted_retries_wake_the_next_instance(self):
+        """A failed instance must not leave other queued instances stranded."""
+        controller = MultiInstanceToolController(
+            log_message=lambda _msg, level="info": None,
+            TASK_DEFINITIONS={},
+            multi_instance_manager=FakeManagerOpen(),
+            profile_manager=MagicMock(),
+            instances_profile_managers={},
+            instance_queue=[(1, "profile_y")],
+            active_instances={0},
+            instance_widgets=[],
+            save_instance_selection=lambda _selection: None,
+            load_instance_selection=lambda: {},
+        )
+        controller.max_launch_attempts = 1
+
+        with patch.object(controller, "launch_next_instances") as launch_next:
+            controller._requeue_with_limit(0, "profile_x")
+
+        self.assertNotIn(0, controller.active_instances)
+        self.assertEqual(controller.instance_queue, [(1, "profile_y")])
+        launch_next.assert_called_once_with()
+
+
 class TestPickScheduledTask(unittest.TestCase):
     """The worker's task selection groups close run times by priority."""
 

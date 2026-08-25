@@ -385,6 +385,9 @@ class MultiInstanceToolController:
                 f"Instance {index} has failed {attempts} consecutive startup attempts. Stopping it to avoid an infinite loop.",
                 level="error",
             )
+            # The failed instance already released its slot above. Wake the
+            # queue so another selected instance can use that slot.
+            self.launch_next_instances()
             return
         self._enqueue_instance(index, profile_name)
         self.launch_next_instances()
