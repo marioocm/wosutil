@@ -49,6 +49,14 @@ class FakeManagerRunning(FakeManagerOpen):
 class TestStartToolAbort(unittest.TestCase):
     """Tests for the start-time ADB access guard."""
 
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        stop_signal.clear()
+
+    def tearDown(self):
+        """Do not leak the stop signal into other tests."""
+        stop_signal.clear()
+
     def _make_controller(self, manager):
         """Build a controller with mock dependencies and a log capture."""
         self.logs = []
@@ -77,6 +85,45 @@ class TestStartToolAbort(unittest.TestCase):
         controller = self._make_controller(FakeManagerOpen())
         self.assertTrue(controller.start_tool())
         self.assertTrue(controller.tool_running)
+
+    def test_start_tool_refuses_to_overlap_a_running_session(self):
+        """A second start cannot reset the state of the current session."""
+        controller = self._make_controller(FakeManagerOpen())
+        controller.tool_running = True
+
+        self.assertFalse(controller.start_tool())
+        self.assertTrue(controller.tool_running)
+        self.assertTrue(any("already running" in msg for msg, _level in self.logs))
+
+    def test_old_worker_cannot_remove_a_newer_thread_reference(self):
+        """A stale worker must not delete a replacement thread entry."""
+        controller = self._make_controller(FakeManagerOpen())
+        old_thread = object()
+        current_thread = object()
+        controller.instance_threads[0] = current_thread
+
+        controller._remove_thread_reference(0, old_thread)
+
+        self.assertIs(controller.instance_threads[0], current_thread)
+
+    def test_stop_tool_keeps_reference_to_worker_that_is_still_alive(self):
+        """Stopping does not forget a thread that exceeded the join timeout."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        worker = MagicMock()
+        worker.is_alive.return_value = True
+        controller.tool_running = True
+        controller.active_instances.add(0)
+        controller.instance_queue.append((0, "profile_x"))
+        controller.instance_threads[0] = worker
+
+        controller.stop_tool()
+
+        self.assertIs(controller.instance_threads[0], worker)
+        worker.join.assert_called_once_with(timeout=5.0)
+        self.assertEqual(manager.stop_calls, 1)
+        self.assertEqual(controller.active_instances, set())
+        self.assertEqual(controller.instance_queue, [])
 
 
 class TestGameNotInstalledAbort(unittest.TestCase):

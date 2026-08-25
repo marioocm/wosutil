@@ -26,6 +26,20 @@ _adb_verified_cache: dict = {}
 _active_backend = None
 
 
+class AdbCommandError(RuntimeError):
+    """Raised when an emulator input command cannot be completed."""
+
+
+def _require_adb_success(result, operation):
+    """Raise when an ADB input operation timed out or returned an error."""
+    if result is None:
+        raise AdbCommandError(f"ADB operation '{operation}' timed out.")
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        suffix = f": {details}" if details else ""
+        raise AdbCommandError(f"ADB operation '{operation}' failed with exit code {result.returncode}{suffix}")
+
+
 def set_active_backend(backend):
     """Register the emulator backend used for every ADB command.
 
@@ -258,10 +272,17 @@ def take_screenshot(instance_index):
         log_message("No active ADB connection. Cannot take screenshot.", level="error")
         return None
 
-    with tempfile.NamedTemporaryFile(suffix=".png", prefix="wosutil_", delete=False) as tmp:
-        filename = os.path.basename(tmp.name)
+    local_full_path = None
+    remote_path = None
+    screenshot_ready = False
+    try:
+        # Close the descriptor before ADB writes the file. Keeping a
+        # NamedTemporaryFile open while ``adb pull`` opens the same path can
+        # fail on Windows because of the file sharing mode.
+        descriptor, local_full_path = tempfile.mkstemp(suffix=".png", prefix="wosutil_")
+        os.close(descriptor)
+        filename = os.path.basename(local_full_path)
         remote_path = f"/sdcard/{filename}"
-        local_full_path = tmp.name
 
         log_message(f"Taking remote screenshot on: {remote_path}", level="debug")
         result_screencap = execute_adb_command(["shell", "screencap", "-p", remote_path], instance_index)
@@ -275,15 +296,19 @@ def take_screenshot(instance_index):
 
         if not result_pull or result_pull.returncode != 0:
             log_message("Failed to download screenshot from the emulator.", level="error")
-            execute_adb_command(["shell", "rm", remote_path], instance_index)
             return None
 
-        # Clean up remote file
-        log_message("Deleting screenshot from emulator...", level="debug")
-        execute_adb_command(["shell", "rm", remote_path], instance_index)
-
+        screenshot_ready = True
         log_message(f"Screenshot saved to temporary file: {local_full_path}", level="debug")
         return local_full_path
+    finally:
+        if remote_path:
+            # Cleanup must not hide the original screencap/pull result.
+            with contextlib.suppress(Exception):
+                log_message("Deleting screenshot from emulator...", level="debug")
+                execute_adb_command(["shell", "rm", remote_path], instance_index)
+        if not screenshot_ready:
+            delete_temp_screenshot(local_full_path)
 
 
 def delete_temp_screenshot(screenshot_path):
@@ -336,9 +361,11 @@ def click_on_coordinates(x, y, instance_index, delay=CLICK_DELAY):
         instance_index (int): Emulator instance index.
     """
     log_message(f"Clicking on coordinates: ({x}, {y})", level="info")
-    execute_adb_command(["shell", "input", "tap", str(x), str(y)], instance_index)
+    result = execute_adb_command(["shell", "input", "tap", str(x), str(y)], instance_index)
+    _require_adb_success(result, f"tap ({x}, {y})")
     stop_signal.check()
     time.sleep(delay)
+    return True
 
 
 def click_on(coordinate_name, instance_index, delay=CLICK_DELAY):
@@ -388,16 +415,33 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
     result = execute_adb_command(down, instance_index)
     if result is None or result.returncode != 0:
         log_message("input motionevent not supported, falling back to swipe + press at the end point.", level="warning")
-        execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms + hold_end_ms)], instance_index)
-        execute_adb_command(["shell", "input", "swipe", str(end_x), str(end_y), str(end_x), str(end_y), str(hold_end_ms)], instance_index)
-        return
-    for i in range(1, steps + 1):
-        mx = start_x + (end_x - start_x) * i // steps
-        my = start_y + (end_y - start_y) * i // steps
-        execute_adb_command(["shell", "input", "motionevent", "MOVE", str(mx), str(my)], instance_index)
-        time.sleep(duration_ms / steps / 1000.0)
-    time.sleep(hold_end_ms / 1000.0)
-    execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
+        fallback_swipe = execute_adb_command(
+            ["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms + hold_end_ms)],
+            instance_index,
+        )
+        _require_adb_success(fallback_swipe, "fallback scroll swipe")
+        fallback_hold = execute_adb_command(
+            ["shell", "input", "swipe", str(end_x), str(end_y), str(end_x), str(end_y), str(hold_end_ms)],
+            instance_index,
+        )
+        _require_adb_success(fallback_hold, "fallback scroll hold")
+        return True
+    try:
+        for i in range(1, steps + 1):
+            mx = start_x + (end_x - start_x) * i // steps
+            my = start_y + (end_y - start_y) * i // steps
+            move = execute_adb_command(["shell", "input", "motionevent", "MOVE", str(mx), str(my)], instance_index)
+            _require_adb_success(move, f"scroll move {i}/{steps}")
+            time.sleep(duration_ms / steps / 1000.0)
+        time.sleep(hold_end_ms / 1000.0)
+        up = execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
+        _require_adb_success(up, "scroll release")
+    except Exception:
+        # Best effort release when a move or the first release fails. Preserve
+        # the original exception so the task cannot report a false success.
+        with contextlib.suppress(Exception):
+            execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
+        raise
 
 
 def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, hold_end_ms=0):
@@ -418,9 +462,10 @@ def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, h
     """
     log_message(f"Performing scroll from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration_ms}ms", level="info")
     if hold_end_ms > 0:
-        _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index)
-        return
-    execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms)], instance_index)
+        return _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index)
+    result = execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms)], instance_index)
+    _require_adb_success(result, "scroll swipe")
+    return True
 
 
 def long_press_on_coordinates(x, y, duration_ms, instance_index):
@@ -433,7 +478,8 @@ def long_press_on_coordinates(x, y, duration_ms, instance_index):
         instance_index (int): Emulator instance index.
     """
     log_message(f"Long pressing on coordinates: ({x}, {y}) for {duration_ms}ms", level="info")
-    execute_adb_command(["shell", "input", "swipe", str(x), str(y), str(x), str(y), str(duration_ms)], instance_index)
+    result = execute_adb_command(["shell", "input", "swipe", str(x), str(y), str(x), str(y), str(duration_ms)], instance_index)
+    _require_adb_success(result, f"long press ({x}, {y})")
 
 
 def press_android_back_button(instance_index, delay=BACK_BUTTON_DELAY):
@@ -444,7 +490,8 @@ def press_android_back_button(instance_index, delay=BACK_BUTTON_DELAY):
         instance_index (int): Emulator instance index.
     """
     log_message("Pressing Android back button...", level="info")
-    execute_adb_command(["shell", "input", "keyevent", "4"], instance_index)
+    result = execute_adb_command(["shell", "input", "keyevent", "4"], instance_index)
+    _require_adb_success(result, "Android back button")
     stop_signal.check()
     time.sleep(delay)
 
@@ -456,7 +503,9 @@ def force_stop_game(instance_index):
         instance_index (int): Emulator instance index.
     """
     log_message(f"Forcing game '{WHITEOUT_PACKAGE}' to stop...", level="warning")
-    execute_adb_command(["shell", "am", "force-stop", WHITEOUT_PACKAGE], instance_index)
+    result = execute_adb_command(["shell", "am", "force-stop", WHITEOUT_PACKAGE], instance_index)
+    _require_adb_success(result, "force-stop game")
+    return True
 
 
 def launch_game_activity(instance_index):
