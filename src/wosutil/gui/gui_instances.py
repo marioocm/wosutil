@@ -133,7 +133,6 @@ def setup_instances_tab(
     log_message,
     TASK_DEFINITIONS,
     instances_profile_managers,
-    opened_by_app,
     instance_queue,
     active_instances,
     emulator_state=None,
@@ -147,7 +146,6 @@ def setup_instances_tab(
         log_message: Logging function.
         TASK_DEFINITIONS: Dictionary of task definitions.
         instances_profile_managers: Dictionary mapping instances to profile managers.
-        opened_by_app: Set of instances opened by the app.
         instance_queue: Queue of instances to process.
         active_instances: Set of currently active instances.
         emulator_state (dict, optional): Shared emulator state. When provided,
@@ -208,14 +206,11 @@ def setup_instances_tab(
         log_message=log_message,
         TASK_DEFINITIONS=TASK_DEFINITIONS,
         instances_profile_managers=instances_profile_managers,
-        opened_by_app=opened_by_app,
         instance_queue=instance_queue,
         active_instances=active_instances,
         instance_widgets=instance_widgets,
-        get_profiles=get_profiles,
         save_instance_selection=save_instance_selection,
         load_instance_selection=load_instance_selection,
-        refresh_instances_callback=lambda: refresh_instances(),
         dialog_queue=dialog_queue,
     )
     emulator_state["controller"] = controller
@@ -226,7 +221,6 @@ def setup_instances_tab(
     # --- Tool state ---
     tool_running = emulator_state.get("tool_running") or {"value": False}
     emulator_state["tool_running"] = tool_running
-    selected_indices_profiles = []
 
     def refresh_instances():
         for widget in instance_list_frame.winfo_children():
@@ -325,14 +319,7 @@ def setup_instances_tab(
             if isinstance(child, ttk.Label):
                 child.pack_forget()
         stop_btn.pack(side="left", padx=10, pady=10)
-        # Save selected instances changes the showed instances
-        instance_selection = load_instance_selection()
-        selected_indices_profiles.clear()
-        for idx_str, val in instance_selection.items():
-            if idx_str == "max_emulators":
-                continue
-            if val.get("checked"):
-                selected_indices_profiles.append((int(idx_str), val.get("profile")))
+        # Refresh the shown instance rows to the running state
         refresh_instances()
         controller.start_tool()
 

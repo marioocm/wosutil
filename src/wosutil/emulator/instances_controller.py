@@ -10,7 +10,7 @@ import re
 import time
 
 from wosutil.config import INSTANCE_CACHE_FILE, MUMU_INSTANCE_BASE_PATH, MUMU_MULTI_PLAYER_PATH
-from wosutil.utils import run_process_robust, save_json_file
+from wosutil.utils import load_json_file, run_process_robust, save_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -177,13 +177,7 @@ def load_instance_cache():
     Returns:
         list: List of instance dictionaries, or empty list if not found.
     """
-    if os.path.exists(INSTANCE_CACHE_FILE):
-        try:
-            with open(INSTANCE_CACHE_FILE, encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    return []
-                return json.loads(content)
-        except Exception:
-            return []
-    return []
+    instances = load_json_file(INSTANCE_CACHE_FILE, default_value=[])
+    if not isinstance(instances, list):
+        return []
+    return instances

@@ -3,12 +3,11 @@
 Launches the GUI for Whiteout Survival automation tool.
 """
 
-import logging
-
 from wosutil.gui.gui_main import run_gui
+from wosutil.utils import setup_logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# Configure console and file logging once, before anything emits records.
+setup_logging()
 
 if __name__ == "__main__":
     run_gui()

@@ -4,7 +4,6 @@ Handles MuMu Player emulator control, ADB commands, and game launching.
 """
 
 import contextlib
-import logging
 import os
 import tempfile
 import time
@@ -18,8 +17,6 @@ from wosutil.config import (
 from wosutil.emulator.backends import MuMuBackend
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.utils import get_coordinates, log_message, run_process_robust
-
-logger = logging.getLogger(__name__)
 
 # Successful ADB verifications per serial, cached for a short window
 # so per-screenshot checks don't re-run subprocesses or spam the log.
@@ -484,16 +481,14 @@ def launch_game_activity(instance_index):
 
 
 def launch_and_verify_game(instance_index):
-    """Close the game, relaunch it and verify that the process stays active for 20 seconds.
+    """Close the game, relaunch it and verify that the process stays active.
 
     Args:
         instance_index (int): Instance index.
 
     Returns:
-        bool: True if the game is running for 20 seconds, False otherwise.
+        bool: True if the game process is verified active, False otherwise.
     """
-    from wosutil.emulator.emulator_manager import force_stop_game, is_wos_running, launch_game_activity
-
     log_message(f"Closing and relaunching the game on instance {instance_index}...", "info")
 
     # Close the game
@@ -517,7 +512,7 @@ def launch_and_verify_game(instance_index):
         else:
             log_message(f"Game process verified active (check {check + 1}/7) on instance {instance_index}.", "info")
 
-    log_message(f"Game successfully launched and verified active for 20 seconds on instance {instance_index}.", "success")
+    log_message(f"Game successfully launched and verified active on instance {instance_index}.", "success")
     return True
 
 

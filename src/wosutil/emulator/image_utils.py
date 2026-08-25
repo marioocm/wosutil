@@ -4,7 +4,6 @@ Provides functions for finding templates on screen, reading text from screenshot
 and managing template caching.
 """
 
-import logging
 import os
 import re
 import sys
@@ -40,8 +39,6 @@ def resolve_tesseract_cmd() -> str:
 
 
 pytesseract.pytesseract.tesseract_cmd = resolve_tesseract_cmd()
-
-logger = logging.getLogger(__name__)
 
 # Template cache to avoid reloading images
 _template_cache: Dict[str, np.ndarray] = {}
@@ -212,7 +209,7 @@ def find_multiple_templates(
             matches.append((pt[0], pt[1], w, h))
 
         # Apply non-maximum suppression
-        matches_nms = non_max_suppression(matches, overlapThresh=nms_threshold)
+        matches_nms = non_max_suppression(matches, overlap_thresh=nms_threshold)
         return matches_nms
 
     except Exception as e:
@@ -221,12 +218,12 @@ def find_multiple_templates(
         return []
 
 
-def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlapThresh: float = 0.5) -> List[Tuple[int, int, int, int]]:
+def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: float = 0.5) -> List[Tuple[int, int, int, int]]:
     """Applies non-maximum suppression to avoid overlapping boxes.
 
     Args:
         boxes (list): List of (x, y, w, h) tuples.
-        overlapThresh (float): Overlap threshold for suppression.
+        overlap_thresh (float): Overlap threshold for suppression.
 
     Returns:
         list: Filtered list of boxes after NMS.
@@ -251,7 +248,7 @@ def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlapThresh: f
         w = np.maximum(0, xx2 - xx1 + 1)
         h = np.maximum(0, yy2 - yy1 + 1)
         overlap = (w * h) / areas[idxs[:-1]]
-        idxs = np.delete(idxs, np.concatenate(([len(idxs) - 1], np.where(overlap > overlapThresh)[0])))
+        idxs = np.delete(idxs, np.concatenate(([len(idxs) - 1], np.where(overlap > overlap_thresh)[0])))
     return [tuple(boxes_np[i]) for i in pick]
 
 

@@ -308,7 +308,7 @@ class TestImageUtils(unittest.TestCase):
         ]
 
         # Apply NMS
-        filtered_boxes = non_max_suppression(boxes, overlapThresh=0.5)
+        filtered_boxes = non_max_suppression(boxes, overlap_thresh=0.5)
 
         # Should reduce the number of boxes
         self.assertLess(len(filtered_boxes), len(boxes))

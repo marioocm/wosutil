@@ -58,14 +58,11 @@ class TestStartToolAbort(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
         )
 
     def test_start_tool_aborts_when_adb_blocked(self):
@@ -98,14 +95,11 @@ class TestGameNotInstalledAbort(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
             dialog_queue=None,
         )
 
@@ -255,14 +249,11 @@ class TestScheduleMemory(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
             dialog_queue=None,
         )
 
@@ -388,14 +379,11 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
             multi_instance_manager=manager,
             profile_manager=MagicMock(),
             instances_profile_managers={},
-            opened_by_app=set(),
             instance_queue=[],
             active_instances=set(),
             instance_widgets=[],
-            get_profiles=lambda: [],
             save_instance_selection=lambda selection: None,
             load_instance_selection=lambda: {},
-            refresh_instances_callback=lambda: None,
             dialog_queue=None,
         )
 

@@ -32,7 +32,6 @@ log_text_widget = None
 profile_manager = None
 multi_instance_manager = None
 instances_profile_managers: dict = {}
-opened_by_app: set = set()
 instance_queue: list = []
 active_instances: set = set()
 max_instances_var = None
@@ -131,7 +130,12 @@ def create_log_tab(notebook):
 
 def run_gui():
     """Main GUI initialization and execution."""
-    global profile_manager, multi_instance_manager, instances_profile_managers, opened_by_app, max_instances_var
+    global profile_manager, multi_instance_manager, instances_profile_managers, max_instances_var
+
+    # Configure console + file logging once (entry point of the `wosutil` command).
+    from wosutil.utils import setup_logging
+
+    setup_logging()
 
     # Remove temporary screenshots left behind by crashed sessions.
     from wosutil.emulator.emulator_manager import cleanup_stale_temp_screenshots
@@ -145,7 +149,7 @@ def run_gui():
     profile_manager = ProfileManager(log_message)
 
     log_message("Loading task definitions...", "info")
-    TASK_DEFINITIONS = get_task_definitions(log_message)
+    TASK_DEFINITIONS = get_task_definitions()
 
     log_message("Creating main window...", "info")
     # Create main window
@@ -158,7 +162,6 @@ def run_gui():
 
     # Get screen dimensions
     screen_width = window.winfo_screenwidth()
-    window.winfo_screenheight()
 
     # Calculate position to place window in the top-right corner
     x_position = screen_width - window_width - 10  # 10 pixels from right edge
@@ -254,7 +257,6 @@ def run_gui():
         log_message,
         TASK_DEFINITIONS,
         instances_profile_managers,
-        opened_by_app,
         instance_queue,
         active_instances,
         emulator_state=emulator_state,

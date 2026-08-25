@@ -43,6 +43,11 @@ def rotation_namer(default_name: str) -> str:
 def setup_logging(log_to_file: bool = True) -> None:
     """Configure console and optional file logging.
 
+    Called once by the application entry points (``main.py``,
+    ``wosutil.gui.gui_main.run_gui`` and the template creator); module code
+    only emits log records through :func:`log_message` and never configures
+    handlers, so importing the package has no side effects.
+
     Writes to ``logs/wosutil_<timestamp>.log`` so agents and users can tail the
     same file without relying on the GUI or a specific terminal session.
 
@@ -203,8 +208,6 @@ def retry_operation(operation, max_attempts: int = 3, delay: float = 1.0, except
         except exceptions as e:
             last_exception = e
             if attempt < max_attempts - 1:
-                import time
-
                 time.sleep(delay * (2**attempt))  # Exponential backoff
 
     if last_exception:
@@ -290,10 +293,7 @@ def log_message(message, level="info"):
         if not get_debug_mode():
             return
 
-    # Ensure console + file handlers exist even if main did not call setup_logging
-    setup_logging()
-
-    # Log to console / file
+    # Log to console / file (handlers are configured by the entry points).
     logger = logging.getLogger("wosutil")
     if level == "info":
         logger.info(message)
