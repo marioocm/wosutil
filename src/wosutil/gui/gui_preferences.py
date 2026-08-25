@@ -1,11 +1,13 @@
 """GUI module for user preferences.
 
 Allows ordering tasks by priority, selecting the march used to kill beasts, and
-selecting the resource used by the ox gathering skill.
+selecting the resource used by the ox gathering skill. Emulator installation
+paths can also be selected here when they are not in their default locations.
 """
 
+import os
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 from wosutil.emulator.backends import (
     EMULATOR_BLUESTACKS,
@@ -23,6 +25,7 @@ from wosutil.preferences import (
     MYSTERY_SHOP_LEVELS,
     get_debug_mode,
     get_emulator,
+    get_emulator_paths,
     get_gather_resource,
     get_kill_beast_march,
     get_mystery_shop_level,
@@ -32,6 +35,21 @@ from wosutil.preferences import (
 )
 
 _EMULATOR_LABELS = {EMULATOR_MUMU: "MuMu Player", EMULATOR_BLUESTACKS: "BlueStacks", EMULATOR_LDPLAYER: "LDPlayer"}
+
+_EMULATOR_PATH_FIELDS = {
+    EMULATOR_MUMU: (
+        ("base_path", "Program folder (MuMuManager.exe)", "directory"),
+        ("instance_base_path", "Instances folder (vms)", "directory"),
+    ),
+    EMULATOR_BLUESTACKS: (
+        ("base_path", "Installation folder", "directory"),
+        ("config_path", "Configuration file (bluestacks.conf)", "file"),
+    ),
+    EMULATOR_LDPLAYER: (
+        ("base_path", "Installation folder", "directory"),
+        ("instance_config_dir", "Instances config folder (vms\\config)", "directory"),
+    ),
+}
 
 _MYSTERY_SHOP_LEVEL_LABELS = {
     MYSTERY_SHOP_LEVEL_FREE: "Free items only",
@@ -55,8 +73,8 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         TASK_DEFINITIONS: Dictionary of task definitions.
         log_message: Logging function.
         on_emulator_changed (callable, optional): Called with the new emulator
-            code after a save that changed it, so the GUI can switch backends
-            without restarting.
+            code and configured paths after a save that changed either setting,
+            so the GUI can switch backends without restarting.
     """
     preferences_tab = ttk.Frame(notebook)
     notebook.add(preferences_tab, text="Preferences")
@@ -68,23 +86,65 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     emulator_row = ttk.Frame(emulator_frame)
     emulator_row.pack(anchor="w", padx=10, pady=10)
 
-    installed = detect_installed_emulators()
-    current_emulator = get_emulator()
+    preferences = load_preferences()
+    emulator_paths = get_emulator_paths(preferences)
+    installed = detect_installed_emulators(emulator_paths)
+    current_emulator = get_emulator(preferences)
     if current_emulator is None and installed:
         current_emulator = installed[0]
     if current_emulator is None:
         current_emulator = EMULATOR_MUMU
 
     emulator_var = tk.StringVar(value=_EMULATOR_LABELS.get(current_emulator, current_emulator))
+    emulator_options = installed + [code for code in _EMULATOR_LABELS if code not in installed]
     ttk.Label(emulator_row, text="Default emulator:").pack(side="left", padx=5)
     emulator_combo = ttk.Combobox(
         emulator_row,
         textvariable=emulator_var,
-        values=[_EMULATOR_LABELS.get(code, code) for code in installed] or [EMULATOR_MUMU],
+        values=[_EMULATOR_LABELS[code] for code in emulator_options],
         state="readonly",
         width=20,
     )
     emulator_combo.pack(side="left", padx=5)
+
+    # --- Emulator paths ---
+    paths_frame = ttk.LabelFrame(preferences_tab, text="Emulator paths")
+    paths_frame.pack(pady=10, padx=10, fill="x")
+
+    ttk.Label(
+        paths_frame,
+        text="Use Browse to select custom locations. Changes apply when you save preferences.",
+        wraplength=700,
+        justify="left",
+    ).pack(anchor="w", padx=10, pady=(5, 8))
+
+    path_vars = {}
+    path_parent = notebook.winfo_toplevel()
+
+    def browse_path(variable, path_type, title):
+        """Select a directory or file and update its entry field."""
+        current_path = variable.get().strip()
+        if path_type == "file":
+            initial_dir = os.path.dirname(current_path) if current_path else ""
+            selected_path = filedialog.askopenfilename(parent=path_parent, initialdir=initial_dir, title=title)
+        else:
+            initial_dir = current_path if os.path.isdir(current_path) else ""
+            selected_path = filedialog.askdirectory(parent=path_parent, initialdir=initial_dir, title=title)
+        if selected_path:
+            variable.set(os.path.normpath(selected_path))
+
+    for emulator, fields in _EMULATOR_PATH_FIELDS.items():
+        emulator_path_frame = ttk.LabelFrame(paths_frame, text=_EMULATOR_LABELS[emulator])
+        emulator_path_frame.pack(fill="x", padx=10, pady=(0, 8))
+        path_vars[emulator] = {}
+        for key, label, path_type in fields:
+            path_row = ttk.Frame(emulator_path_frame)
+            path_row.pack(fill="x", padx=5, pady=3)
+            path_var = tk.StringVar(value=emulator_paths[emulator][key])
+            path_vars[emulator][key] = path_var
+            ttk.Label(path_row, text=f"{label}:", width=38).pack(side="left", padx=(0, 5))
+            ttk.Entry(path_row, textvariable=path_var, width=48).pack(side="left", fill="x", expand=True, padx=(0, 5))
+            ttk.Button(path_row, text="Browse...", command=lambda var=path_var, kind=path_type, name=label: browse_path(var, kind, f"Select {name}")).pack(side="left")
 
     # --- Task priorities ---
     priority_frame = ttk.LabelFrame(preferences_tab, text="Task Priorities")
@@ -232,9 +292,13 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     def save_preferences_action():
         prefs = load_preferences()
         previous_emulator = get_emulator(prefs)
+        previous_emulator_paths = get_emulator_paths(prefs)
         label = emulator_var.get()
         new_emulator = next((code for code, lab in _EMULATOR_LABELS.items() if lab == label), EMULATOR_MUMU)
         prefs["emulator"] = new_emulator
+        prefs["emulator_paths"] = {emulator: {key: variable.get().strip() for key, variable in fields.items()} for emulator, fields in path_vars.items()}
+        new_emulator_paths = get_emulator_paths(prefs)
+        prefs["emulator_paths"] = new_emulator_paths
         prefs["task_priorities"] = {}
         for i, task_id in enumerate(ordered_ids, start=1):
             TASK_DEFINITIONS[task_id]["priority"] = i
@@ -259,8 +323,9 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         prefs["remember_schedule"] = bool(remember_var.get())
         if save_preferences(prefs):
             log_message("Preferences saved successfully.", "success")
-            if on_emulator_changed and new_emulator != previous_emulator:
-                on_emulator_changed(new_emulator)
+            paths_changed = new_emulator_paths != previous_emulator_paths
+            if on_emulator_changed and (new_emulator != previous_emulator or paths_changed):
+                on_emulator_changed(new_emulator, new_emulator_paths)
         else:
             log_message("Error saving preferences.", "error")
 

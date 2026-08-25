@@ -46,54 +46,28 @@ def _templates_dir() -> str:
     return os.path.join(_app_dir(), "templates")
 
 
-def _path_from_env(environment_name: str, default_path: str) -> str:
-    """Return a normalized path override or the supplied default."""
-    configured_path = os.environ.get(environment_name, "").strip()
-    return os.path.normpath(configured_path or default_path)
-
-
 # --- Paths Configuration ---
-# Defaults match the standard Windows installations. Set the corresponding
-# WOSUTIL_* environment variable before starting the app to use custom paths.
-MUMU_BASE_PATH = _path_from_env(
-    "WOSUTIL_MUMU_BASE_PATH",
-    os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "nx_main"),
-)
+MUMU_BASE_PATH = os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "nx_main")
 MUMU_ADB_PATH = os.path.join(MUMU_BASE_PATH, "adb.exe")
 MUMU_MULTI_PLAYER_PATH = os.path.join(MUMU_BASE_PATH, "MuMuManager.exe")
-MUMU_INSTANCE_BASE_PATH = _path_from_env(
-    "WOSUTIL_MUMU_INSTANCE_BASE_PATH",
-    os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "vms"),
-)
+MUMU_INSTANCE_BASE_PATH = os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "vms")
 
 # --- BlueStacks Paths Configuration ---
 # BlueStacks 5 (nxt) uses its own HD-Adb server on port 5037; MuMu's adb.exe
 # must never be used against it.
-BLUESTACKS_BASE_PATH = _path_from_env(
-    "WOSUTIL_BLUESTACKS_BASE_PATH",
-    os.path.join("C:", os.sep, "Program Files", "BlueStacks_nxt"),
-)
+BLUESTACKS_BASE_PATH = os.path.join("C:", os.sep, "Program Files", "BlueStacks_nxt")
 BLUESTACKS_HD_PLAYER_PATH = os.path.join(BLUESTACKS_BASE_PATH, "HD-Player.exe")
 BLUESTACKS_ADB_PATH = os.path.join(BLUESTACKS_BASE_PATH, "HD-Adb.exe")
-BLUESTACKS_CONF = _path_from_env(
-    "WOSUTIL_BLUESTACKS_CONF",
-    os.path.join("C:", os.sep, "ProgramData", "BlueStacks_nxt", "bluestacks.conf"),
-)
+BLUESTACKS_CONF = os.path.join("C:", os.sep, "ProgramData", "BlueStacks_nxt", "bluestacks.conf")
 
 # --- LDPlayer Paths Configuration ---
 # LDPlayer keeps its own adb server on port 5037 and registers instances as
 # emulator-5554, emulator-5556, ... (one per instance, +2 ports per instance).
-LDPLAYER_BASE_PATH = _path_from_env(
-    "WOSUTIL_LDPLAYER_BASE_PATH",
-    os.path.join("C:", os.sep, "LDPlayer", "LDPlayer14"),
-)
+LDPLAYER_BASE_PATH = os.path.join("C:", os.sep, "LDPlayer", "LDPlayer14")
 LDPLAYER_CONSOLE_PATH = os.path.join(LDPLAYER_BASE_PATH, "ldconsole.exe")
 LDPLAYER_ADB_PATH = os.path.join(LDPLAYER_BASE_PATH, "adb.exe")
 LDPLAYER_PLAYER_PATH = os.path.join(LDPLAYER_BASE_PATH, "dnplayer.exe")
-LDPLAYER_INSTANCE_CONFIG_DIR = _path_from_env(
-    "WOSUTIL_LDPLAYER_INSTANCE_CONFIG_DIR",
-    os.path.join(LDPLAYER_BASE_PATH, "vms", "config"),
-)
+LDPLAYER_INSTANCE_CONFIG_DIR = os.path.join(LDPLAYER_BASE_PATH, "vms", "config")
 
 # --- Application Data Paths ---
 PROJECT_ROOT = _app_dir()

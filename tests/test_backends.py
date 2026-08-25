@@ -276,6 +276,24 @@ class TestBackendFactory(unittest.TestCase):
         with patch.object(backends.os.path, "exists", side_effect=exists):
             self.assertEqual(backends.detect_installed_emulators(), [backends.EMULATOR_LDPLAYER])
 
+    def test_detect_installed_uses_custom_paths(self):
+        """Detection checks the configured executable and config locations."""
+        paths = {
+            backends.EMULATOR_MUMU: {"base_path": "D:/MuMu", "instance_base_path": "D:/MuMu/vms"},
+            backends.EMULATOR_BLUESTACKS: {"base_path": "E:/BlueStacks", "config_path": "E:/Data/bluestacks.conf"},
+            backends.EMULATOR_LDPLAYER: {"base_path": "F:/LDPlayer", "instance_config_dir": "F:/LDPlayer/vms/config"},
+        }
+        existing = {
+            os.path.normpath(os.path.join("D:/MuMu", "MuMuManager.exe")),
+            os.path.normpath("E:/Data/bluestacks.conf"),
+            os.path.normpath(os.path.join("F:/LDPlayer", "ldconsole.exe")),
+        }
+        with patch.object(backends.os.path, "exists", side_effect=lambda path: path in existing):
+            self.assertEqual(
+                backends.detect_installed_emulators(paths),
+                [backends.EMULATOR_MUMU, backends.EMULATOR_BLUESTACKS, backends.EMULATOR_LDPLAYER],
+            )
+
     def test_create_bluestacks(self):
         """Alternatively named backends are honored."""
         self.assertIsInstance(backends.create_backend(backends.EMULATOR_BLUESTACKS), backends.BlueStacksBackend)
@@ -287,6 +305,29 @@ class TestBackendFactory(unittest.TestCase):
     def test_create_mumu_default(self):
         """create_backend defaults to the MuMu backend."""
         self.assertIsInstance(backends.create_backend(), backends.MuMuBackend)
+
+    def test_create_backend_uses_custom_paths(self):
+        """Each backend receives the paths selected in Preferences."""
+        paths = {
+            backends.EMULATOR_MUMU: {"base_path": "D:/MuMu", "instance_base_path": "D:/MuMu/vms"},
+            backends.EMULATOR_BLUESTACKS: {"base_path": "E:/BlueStacks", "config_path": "E:/Data/bluestacks.conf"},
+            backends.EMULATOR_LDPLAYER: {"base_path": "F:/LDPlayer", "instance_config_dir": "F:/LDPlayer/vms/config"},
+        }
+
+        mumu = backends.create_backend(backends.EMULATOR_MUMU, emulator_paths=paths)
+        self.assertEqual(mumu.manager_path, os.path.normpath(os.path.join("D:/MuMu", "MuMuManager.exe")))
+        self.assertEqual(mumu.adb_path, os.path.normpath(os.path.join("D:/MuMu", "adb.exe")))
+        self.assertEqual(mumu.instance_base_path, os.path.normpath("D:/MuMu/vms"))
+
+        bluestacks = backends.create_backend(backends.EMULATOR_BLUESTACKS, emulator_paths=paths)
+        self.assertEqual(bluestacks.conf_path, os.path.normpath("E:/Data/bluestacks.conf"))
+        self.assertEqual(bluestacks.adb_path, os.path.normpath(os.path.join("E:/BlueStacks", "HD-Adb.exe")))
+        self.assertEqual(bluestacks.player_path, os.path.normpath(os.path.join("E:/BlueStacks", "HD-Player.exe")))
+
+        ldplayer = backends.create_backend(backends.EMULATOR_LDPLAYER, emulator_paths=paths)
+        self.assertEqual(ldplayer.config_dir, os.path.normpath("F:/LDPlayer/vms/config"))
+        self.assertEqual(ldplayer.adb_path, os.path.normpath(os.path.join("F:/LDPlayer", "adb.exe")))
+        self.assertEqual(ldplayer.console_path, os.path.normpath(os.path.join("F:/LDPlayer", "ldconsole.exe")))
 
 
 class TestProcessMatching(unittest.TestCase):
