@@ -92,6 +92,17 @@ class TestUtils(unittest.TestCase):
         self.assertTrue(result)
         self.assertTrue(os.path.exists(nested_file))
 
+    def test_save_json_file_preserves_previous_data_on_serialization_failure(self):
+        """A failed save must not truncate the existing JSON file."""
+        original_data = {"existing": True}
+        with open(self.test_file, "w", encoding="utf-8") as f:
+            json.dump(original_data, f)
+
+        self.assertFalse(save_json_file(self.test_file, {"invalid": object()}))
+
+        self.assertEqual(load_json_file(self.test_file), original_data)
+        self.assertEqual(os.listdir(self.temp_dir), ["test.json"])
+
     def test_safe_int_valid(self):
         """Test safe_int with valid values."""
         self.assertEqual(safe_int("42"), 42)

@@ -7,6 +7,7 @@ files for screenshots. The image_utils functions expect temporary file
 paths and do not delete the files themselves.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -143,7 +144,7 @@ def load_json_file(file_path: str, default_value: Any = None) -> Any:
 
 
 def save_json_file(file_path: str, data: Any, indent: int = 2) -> bool:
-    """Save data to a JSON file with error handling.
+    """Save data to a JSON file atomically with error handling.
 
     Args:
         file_path (str): Path to the JSON file.
@@ -153,18 +154,37 @@ def save_json_file(file_path: str, data: Any, indent: int = 2) -> bool:
     Returns:
         bool: True if saved successfully.
     """
+    temporary_path = None
     try:
         # Ensure directory exists
         directory = os.path.dirname(file_path)
         if directory and not ensure_directory_exists(directory):
             return False
 
-        with open(file_path, "w", encoding="utf-8") as f:
+        target_path = os.path.abspath(file_path)
+        target_directory = os.path.dirname(target_path)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target_directory,
+            prefix=f".{os.path.basename(target_path)}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            temporary_path = f.name
             json.dump(data, f, indent=indent, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary_path, target_path)
+        temporary_path = None
         return True
     except Exception as e:
         logging.error(f"Failed to save JSON file {file_path}: {e}")
         return False
+    finally:
+        if temporary_path:
+            with contextlib.suppress(OSError):
+                os.remove(temporary_path)
 
 
 def safe_int(value: Any, default: int = 0) -> int:
