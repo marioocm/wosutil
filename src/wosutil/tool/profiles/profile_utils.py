@@ -18,6 +18,10 @@ def build_running_tasks_state(profile_name, profiles, task_definitions, now=None
     Returns:
         list: List of task dictionaries with 'next_run_time' set.
     """
-    now = now or time.time()
+    now = now if now is not None else time.time()
+    if not isinstance(profiles, dict) or not isinstance(task_definitions, dict) or not isinstance(profile_name, str):
+        return []
     task_names = profiles.get(profile_name, [])
-    return [{**task_definitions[t], "next_run_time": now} for t in task_names if t in task_definitions]
+    if not isinstance(task_names, list):
+        return []
+    return [{**task_definitions[t], "next_run_time": now} for t in task_names if isinstance(t, str) and t in task_definitions]
