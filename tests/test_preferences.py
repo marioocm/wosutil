@@ -7,10 +7,15 @@ import unittest
 from unittest.mock import patch
 
 from wosutil.preferences import (
+    BEAR_TRAP_MARCH_COUNT,
+    BEAR_TRAP_MARCH_MAX,
+    BEAR_TRAP_MARCH_MIN,
     DEFAULT_EMULATOR_PATHS,
     GATHER_RESOURCES,
     MYSTERY_SHOP_LEVEL_FREE,
     MYSTERY_SHOP_LEVELS,
+    get_bear_rally_call_march,
+    get_bear_trap_marches,
     get_emulator_paths,
     get_gather_resource,
     get_kill_beast_march,
@@ -128,6 +133,56 @@ class TestPreferences(unittest.TestCase):
         self.assertIsNone(get_kill_beast_march_assignment({"kill_beast_march": 13}))
         self.assertIsNone(get_kill_beast_march_assignment({"kill_beast_march": -2}))
         self.assertIsNone(get_kill_beast_march_assignment({"kill_beast_march": "invalid"}))
+
+    def test_get_bear_trap_marches_default(self):
+        """Test the default bear trap marches."""
+        self.assertEqual(get_bear_trap_marches({}), [1, 2, 3, 4, 5, 6])
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            self.assertEqual(get_bear_trap_marches(None), [1, 2, 3, 4, 5, 6])
+
+    def test_get_bear_trap_marches_valid(self):
+        """Test that valid marches are returned."""
+        self.assertEqual(get_bear_trap_marches({"bear_trap_marches": [3, 9, 12, 1, 5, 7]}), [3, 9, 12, 1, 5, 7])
+
+    def test_get_bear_trap_marches_invalid_values_skipped(self):
+        """Test that out-of-range or unparsable marches are replaced."""
+        marches = get_bear_trap_marches({"bear_trap_marches": [0, 13, "x", 4, 6, 8]})
+        self.assertEqual(len(marches), BEAR_TRAP_MARCH_COUNT)
+        self.assertIn(4, marches)
+        self.assertIn(6, marches)
+        self.assertIn(8, marches)
+        for march in marches:
+            self.assertTrue(BEAR_TRAP_MARCH_MIN <= march <= BEAR_TRAP_MARCH_MAX)
+
+    def test_get_bear_trap_marches_padded_when_short(self):
+        """Test that fewer than six marches are padded with unused numbers."""
+        marches = get_bear_trap_marches({"bear_trap_marches": [12]})
+        self.assertEqual(len(marches), BEAR_TRAP_MARCH_COUNT)
+        self.assertEqual(marches[0], 12)
+        self.assertEqual(len(set(marches)), BEAR_TRAP_MARCH_COUNT)
+
+    def test_get_bear_trap_marches_truncated_when_long(self):
+        """Test that more than six marches are truncated to six."""
+        marches = get_bear_trap_marches({"bear_trap_marches": [1, 2, 3, 4, 5, 6, 7, 8]})
+        self.assertEqual(marches, [1, 2, 3, 4, 5, 6])
+
+    def test_get_bear_rally_call_march_default(self):
+        """Test the default bear rally call march value."""
+        self.assertEqual(get_bear_rally_call_march({}), 1)
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            self.assertEqual(get_bear_rally_call_march(None), 1)
+
+    def test_get_bear_rally_call_march_valid(self):
+        """Test that a valid march is returned."""
+        self.assertEqual(get_bear_rally_call_march({"bear_rally_call_march": 5}), 5)
+
+    def test_get_bear_rally_call_march_below_min(self):
+        """Test that a march below the minimum is clamped to the minimum."""
+        self.assertEqual(get_bear_rally_call_march({"bear_rally_call_march": 0}), 1)
+
+    def test_get_bear_rally_call_march_above_max(self):
+        """Test that a march above the maximum is clamped to the maximum."""
+        self.assertEqual(get_bear_rally_call_march({"bear_rally_call_march": 15}), 12)
 
     def test_get_mystery_shop_level_default(self):
         """Test the default mystery shop level."""

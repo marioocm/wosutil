@@ -1157,6 +1157,33 @@ def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int
     return [(" ".join(word for word, _ in line), _union_boxes([box for _, box in line])) for line in _ocr_lines(img)]
 
 
+def read_text_lines_on_screen(
+    screenshot_path: str,
+    roi: Optional[Tuple[int, int, int, int]] = None,
+) -> List[Tuple[str, Tuple[int, int, int, int]]]:
+    """Read the text lines of a screenshot, optionally within an ROI.
+
+    Args:
+        screenshot_path (str): Path to the screenshot image file.
+        roi (tuple, optional): Region of interest as (x, y, w, h).
+
+    Returns:
+        list: (line text, (x, y, w, h)) pairs for every recognized text line,
+            in full-screen coordinates.
+    """
+    img_bgr = cv2.imread(screenshot_path)
+    if img_bgr is None:
+        return []
+    if roi:
+        x, y, w, h = roi
+        img_bgr = img_bgr[y : y + h, x : x + w]
+    img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+    lines = read_text_lines_on_image(img)
+    if roi:
+        lines = [(text, (box[0] + x, box[1] + y, box[2], box[3])) for text, box in lines]
+    return lines
+
+
 def find_text_on_image(img: Image.Image, target: str, last: bool = False, fuzzy: bool = False) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
     """Search a piece of text (one or several words) inside an image with OCR.
 

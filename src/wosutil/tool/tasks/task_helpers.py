@@ -3,11 +3,13 @@
 Helper functions for navigation, screen detection, and common automation patterns.
 """
 
+import re
 import time
 
 # Import configuration and utility functions
 from wosutil.config import (
     CLICK_DELAY,
+    COORDINATES,
     INTEL_BEAST_MARCH_SENT_WAIT_SECONDS,
     INTEL_BEAST_MAX_RETRIES,
     INTEL_BEAST_MAX_WAIT_SECONDS,
@@ -37,8 +39,9 @@ from wosutil.emulator.image_utils import (
     find_text_center_on_screen,
     find_text_on_screen,
     read_screen_time,
+    read_text_lines_on_screen,
 )
-from wosutil.preferences import GATHER_RESOURCES, get_kill_beast_march_assignment
+from wosutil.preferences import GATHER_RESOURCES, get_bear_rally_call_march, get_kill_beast_march_assignment
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.utils import get_roi, get_template_path, log_message, retry_operation
 
@@ -1030,6 +1033,28 @@ def go_pet_skill(instance_index):
     return True
 
 
+def activate_battle_pet_skills(instance_index):
+    """Activates the battle pet skills used before the bear trap attack.
+
+    Navigates to the pet skill screen, clicks the three battle skill entries
+    in sequence and closes the screen with an Android back press.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True when the pet skill screen was reached and the sequence was
+            clicked, False otherwise.
+    """
+    if not go_pet_skill(instance_index):
+        return False
+    click_on_coordinates(140, 454, instance_index, delay=0.6)
+    click_on_coordinates(196, 1089, instance_index, delay=0.6)
+    click_on_coordinates(512, 819, instance_index, delay=0.6)
+    press_android_back_button(instance_index)
+    return True
+
+
 def is_game_on_pet_skill_screen(instance_index):
     """Checks if the game is on the pet skill screen.
 
@@ -1336,6 +1361,47 @@ KILL_BEAST_MARCH_SCROLL_START = (511, 122)
 KILL_BEAST_MARCH_SCROLL_END = (63, 122)
 
 
+def recall_march(instance_index):
+    """Recalls every march currently away from the city on the world map.
+
+    Takes a single screenshot and searches the world-map marching panel ROI
+    (``worldmap_marching``) for the 'recall_march' template, clicking each
+    occurrence and confirming the recall popup at the fixed coordinates
+    (510, 792) before moving to the next one.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Number of marches recalled (0 when there is nothing to recall).
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        return 0
+
+    template_path = get_template_path("recall_march")
+    roi = get_roi("worldmap_marching")
+    if not template_path or not roi:
+        log_message("Could not get the recall_march template or the worldmap_marching ROI.", level="error")
+        delete_temp_screenshot(screenshot_path)
+        return 0
+
+    try:
+        matches = find_multiple_templates(template_path, screenshot_path, roi=roi)
+        if not matches:
+            log_message("No marching units to recall on the world map.", level="info")
+            return 0
+        for x, y, w, h in matches:
+            stop_signal.check()
+            cx, cy = x + w // 2, y + h // 2
+            click_on_coordinates(cx, cy, instance_index, delay=0.6)
+            click_on_coordinates(510, 792, instance_index, delay=0.6)
+            log_message(f"Recalled a march by clicking ({cx}, {cy}) and confirming at (510, 792).", level="success")
+        return len(matches)
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
 def send_march(instance_index):
     """Read the march timer and deploy the march by clicking its Deploy button.
 
@@ -1397,6 +1463,28 @@ def send_march(instance_index):
         delete_temp_screenshot(screenshot_path)
 
 
+def select_march(instance_index, march):
+    """Selects a march formation on the send-march screen, scrolling when needed.
+
+    Marches 9 to 12 live on a second row reached by scrolling the formation
+    selector horizontally first.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        march (int): March number between 1 and 12.
+    """
+    if march > 8:
+        scroll_screen(
+            KILL_BEAST_MARCH_SCROLL_START[0],
+            KILL_BEAST_MARCH_SCROLL_START[1],
+            KILL_BEAST_MARCH_SCROLL_END[0],
+            KILL_BEAST_MARCH_SCROLL_END[1],
+            200,
+            instance_index,
+        )
+    click_on_coordinates(*KILL_BEAST_MARCH_POSITIONS[march], instance_index, delay=0.3)
+
+
 def kill_beast(instance_index):
     """Kills a beast with the default march if the beast is already clicked and centered on the screen.
 
@@ -1417,19 +1505,218 @@ def kill_beast(instance_index):
 
     march = get_kill_beast_march_assignment()
     if march is not None:
-        log_message(f"Selecting march {march} for killing the beast...", level="info")
-        if march > 8:
-            scroll_screen(
-                KILL_BEAST_MARCH_SCROLL_START[0],
-                KILL_BEAST_MARCH_SCROLL_START[1],
-                KILL_BEAST_MARCH_SCROLL_END[0],
-                KILL_BEAST_MARCH_SCROLL_END[1],
-                200,
-                instance_index,
-            )
-        click_on_coordinates(*KILL_BEAST_MARCH_POSITIONS[march], instance_index, delay=0.3)
+        select_march(instance_index, march)
 
     return send_march(instance_index)
+
+
+BEAR_RALLY_MIN_TIMER_SECONDS = 25  # Discard rallies that start in less than this
+BEAR_RALLY_RETRY_SECONDS = 25  # Wait before retrying when no valid rally is on screen
+BEAR_RALLY_MARGIN_SECONDS = 30  # March cooldown margin added to the read rally timer
+BEAR_TRAP_OWN_RALLY_PREP_SECONDS = 5 * 60  # Time our own bear rally takes to prepare
+
+
+_RALLY_COUNTDOWN_RE = re.compile(r"(\d+):(\d+):(\d+)")
+
+
+def _read_rally_countdowns(screenshot_path):
+    """Read the 'Rallying: HH:MM:SS' countdowns of the rallies on the panel.
+
+    Args:
+        screenshot_path (str): Path to the screenshot of the rallies panel.
+
+    Returns:
+        list: (timer_seconds, (x, y, w, h)) countdown text boxes in full-screen
+            coordinates, in reading order.
+    """
+    roi = get_roi("rally_tab")
+    if not roi:
+        log_message("Could not get the rally_tab ROI.", level="error")
+        return []
+    countdowns = []
+    for text, box in read_text_lines_on_screen(screenshot_path, roi=roi):
+        normalized = re.sub(r"[^a-z0-9: ]", "", text.lower())
+        if "rallying" not in normalized:
+            continue
+        match = _RALLY_COUNTDOWN_RE.search(text)
+        if not match:
+            continue
+        hours, minutes, seconds = (int(group) for group in match.groups())
+        countdowns.append((hours * 3600 + minutes * 60 + seconds, box))
+    log_message(f"rally_tab: {len(countdowns)} countdown(s) found", level="debug")
+    for seconds, box in countdowns:
+        log_message(f"  countdown {seconds}s at {box}", level="debug")
+    return countdowns
+
+
+def _read_join_rally_buttons(screenshot_path):
+    """Read the centers of every join_rally button on the rallies panel.
+
+    The template is matched in color (BGR, TM_CCOEFF_NORMED) with a strict
+    0.96 threshold so the green join button is not confused with visually
+    similar elements.
+
+    Args:
+        screenshot_path (str): Path to the screenshot of the rallies panel.
+
+    Returns:
+        list: (cx, cy) join button centers, ordered top to bottom.
+    """
+    template_path = get_template_path("join_rally")
+    roi = get_roi("rally_tab")
+    if not template_path or not roi:
+        log_message("Could not get the join_rally template or the rally_tab ROI.", level="error")
+        return []
+    matches = find_multiple_templates(template_path, screenshot_path, roi=roi, threshold=0.96)
+    log_message(f"join_rally: {len(matches)} match(es) found at threshold 0.96", level="debug")
+    for x, y, w, h in matches:
+        log_message(f"  match at ({x}, {y}, {w}, {h})", level="debug")
+    centers = [(x + w // 2, y + h // 2) for x, y, w, h in matches]
+    return sorted(centers, key=lambda center: center[1])
+
+
+def _pick_valid_rally(countdowns, join_buttons):
+    """Pick the highest valid rally on the panel.
+
+    Countdowns are considered top to bottom and the first one with at least
+    BEAR_RALLY_MIN_TIMER_SECONDS remaining and a join button below its
+    countdown text (never above it) is picked, so the rally higher up on the
+    screen always wins over lower ones.
+
+    Args:
+        countdowns (list): (timer_seconds, (x, y, w, h)) countdown text boxes.
+        join_buttons (list): (cx, cy) join button centers.
+
+    Returns:
+        tuple or None: (timer_seconds, (cx, cy)) of the rally to join, or None
+            when no valid rally is on screen.
+    """
+    for seconds, box in sorted(countdowns, key=lambda item: item[1][1]):
+        if seconds < BEAR_RALLY_MIN_TIMER_SECONDS:
+            continue
+        text_bottom = box[1] + box[3]
+        below = [button for button in join_buttons if button[1] >= text_bottom]
+        if not below:
+            continue
+        return seconds, min(below, key=lambda button: button[1])
+    return None
+
+
+def join_bear_rally(instance_index, march):
+    """Joins an ally rally against the bear with the given march.
+
+    Ensures the world map, opens the rallies panel and joins the first rally
+    whose 'Rallying: HH:MM:SS' countdown still has enough time, clicking the
+    join button right below that countdown and deploying the march with
+    :func:`send_march`, closing the screens with an Android back press so the
+    next attempt starts from a clean world map. When no valid rally is on
+    screen it closes the panel the same way and retries after
+    BEAR_RALLY_RETRY_SECONDS, looping until a rally is joined or the tool is
+    stopped.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        march (int): March number to send, between 1 and 12.
+
+    Returns:
+        int or None: Seconds until the march can be launched again (the read
+            rally timer plus BEAR_RALLY_MARGIN_SECONDS, counting from when the
+            timer was read because it keeps running), or None when the rally
+            could not be joined.
+    """
+    while True:
+        stop_signal.check()
+        if not ensure_world_screen(instance_index):
+            return None
+
+        if not click_on_template("worldmap_rallies", instance_index, roi=get_roi("worldmap_rallies"), delay=0.8):
+            # An overlay is still open (e.g. the rallies panel or a leftover
+            # march screen): close it and retry from a clean world map.
+            press_android_back_button(instance_index)
+            continue
+
+        read_at = time.time()
+        screenshot_path = take_screenshot(instance_index)
+        if not screenshot_path:
+            press_android_back_button(instance_index)
+            time.sleep(BEAR_RALLY_RETRY_SECONDS)
+            continue
+        try:
+            countdowns = _read_rally_countdowns(screenshot_path)
+            join_buttons = _read_join_rally_buttons(screenshot_path)
+        finally:
+            delete_temp_screenshot(screenshot_path)
+
+        rally = _pick_valid_rally(countdowns, join_buttons)
+        if rally is None:
+            # Close the rallies panel back to the world map before retrying.
+            press_android_back_button(instance_index)
+            time.sleep(BEAR_RALLY_RETRY_SECONDS)
+            continue
+
+        timer_seconds, join_center = rally
+        log_message(f"Joining a bear rally starting in {timer_seconds}s with march {march}.", level="info")
+        click_on_coordinates(join_center[0], join_center[1], instance_index, delay=0.8)
+        select_march(instance_index, march)
+        result = send_march(instance_index)
+        if result is False:
+            log_message("No troops left to send to the bear rally, skipping it.", level="warning")
+            press_android_back_button(instance_index)
+            return None
+        if result is None:
+            # The join click did not open the send-march screen (e.g. the rally
+            # already started or the button was stale): close the panel and
+            # retry instead of counting the march as sent.
+            log_message("Could not open the send-march screen, closing the panel and retrying.", level="warning")
+            press_android_back_button(instance_index)
+            time.sleep(BEAR_RALLY_RETRY_SECONDS)
+            continue
+        # Back to the world map so the next rally attempt starts clean.
+        press_android_back_button(instance_index)
+        elapsed = time.time() - read_at
+        return max(0, timer_seconds + BEAR_RALLY_MARGIN_SECONDS - elapsed)
+
+
+def call_bear_rally(instance_index):
+    """Open the bear trap panel and call our own rally with the configured march.
+
+    Clicks the bear trap icon on the world map, waits for the panel to open,
+    clicks the rally button (matched in color, never in gray), confirms at the
+    fixed coordinates and lands on the send-march screen, where the squad
+    selected by the user is deployed with :func:`send_march`.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Seconds to wait before calling another rally (the march time
+            returned by send_march doubled, plus the rally preparation time).
+        False: When there are no troops left to send.
+        None: When the rally could not be called (a step of the flow failed).
+    """
+    if not click_on_template("bear_trap_icon", instance_index, delay=2.0):
+        log_message("Bear trap icon not found on the world map, cannot call a rally.", level="warning")
+        return None
+
+    if not click_on_template("bear_trap_rally", instance_index, delay=0.8):
+        log_message("Bear trap rally button not found, cannot call a rally.", level="warning")
+        press_android_back_button(instance_index)
+        return None
+
+    click_on_coordinates(*COORDINATES["bear_trap_confirm"], instance_index, delay=0.8)
+    select_march(instance_index, get_bear_rally_call_march())
+    result = send_march(instance_index)
+    if result is False:
+        log_message("No troops left to call the bear rally, skipping it.", level="warning")
+        press_android_back_button(instance_index)
+        return False
+    if result is None:
+        log_message("Could not confirm the send-march screen for the bear rally.", level="warning")
+        press_android_back_button(instance_index)
+        return None
+    wait = result * 2 + BEAR_TRAP_OWN_RALLY_PREP_SECONDS
+    log_message(f"Bear rally called, waiting {wait} seconds before calling another one.", level="info")
+    return wait
 
 
 def _click_intel_template(instance_index, templates):

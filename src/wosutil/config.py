@@ -174,6 +174,11 @@ TEMPLATE_PATHS = {
     "send_march_screen": os.path.join(TEMPLATES_DIR, "world", "march", "send_march_screen.png"),
     "gather_tile_increase_level": os.path.join(TEMPLATES_DIR, "world", "gather", "gather_tile_increase_level.png"),
     "remove_hero": os.path.join(TEMPLATES_DIR, "world", "march", "remove_hero.png"),
+    "recall_march": os.path.join(TEMPLATES_DIR, "world", "march", "recall_march.png"),
+    "worldmap_rallies": os.path.join(TEMPLATES_DIR, "world", "march", "worldmap_rallies.png"),
+    "join_rally": os.path.join(TEMPLATES_DIR, "world", "march", "join_rally.png"),
+    "bear_trap_icon": os.path.join(TEMPLATES_DIR, "world", "bear_trap_icon.png"),
+    "bear_trap_rally": os.path.join(TEMPLATES_DIR, "world", "bear_trap_rally.png"),
 }
 
 # --- Automation Parameters ---
@@ -199,6 +204,7 @@ COORDINATES = {
     "sidemenu": (13, 550),
     "intel": (664, 864),
     "world_schedule": (98, 24),
+    "bear_trap_confirm": (360, 812),
 }
 
 # --- Region of Interest (ROI) for Template Matching ---
@@ -241,5 +247,8 @@ ROI = {
     "task_list": (0, 396, 720, 883),
     "worldmap_search": (0, 843, 718, 435),
     "worldmap": (0, 95, 718, 1008),
+    "worldmap_marching": (0, 175, 280, 492),
+    "worldmap_rallies": (595, 128, 123, 675),
+    "rally_tab": (393, 173, 323, 817),
     "gathering_tile_info": (117, 200, 488, 563),
 }

@@ -11,6 +11,9 @@ from wosutil.config import (
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.tool.tasks.task_helpers import (
+    BEAR_RALLY_MARGIN_SECONDS,
+    BEAR_RALLY_RETRY_SECONDS,
+    BEAR_TRAP_OWN_RALLY_PREP_SECONDS,
     KILL_BEAST_MARCH_POSITIONS,
     KILL_BEAST_MARCH_SCROLL_END,
     KILL_BEAST_MARCH_SCROLL_START,
@@ -18,6 +21,10 @@ from wosutil.tool.tasks.task_helpers import (
     WORLD_MAP_SEARCH_SCROLL_END,
     WORLD_MAP_SEARCH_SCROLL_START,
     _click_template_repeatedly,
+    _pick_valid_rally,
+    _read_join_rally_buttons,
+    _read_rally_countdowns,
+    call_bear_rally,
     click_first_found_template,
     click_on_template,
     click_on_text,
@@ -31,6 +38,7 @@ from wosutil.tool.tasks.task_helpers import (
     go_worldmap_search,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
+    join_bear_rally,
     kill_beast,
     kill_intel_beast,
     send_march,
@@ -924,6 +932,240 @@ class TestEnsureCityScreenNotInstalled(unittest.TestCase):
         mock_launch.assert_not_called()
         mock_manager.return_value.stop_instance.assert_not_called()
         mock_manager.return_value.start_instance.assert_not_called()
+
+
+class TestPickValidRally(unittest.TestCase):
+    """Test the rally selection logic."""
+
+    def test_picks_join_button_below_countdown(self):
+        """The join button immediately below a valid countdown is chosen."""
+        countdowns = [(156, (479, 208, 203, 25)), (210, (479, 615, 203, 25))]
+        buttons = [(642, 392), (642, 800)]
+        seconds, button = _pick_valid_rally(countdowns, buttons)
+        self.assertEqual(seconds, 156)
+        self.assertEqual(button, (642, 392))
+
+    def test_picks_highest_rally_when_both_valid(self):
+        """When two rallies are valid the one higher on the screen wins.
+
+        It wins even if its countdown is not the first in reading order.
+        """
+        countdowns = [(210, (479, 615, 203, 25)), (156, (479, 208, 203, 25))]
+        buttons = [(642, 800), (642, 392)]
+        seconds, button = _pick_valid_rally(countdowns, buttons)
+        self.assertEqual(seconds, 156)
+        self.assertEqual(button, (642, 392))
+
+    def test_discards_rallies_starting_too_soon(self):
+        """A countdown below the minimum is skipped for the next rally."""
+        countdowns = [(10, (479, 208, 203, 25)), (210, (479, 615, 203, 25))]
+        buttons = [(642, 392), (642, 800)]
+        seconds, button = _pick_valid_rally(countdowns, buttons)
+        self.assertEqual(seconds, 210)
+        self.assertEqual(button, (642, 800))
+
+    def test_never_clicks_button_above_countdown(self):
+        """A join button above the countdown text is never chosen."""
+        countdowns = [(156, (479, 615, 203, 25))]
+        buttons = [(642, 392)]
+        self.assertIsNone(_pick_valid_rally(countdowns, buttons))
+
+    def test_returns_none_without_valid_rally(self):
+        """No valid countdown with a button below yields None."""
+        self.assertIsNone(_pick_valid_rally([], [(642, 392)]))
+        self.assertIsNone(_pick_valid_rally([(10, (479, 208, 203, 25))], [(642, 800)]))
+
+
+class TestReadRallyHelpers(unittest.TestCase):
+    """Test reading countdowns and join buttons from a screenshot."""
+
+    def test_parses_rallying_countdowns(self):
+        """Only 'Rallying: HH:MM:SS' lines are returned, in full-screen coords."""
+        roi = (393, 173, 323, 817)
+        lines = [
+            ("Rallying: 00:02:36", (479, 208, 203, 25)),
+            ("ion Toby", (393, 267, 94, 25)),
+            ("Rallying: 00:03:30", (479, 615, 203, 25)),
+        ]
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=roi), patch("wosutil.tool.tasks.task_helpers.read_text_lines_on_screen", return_value=lines) as mock_read:
+            countdowns = _read_rally_countdowns("/tmp/shot.png")
+
+        self.assertEqual(countdowns, [(156, (479, 208, 203, 25)), (210, (479, 615, 203, 25))])
+        mock_read.assert_called_once_with("/tmp/shot.png", roi=roi)
+
+    def test_join_buttons_centers_sorted(self):
+        """Join button centers are returned top to bottom, matched in color at 0.9."""
+        roi = (393, 173, 323, 817)
+        boxes = [(617, 778, 48, 44), (617, 371, 48, 44)]
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=roi), patch("wosutil.tool.tasks.task_helpers.get_template_path", return_value="/tmp/join.png"), patch(
+            "wosutil.tool.tasks.task_helpers.find_multiple_templates", return_value=boxes
+        ) as mock_find:
+            buttons = _read_join_rally_buttons("/tmp/shot.png")
+
+        self.assertEqual(buttons, [(641, 393), (641, 800)])
+        mock_find.assert_called_once_with("/tmp/join.png", "/tmp/shot.png", roi=roi, threshold=0.96)
+
+
+class TestJoinBearRally(unittest.TestCase):
+    """Test the join_bear_rally helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.ensure_world_screen", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.click_on_template", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers._read_rally_countdowns"),
+            patch("wosutil.tool.tasks.task_helpers._read_join_rally_buttons"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.select_march"),
+            patch("wosutil.tool.tasks.task_helpers.send_march", return_value=60),
+            patch("wosutil.tool.tasks.task_helpers.press_android_back_button"),
+            patch("wosutil.tool.tasks.task_helpers.time.sleep"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.ensure_world_screen,
+            self.click_on_template,
+            self.take_screenshot,
+            self.delete_screenshot,
+            self.read_countdowns,
+            self.read_buttons,
+            self.click_coords,
+            self.select_march,
+            self.send_march,
+            self.back_button,
+            self.sleep,
+        ) = self.mocks
+        self.read_countdowns.return_value = [(156, (479, 208, 203, 25))]
+        self.read_buttons.return_value = [(642, 392)]
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_joins_valid_rally_and_returns_timer_plus_margin(self):
+        """A valid rally is joined with the given march and the cooldown is returned."""
+        with patch("wosutil.tool.tasks.task_helpers.time.time", return_value=1000.0):
+            result = join_bear_rally(0, 5)
+
+        self.assertEqual(result, 156 + BEAR_RALLY_MARGIN_SECONDS)
+        self.click_on_template.assert_called_once()
+        self.click_coords.assert_any_call(642, 392, 0, delay=0.8)
+        self.select_march.assert_called_once_with(0, 5)
+        self.send_march.assert_called_once_with(0)
+        self.back_button.assert_called_once_with(0)
+        self.sleep.assert_not_called()
+
+    def test_retries_when_no_valid_rally(self):
+        """Without a valid rally the panel is closed and it retries after the wait."""
+        self.read_countdowns.side_effect = [[], [(156, (479, 208, 203, 25))]]
+        with patch("wosutil.tool.tasks.task_helpers.time.time", return_value=1000.0):
+            result = join_bear_rally(0, 3)
+
+        self.assertEqual(result, 156 + BEAR_RALLY_MARGIN_SECONDS)
+        self.sleep.assert_any_call(BEAR_RALLY_RETRY_SECONDS)
+        self.assertEqual(self.click_on_template.call_count, 2)
+        self.assertEqual(self.read_countdowns.call_count, 2)
+        # One back to close the panel without rallies, another to return to the world map after sending.
+        self.assertEqual(self.back_button.call_count, 2)
+        self.back_button.assert_called_with(0)
+
+    def test_returns_none_when_no_troops(self):
+        """When send_march reports no troops the join is skipped."""
+        self.send_march.return_value = False
+        with patch("wosutil.tool.tasks.task_helpers.time.time", return_value=1000.0):
+            result = join_bear_rally(0, 3)
+
+        self.assertIsNone(result)
+        self.send_march.assert_called_once_with(0)
+        self.back_button.assert_called_once_with(0)
+
+    def test_retries_when_send_march_screen_not_confirmed(self):
+        """When the Deploy screen never opens the join is retried, not counted as sent."""
+        self.send_march.side_effect = [None, 60]
+        with patch("wosutil.tool.tasks.task_helpers.time.time", return_value=1000.0):
+            result = join_bear_rally(0, 3)
+
+        self.assertEqual(result, 156 + BEAR_RALLY_MARGIN_SECONDS)
+        self.send_march.assert_has_calls([call(0), call(0)])
+        self.sleep.assert_any_call(BEAR_RALLY_RETRY_SECONDS)
+        self.assertEqual(self.click_on_template.call_count, 2)
+        self.assertEqual(self.click_coords.call_count, 2)
+
+
+class TestCallBearRally(unittest.TestCase):
+    """Test the call_bear_rally helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.click_on_template", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.select_march"),
+            patch("wosutil.tool.tasks.task_helpers.send_march", return_value=60),
+            patch("wosutil.tool.tasks.task_helpers.press_android_back_button"),
+            patch("wosutil.tool.tasks.task_helpers.get_bear_rally_call_march", return_value=4),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.click_template,
+            self.click_coords,
+            self.select_march,
+            self.send_march,
+            self.back_button,
+            self.get_march,
+        ) = self.mocks
+
+    def tearDown(self):
+        """Stop shared mocks."""
+        for p in self.patchers:
+            p.stop()
+
+    def test_calls_rally_and_returns_double_march_time_plus_prep(self):
+        """A successful rally returns march time x2 plus the preparation time."""
+        result = call_bear_rally(0)
+
+        self.assertEqual(result, 60 * 2 + BEAR_TRAP_OWN_RALLY_PREP_SECONDS)
+        self.click_template.assert_any_call("bear_trap_icon", 0, delay=2.0)
+        self.click_template.assert_any_call("bear_trap_rally", 0, delay=0.8)
+        self.click_coords.assert_called_once_with(360, 812, 0, delay=0.8)
+        self.select_march.assert_called_once_with(0, 4)
+        self.send_march.assert_called_once_with(0)
+        self.back_button.assert_not_called()
+
+    def test_returns_none_when_icon_not_found(self):
+        """Without the bear trap icon the rally is not attempted."""
+        self.click_template.side_effect = [False]
+        result = call_bear_rally(0)
+
+        self.assertIsNone(result)
+        self.click_coords.assert_not_called()
+        self.select_march.assert_not_called()
+        self.back_button.assert_not_called()
+
+    def test_returns_none_when_rally_button_not_found(self):
+        """Without the rally button the panel is closed and the call is skipped."""
+        self.click_template.side_effect = [True, False]
+        result = call_bear_rally(0)
+
+        self.assertIsNone(result)
+        self.click_coords.assert_not_called()
+        self.back_button.assert_called_once_with(0)
+
+    def test_returns_false_without_troops(self):
+        """When send_march reports no troops the call is skipped."""
+        self.send_march.return_value = False
+        result = call_bear_rally(0)
+
+        self.assertFalse(result)
+        self.back_button.assert_called_once_with(0)
+
+    def test_returns_none_when_send_march_screen_not_confirmed(self):
+        """When the Deploy screen never opens the call is retried later."""
+        self.send_march.return_value = None
+        result = call_bear_rally(0)
+
+        self.assertIsNone(result)
+        self.back_button.assert_called_once_with(0)
 
 
 if __name__ == "__main__":
