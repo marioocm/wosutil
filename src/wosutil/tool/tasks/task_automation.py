@@ -3,7 +3,7 @@
 import calendar
 import time
 
-from wosutil.config import BEAR_TRAP_DURATION_SECONDS, BEAR_TRAP_PREP_SECONDS, BEAR_TRAP_SCHEDULE_RETRY_SECONDS, INTEL_TIMER_MIN_SECONDS
+from wosutil.config import INTEL_TIMER_MIN_SECONDS
 
 # Import functions from emulator_manager
 from wosutil.emulator.emulator_manager import (
@@ -30,8 +30,11 @@ from wosutil.preferences import (
 )
 from wosutil.stop import stop_signal
 from wosutil.tool.tasks.task_helpers import (
+    BEAR_RALLY_RETRY_SECONDS,
+    BEAR_TRAP_OWN_RALLY_PREP_SECONDS,
     _train_troop_camp,
     activate_battle_pet_skills,
+    call_bear_rally,
     click_first_found_template,
     click_on_template,
     click_on_text,
@@ -1144,6 +1147,12 @@ def do_intel_missions(instance_index):
     return True, 4 * 60 * 60
 
 
+# --- Bear trap ---
+BEAR_TRAP_DURATION_SECONDS = 30 * 60  # Duration of the bear trap attack window
+BEAR_TRAP_PREP_SECONDS = 5 * 60  # Preparation lead time before the bear hunt starts
+BEAR_TRAP_SCHEDULE_RETRY_SECONDS = 6 * 60 * 60  # Retry when no bear hunt schedule is known
+
+
 def play_bear_trap(instance_index):
     """Recalls every march, activates the battle pet skills and joins ally bear rallies.
 
@@ -1281,9 +1290,16 @@ def _bear_trap_prepare_and_join(instance_index, end):
 
     marches = [{"number": number, "next_available": time.time()} for number in get_bear_trap_marches()]
     log_message(f"Joining bear rallies with marches {[m['number'] for m in marches]} for {int(end - time.time())} seconds...", level="info")
+    own_rally_next = 0.0
     while time.time() < end:
         stop_signal.check()
         now = time.time()
+        # Our own rally has priority over joining ally rallies, as long as the
+        # bear hunt has enough time left for the rally to prepare.
+        if own_rally_next <= now and end - now > BEAR_TRAP_OWN_RALLY_PREP_SECONDS:
+            wait = call_bear_rally(instance_index)
+            own_rally_next = now + BEAR_RALLY_RETRY_SECONDS if wait is None or wait is False else now + wait
+            continue
         for march in marches:
             if march["next_available"] <= now:
                 wait = join_bear_rally(instance_index, march["number"])

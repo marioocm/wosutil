@@ -4,8 +4,6 @@ import unittest
 from unittest.mock import call, patch
 
 from wosutil.config import (
-    BEAR_RALLY_MARGIN_SECONDS,
-    BEAR_RALLY_RETRY_SECONDS,
     CLICK_DELAY,
     INTEL_BEAST_MARCH_SENT_WAIT_SECONDS,
     INTEL_BEAST_MAX_RETRIES,
@@ -13,6 +11,9 @@ from wosutil.config import (
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.tool.tasks.task_helpers import (
+    BEAR_RALLY_MARGIN_SECONDS,
+    BEAR_RALLY_RETRY_SECONDS,
+    BEAR_TRAP_OWN_RALLY_PREP_SECONDS,
     KILL_BEAST_MARCH_POSITIONS,
     KILL_BEAST_MARCH_SCROLL_END,
     KILL_BEAST_MARCH_SCROLL_START,
@@ -23,6 +24,7 @@ from wosutil.tool.tasks.task_helpers import (
     _pick_valid_rally,
     _read_join_rally_buttons,
     _read_rally_countdowns,
+    call_bear_rally,
     click_first_found_template,
     click_on_template,
     click_on_text,
@@ -1088,6 +1090,82 @@ class TestJoinBearRally(unittest.TestCase):
         self.sleep.assert_any_call(BEAR_RALLY_RETRY_SECONDS)
         self.assertEqual(self.click_on_template.call_count, 2)
         self.assertEqual(self.click_coords.call_count, 2)
+
+
+class TestCallBearRally(unittest.TestCase):
+    """Test the call_bear_rally helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.click_on_template", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_helpers.select_march"),
+            patch("wosutil.tool.tasks.task_helpers.send_march", return_value=60),
+            patch("wosutil.tool.tasks.task_helpers.press_android_back_button"),
+            patch("wosutil.tool.tasks.task_helpers.get_bear_rally_call_march", return_value=4),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.click_template,
+            self.click_coords,
+            self.select_march,
+            self.send_march,
+            self.back_button,
+            self.get_march,
+        ) = self.mocks
+
+    def tearDown(self):
+        """Stop shared mocks."""
+        for p in self.patchers:
+            p.stop()
+
+    def test_calls_rally_and_returns_double_march_time_plus_prep(self):
+        """A successful rally returns march time x2 plus the preparation time."""
+        result = call_bear_rally(0)
+
+        self.assertEqual(result, 60 * 2 + BEAR_TRAP_OWN_RALLY_PREP_SECONDS)
+        self.click_template.assert_any_call("bear_trap_icon", 0, delay=2.0)
+        self.click_template.assert_any_call("bear_trap_rally", 0, delay=0.8)
+        self.click_coords.assert_called_once_with(360, 812, 0, delay=0.8)
+        self.select_march.assert_called_once_with(0, 4)
+        self.send_march.assert_called_once_with(0)
+        self.back_button.assert_not_called()
+
+    def test_returns_none_when_icon_not_found(self):
+        """Without the bear trap icon the rally is not attempted."""
+        self.click_template.side_effect = [False]
+        result = call_bear_rally(0)
+
+        self.assertIsNone(result)
+        self.click_coords.assert_not_called()
+        self.select_march.assert_not_called()
+        self.back_button.assert_not_called()
+
+    def test_returns_none_when_rally_button_not_found(self):
+        """Without the rally button the panel is closed and the call is skipped."""
+        self.click_template.side_effect = [True, False]
+        result = call_bear_rally(0)
+
+        self.assertIsNone(result)
+        self.click_coords.assert_not_called()
+        self.back_button.assert_called_once_with(0)
+
+    def test_returns_false_without_troops(self):
+        """When send_march reports no troops the call is skipped."""
+        self.send_march.return_value = False
+        result = call_bear_rally(0)
+
+        self.assertFalse(result)
+        self.back_button.assert_called_once_with(0)
+
+    def test_returns_none_when_send_march_screen_not_confirmed(self):
+        """When the Deploy screen never opens the call is retried later."""
+        self.send_march.return_value = None
+        result = call_bear_rally(0)
+
+        self.assertIsNone(result)
+        self.back_button.assert_called_once_with(0)
 
 
 if __name__ == "__main__":

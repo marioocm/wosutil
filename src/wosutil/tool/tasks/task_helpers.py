@@ -8,10 +8,8 @@ import time
 
 # Import configuration and utility functions
 from wosutil.config import (
-    BEAR_RALLY_MARGIN_SECONDS,
-    BEAR_RALLY_MIN_TIMER_SECONDS,
-    BEAR_RALLY_RETRY_SECONDS,
     CLICK_DELAY,
+    COORDINATES,
     INTEL_BEAST_MARCH_SENT_WAIT_SECONDS,
     INTEL_BEAST_MAX_RETRIES,
     INTEL_BEAST_MAX_WAIT_SECONDS,
@@ -43,7 +41,7 @@ from wosutil.emulator.image_utils import (
     read_screen_time,
     read_text_lines_on_screen,
 )
-from wosutil.preferences import GATHER_RESOURCES, get_kill_beast_march_assignment
+from wosutil.preferences import GATHER_RESOURCES, get_bear_rally_call_march, get_kill_beast_march_assignment
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.utils import get_roi, get_template_path, log_message, retry_operation
 
@@ -1512,6 +1510,12 @@ def kill_beast(instance_index):
     return send_march(instance_index)
 
 
+BEAR_RALLY_MIN_TIMER_SECONDS = 25  # Discard rallies that start in less than this
+BEAR_RALLY_RETRY_SECONDS = 25  # Wait before retrying when no valid rally is on screen
+BEAR_RALLY_MARGIN_SECONDS = 30  # March cooldown margin added to the read rally timer
+BEAR_TRAP_OWN_RALLY_PREP_SECONDS = 5 * 60  # Time our own bear rally takes to prepare
+
+
 _RALLY_COUNTDOWN_RE = re.compile(r"(\d+):(\d+):(\d+)")
 
 
@@ -1671,6 +1675,48 @@ def join_bear_rally(instance_index, march):
         press_android_back_button(instance_index)
         elapsed = time.time() - read_at
         return max(0, timer_seconds + BEAR_RALLY_MARGIN_SECONDS - elapsed)
+
+
+def call_bear_rally(instance_index):
+    """Open the bear trap panel and call our own rally with the configured march.
+
+    Clicks the bear trap icon on the world map, waits for the panel to open,
+    clicks the rally button (matched in color, never in gray), confirms at the
+    fixed coordinates and lands on the send-march screen, where the squad
+    selected by the user is deployed with :func:`send_march`.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Seconds to wait before calling another rally (the march time
+            returned by send_march doubled, plus the rally preparation time).
+        False: When there are no troops left to send.
+        None: When the rally could not be called (a step of the flow failed).
+    """
+    if not click_on_template("bear_trap_icon", instance_index, delay=2.0):
+        log_message("Bear trap icon not found on the world map, cannot call a rally.", level="warning")
+        return None
+
+    if not click_on_template("bear_trap_rally", instance_index, delay=0.8):
+        log_message("Bear trap rally button not found, cannot call a rally.", level="warning")
+        press_android_back_button(instance_index)
+        return None
+
+    click_on_coordinates(*COORDINATES["bear_trap_confirm"], instance_index, delay=0.8)
+    select_march(instance_index, get_bear_rally_call_march())
+    result = send_march(instance_index)
+    if result is False:
+        log_message("No troops left to call the bear rally, skipping it.", level="warning")
+        press_android_back_button(instance_index)
+        return False
+    if result is None:
+        log_message("Could not confirm the send-march screen for the bear rally.", level="warning")
+        press_android_back_button(instance_index)
+        return None
+    wait = result * 2 + BEAR_TRAP_OWN_RALLY_PREP_SECONDS
+    log_message(f"Bear rally called, waiting {wait} seconds before calling another one.", level="info")
+    return wait
 
 
 def _click_intel_template(instance_index, templates):

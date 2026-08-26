@@ -177,6 +177,8 @@ TEMPLATE_PATHS = {
     "recall_march": os.path.join(TEMPLATES_DIR, "world", "march", "recall_march.png"),
     "worldmap_rallies": os.path.join(TEMPLATES_DIR, "world", "march", "worldmap_rallies.png"),
     "join_rally": os.path.join(TEMPLATES_DIR, "world", "march", "join_rally.png"),
+    "bear_trap_icon": os.path.join(TEMPLATES_DIR, "world", "bear_trap_icon.png"),
+    "bear_trap_rally": os.path.join(TEMPLATES_DIR, "world", "bear_trap_rally.png"),
 }
 
 # --- Automation Parameters ---
@@ -190,14 +192,6 @@ INTEL_BEAST_TIMER_MAX_SECONDS = 30 * 60  # Max plausible beast march timer; long
 INTEL_BEAST_MARCH_SENT_WAIT_SECONDS = 240  # Reschedule when the march was sent but the timer could not be read
 INTEL_BEAST_MAX_RETRIES = 3  # Max attempts to confirm the send-march screen before giving up
 
-# --- Bear trap ---
-BEAR_TRAP_DURATION_SECONDS = 30 * 60  # Duration of the bear trap attack window
-BEAR_TRAP_PREP_SECONDS = 5 * 60  # Preparation lead time before the bear hunt starts
-BEAR_TRAP_SCHEDULE_RETRY_SECONDS = 6 * 60 * 60  # Retry when no bear hunt schedule is known
-BEAR_RALLY_MIN_TIMER_SECONDS = 25  # Discard rallies that start in less than this
-BEAR_RALLY_RETRY_SECONDS = 25  # Wait before retrying when no valid rally is on screen
-BEAR_RALLY_MARGIN_SECONDS = 30  # March cooldown margin added to the read rally timer
-
 # --- City Coordinates (main screen specific points) ---
 COORDINATES = {
     "world": (654, 1218),
@@ -210,6 +204,7 @@ COORDINATES = {
     "sidemenu": (13, 550),
     "intel": (664, 864),
     "world_schedule": (98, 24),
+    "bear_trap_confirm": (360, 812),
 }
 
 # --- Region of Interest (ROI) for Template Matching ---
