@@ -1,8 +1,9 @@
 """Task automation module for Whiteout Survival."""
 
+import calendar
 import time
 
-from wosutil.config import BEAR_TRAP_DURATION_SECONDS, INTEL_TIMER_MIN_SECONDS
+from wosutil.config import BEAR_TRAP_DURATION_SECONDS, BEAR_TRAP_PREP_SECONDS, BEAR_TRAP_SCHEDULE_RETRY_SECONDS, INTEL_TIMER_MIN_SECONDS
 
 # Import functions from emulator_manager
 from wosutil.emulator.emulator_manager import (
@@ -62,7 +63,7 @@ from wosutil.tool.tasks.task_helpers import (
     rescue_intel_survivor,
     start_pet_adventure_chests,
 )
-from wosutil.tool.utc_time import get_seconds_until_utc_midnight
+from wosutil.tool.utc_time import get_cached_bear_hunt_times, get_seconds_until_utc_midnight
 from wosutil.utils import get_roi, get_template_path, log_message
 
 # --- TASKS ---
@@ -1146,21 +1147,94 @@ def do_intel_missions(instance_index):
 def play_bear_trap(instance_index):
     """Recalls every march, activates the battle pet skills and joins ally bear rallies.
 
+    The task is scheduled around the next Bear Hunt read from the task list
+    (see :func:`get_cached_bear_hunt_times`): when it runs before the hunt it
+    reschedules itself so it fires BEAR_TRAP_PREP_SECONDS before the hunt
+    starts, when it runs in that window it prepares (recall marches and
+    activate the battle pet skills), waits until the hunt start and then keeps
+    every march joining ally rallies for the whole BEAR_TRAP_DURATION_SECONDS
+    window.
+
     The bear trap must be attacked with all marches available, so every march
     still gathering or marching away from the city is recalled first. The task
-    ensures the world map, checks the marching panel for the 'Marching' label
-    and recalls every march listed in it, then clicks the label to reopen the
-    panel, recalls again, and finishes with one last recall pass so a march
-    that appeared or was skipped (e.g. because it moved a little) is not left
-    behind. Then the battle pet skills are activated.
+    ensures the world map, checks the marching panel for the 'Marching' label,
+    recalls every march listed in it (with extra passes so a march that
+    appeared or was skipped is not left behind) and activates the battle pet
+    skills.
 
-    Finally, for the whole bear trap window (BEAR_TRAP_DURATION_SECONDS) it
-    keeps every one of the six marches joining ally rallies against the bear:
-    each march has its own memory of when it can be launched again and always
-    deploys with the same user-selected squad.
+    Being the highest-priority task, it preempts whatever task comes next in
+    the queue: once it fires the instance is dedicated to it for the whole
+    attack window.
 
     Args:
         instance_index (int): Emulator instance index.
+
+    Returns:
+        bool or tuple: True (or (True, seconds)) when the task ran or was
+            scheduled for the upcoming bear hunt, False otherwise. The tuple
+            form reschedules the task so it runs exactly BEAR_TRAP_PREP_SECONDS
+            before the hunt starts.
+    """
+    now = time.time()
+    bear_hunts = get_cached_bear_hunt_times(instance_index)
+    hunt_start = _next_bear_hunt_start(bear_hunts, now)
+    if hunt_start is None:
+        if not bear_hunts:
+            log_message("Bear Hunt schedule not available, running the bear trap right away.", level="warning")
+            return _bear_trap_prepare_and_join(instance_index, end=now + BEAR_TRAP_DURATION_SECONDS)
+        log_message("No upcoming Bear Hunt in the schedule, retrying later.", level="warning")
+        return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
+
+    prep_at = hunt_start - BEAR_TRAP_PREP_SECONDS
+    if now < prep_at:
+        wait = prep_at - now
+        log_message(
+            f"Bear Hunt starts at {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(hunt_start))}, preparing in {wait:.0f} seconds.",
+            level="info",
+        )
+        return True, wait
+
+    log_message(
+        f"Bear Hunt window ({BEAR_TRAP_DURATION_SECONDS // 60} min) starting at {time.strftime('%H:%M:%S UTC', time.gmtime(hunt_start))}, preparing...",
+        level="info",
+    )
+    return _bear_trap_prepare_and_join(instance_index, end=hunt_start + BEAR_TRAP_DURATION_SECONDS)
+
+
+def _next_bear_hunt_start(bear_hunt_times, now):
+    """Return the epoch start of the next bear hunt that can still be joined.
+
+    A hunt counts while its attack window has not fully ended, so a hunt that
+    already started is returned when it is still in progress (the caller will
+    join the remaining window).
+
+    Args:
+        bear_hunt_times (list): (year, month, day, hour, minute) UTC tuples.
+        now (float): Current epoch time in seconds.
+
+    Returns:
+        float or None: Epoch start (UTC seconds) of the next joinable bear
+            hunt, or None when there is none.
+    """
+    window_starts = []
+    for year, month, day, hour, minute in bear_hunt_times:
+        start = calendar.timegm((year, month, day, hour, minute, 0, 0, 0, 0))
+        if start + BEAR_TRAP_DURATION_SECONDS > now:
+            window_starts.append(start)
+    return min(window_starts) if window_starts else None
+
+
+def _bear_trap_prepare_and_join(instance_index, end):
+    """Recall every march, activate the battle pet skills and join ally bear rallies.
+
+    Prepares right away (recall + battle pet skills) and then keeps the
+    marches joining ally rallies until ``end`` (epoch seconds); when the task
+    fires before the attack window starts the function waits inside so the
+    joining begins at the exact bear hunt start.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        end (float): Epoch time at which the bear rally window ends.
 
     Returns:
         bool: True when the task ran, False otherwise.
@@ -1198,9 +1272,15 @@ def play_bear_trap(instance_index):
     if not ensure_world_screen(instance_index):
         return False
 
+    # Wait inside until the attack window starts when firing during preparation.
+    window_start = end - BEAR_TRAP_DURATION_SECONDS
+    while time.time() < window_start:
+        stop_signal.check()
+        if stop_signal.wait(timeout=min(10, window_start - time.time())):
+            return False
+
     marches = [{"number": number, "next_available": time.time()} for number in get_bear_trap_marches()]
-    log_message(f"Joining bear rallies with marches {[m['number'] for m in marches]} for {BEAR_TRAP_DURATION_SECONDS // 60} minutes...", level="info")
-    end = time.time() + BEAR_TRAP_DURATION_SECONDS
+    log_message(f"Joining bear rallies with marches {[m['number'] for m in marches]} for {int(end - time.time())} seconds...", level="info")
     while time.time() < end:
         stop_signal.check()
         now = time.time()

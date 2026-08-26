@@ -192,6 +192,8 @@ INTEL_BEAST_MAX_RETRIES = 3  # Max attempts to confirm the send-march screen bef
 
 # --- Bear trap ---
 BEAR_TRAP_DURATION_SECONDS = 30 * 60  # Duration of the bear trap attack window
+BEAR_TRAP_PREP_SECONDS = 5 * 60  # Preparation lead time before the bear hunt starts
+BEAR_TRAP_SCHEDULE_RETRY_SECONDS = 6 * 60 * 60  # Retry when no bear hunt schedule is known
 BEAR_RALLY_MIN_TIMER_SECONDS = 25  # Discard rallies that start in less than this
 BEAR_RALLY_RETRY_SECONDS = 25  # Wait before retrying when no valid rally is on screen
 BEAR_RALLY_MARGIN_SECONDS = 30  # March cooldown margin added to the read rally timer
