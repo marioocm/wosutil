@@ -106,9 +106,9 @@ class TestPlayBearTrapScheduling(unittest.TestCase):
     def test_runs_preparation_window(self):
         """Within T-5 min and the hunt end the task prepares and joins."""
         run_at = NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS + 60
-        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=run_at), patch(
-            "wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]
-        ), patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True) as prepare:
+        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=run_at), patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]), patch(
+            "wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True
+        ) as prepare:
             result = play_bear_trap(0)
 
         self.assertTrue(result)
@@ -116,9 +116,9 @@ class TestPlayBearTrapScheduling(unittest.TestCase):
 
     def test_runs_immediately_without_schedule(self):
         """Without any cached hunts the task keeps the legacy immediate behavior."""
-        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=NEXT_HUNT_START), patch(
-            "wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[]
-        ), patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True) as prepare:
+        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=NEXT_HUNT_START), patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[]), patch(
+            "wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True
+        ) as prepare:
             result = play_bear_trap(0)
 
         self.assertTrue(result)
@@ -152,11 +152,9 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
         """Firing during preparation waits until the hunt starts before joining."""
         run_at = NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS + 60
         seq = [run_at, NEXT_HUNT_START] + [NEXT_HUNT_START + 1 + i for i in range(11)]
-        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch(
-            "wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"), patch(
-            "wosutil.tool.tasks.task_automation.delete_temp_screenshot"
-        ), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
+        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch("wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True), patch(
+            "wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"
+        ), patch("wosutil.tool.tasks.task_automation.delete_temp_screenshot"), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
             "wosutil.tool.tasks.task_automation.activate_battle_pet_skills", return_value=True
         ) as activate, patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch(
             "wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False
@@ -175,17 +173,13 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
         """Firing when the window already started skips the wait and joins."""
         now = NEXT_HUNT_START + 60
         seq = [now + i for i in range(7)]
-        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch(
-            "wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"), patch(
-            "wosutil.tool.tasks.task_automation.delete_temp_screenshot"
-        ), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
+        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch("wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True), patch(
+            "wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"
+        ), patch("wosutil.tool.tasks.task_automation.delete_temp_screenshot"), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
             "wosutil.tool.tasks.task_automation.activate_battle_pet_skills", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch(
-            "wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False
-        ), patch("wosutil.tool.tasks.task_automation.call_bear_rally", return_value=420) as call_rally, patch(
-            "wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None
-        ) as join:
+        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch("wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False), patch(
+            "wosutil.tool.tasks.task_automation.call_bear_rally", return_value=420
+        ) as call_rally, patch("wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None) as join:
             result = _bear_trap_prepare_and_join(0, NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS)
 
         self.assertTrue(result)
@@ -196,17 +190,13 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
         """A successful own rally blocks further rallies until its cooldown."""
         now = NEXT_HUNT_START + 60
         seq = [now + i for i in range(7)]
-        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch(
-            "wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"), patch(
-            "wosutil.tool.tasks.task_automation.delete_temp_screenshot"
-        ), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
+        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch("wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True), patch(
+            "wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"
+        ), patch("wosutil.tool.tasks.task_automation.delete_temp_screenshot"), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
             "wosutil.tool.tasks.task_automation.activate_battle_pet_skills", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch(
-            "wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False
-        ), patch("wosutil.tool.tasks.task_automation.call_bear_rally", return_value=420) as call_rally, patch(
-            "wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None
-        ) as join:
+        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch("wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False), patch(
+            "wosutil.tool.tasks.task_automation.call_bear_rally", return_value=420
+        ) as call_rally, patch("wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None) as join:
             result = _bear_trap_prepare_and_join(0, NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS)
 
         self.assertTrue(result)
@@ -217,17 +207,13 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
         """A failed own rally is retried after a short wait."""
         now = NEXT_HUNT_START + 60
         seq = [now + i for i in range(31)]
-        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch(
-            "wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"), patch(
-            "wosutil.tool.tasks.task_automation.delete_temp_screenshot"
-        ), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
+        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch("wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True), patch(
+            "wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"
+        ), patch("wosutil.tool.tasks.task_automation.delete_temp_screenshot"), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
             "wosutil.tool.tasks.task_automation.activate_battle_pet_skills", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch(
-            "wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False
-        ), patch("wosutil.tool.tasks.task_automation.call_bear_rally", side_effect=[None, 420]) as call_rally, patch(
-            "wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None
-        ) as join:
+        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch("wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False), patch(
+            "wosutil.tool.tasks.task_automation.call_bear_rally", side_effect=[None, 420]
+        ) as call_rally, patch("wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None) as join:
             result = _bear_trap_prepare_and_join(0, NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS)
 
         self.assertTrue(result)
@@ -238,17 +224,13 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
         """An own rally is not called when the hunt would end before it prepares."""
         now = NEXT_HUNT_START + 60
         seq = [now + i for i in range(9)]
-        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch(
-            "wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"), patch(
-            "wosutil.tool.tasks.task_automation.delete_temp_screenshot"
-        ), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
+        with patch("wosutil.tool.tasks.task_automation.time.time", side_effect=self._clock(*seq)), patch("wosutil.tool.tasks.task_automation.ensure_world_screen", return_value=True), patch(
+            "wosutil.tool.tasks.task_automation.take_screenshot", return_value="/tmp/shot.png"
+        ), patch("wosutil.tool.tasks.task_automation.delete_temp_screenshot"), patch("wosutil.tool.tasks.task_automation.find_text_center_on_screen", return_value=(False, None)), patch(
             "wosutil.tool.tasks.task_automation.activate_battle_pet_skills", return_value=True
-        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch(
-            "wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False
-        ), patch("wosutil.tool.tasks.task_automation.call_bear_rally", return_value=420) as call_rally, patch(
-            "wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None
-        ) as join:
+        ), patch("wosutil.tool.tasks.task_automation.get_bear_trap_marches", return_value=[1]), patch("wosutil.tool.tasks.task_automation.stop_signal.wait", return_value=False), patch(
+            "wosutil.tool.tasks.task_automation.call_bear_rally", return_value=420
+        ) as call_rally, patch("wosutil.tool.tasks.task_automation.join_bear_rally", return_value=None) as join:
             end = NEXT_HUNT_START + 6 * 60  # window ends 6 minutes after the start
             result = _bear_trap_prepare_and_join(0, end)
 
@@ -259,5 +241,3 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
