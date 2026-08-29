@@ -1,16 +1,11 @@
 """Win32 window helpers to keep emulator windows out of the foreground.
 
-Emulators steal the foreground focus when their window is created, and some
-(notably MuMu) re-show their window when the Android boot finishes or the game
-opens, grabbing the focus again. The helpers here minimize emulator windows
-without activating them (``SW_SHOWMINNOACTIVE``), which makes Windows move the
-focus back to whatever the user was doing before; the emulator keeps rendering
+Emulators steal the foreground focus when their window is created. The
+helpers here minimize emulator windows without stealing the user's focus:
+when the window is active it is minimized with ``SW_MINIMIZE``, which makes
+Windows automatically move the focus back to whatever the user was doing
+before; otherwise ``SW_SHOWMINNOACTIVE`` is used. The emulator keeps rendering
 while minimized (that is how multi-instance farming setups are used).
-
-To make the window effectively appear already minimized, a short-lived watcher
-thread polls the foreground window while the instance is opening and minimizes
-it as soon as it belongs to the emulator (by exact window handle or process
-name).
 
 Everything is best-effort: a failure to enumerate or minimize a window never
 raises, so automation continues even if the window API behaves unexpectedly.
@@ -20,7 +15,6 @@ On non-Windows platforms (e.g. CI) every function is a no-op.
 import contextlib
 import ctypes
 import os
-import time
 
 from wosutil.utils import log_message
 
@@ -34,10 +28,6 @@ WS_EX_TOOLWINDOW = 0x00000080
 
 # DwmGetWindowAttribute attribute for cloaked (virtual-desktop hidden) windows.
 DWMWA_CLOAKED = 14
-
-# How often the watcher refreshes the exact window handles of an emulator that
-# can re-create its windows during boot.
-_WATCHER_HANDLE_REFRESH_SECONDS = 15
 
 _user32 = None
 _dwmapi = None
@@ -262,64 +252,3 @@ def minimize_windows_by_title(titles, log=None):
         if _window_is_visible(hwnd) and _window_title(hwnd) in wanted:
             matching.append(hwnd)
     return minimize_hwnds(matching, log=log)
-
-
-def minimize_foreground_watcher(handles, process_names=(), titles=(), seconds=180, interval=0.15, log=None, refresh_handles=None):
-    """Minimize emulator windows that take the foreground while opening.
-
-    Emulators can re-show their window (and grab the focus) some time after
-    launch, e.g. when the Android boot finishes or the game opens. This
-    watcher polls the foreground window and minimizes it as soon as it belongs
-    to the emulator (by exact handle, process name or window title), so the
-    window effectively appears already minimized. Runs on a daemon thread and
-    stops after ``seconds``; the caller never waits for it.
-
-    Args:
-        handles (list): Window handles to minimize if they take the foreground.
-        process_names (list): Executable names whose windows are minimized.
-        titles (list): Window titles to minimize (exact match); covers
-            emulators whose window owner process is unreadable.
-        seconds (float): How long to keep watching.
-        interval (float): Poll interval in seconds.
-        log (callable, optional): Logging function.
-        refresh_handles (callable, optional): Returns fresh window handles;
-            polled periodically because some emulators re-create their windows
-            while booting.
-    """
-    if not _load_win32():
-        return
-    import threading
-
-    threading.Thread(
-        target=_watch_foreground,
-        args=(list(handles), tuple(process_names), tuple(titles), seconds, interval, log, refresh_handles),
-        daemon=True,
-        name="emulator-window-watcher",
-    ).start()
-
-
-def _watch_foreground(handles, process_names, titles, seconds, interval, log, refresh_handles):
-    """Watcher body: poll the foreground window and minimize emulator windows."""
-    if not _load_win32():
-        return
-    wanted = {name.strip().casefold() for name in process_names if name and name.strip()}
-    wanted_titles = {title.strip() for title in titles if title and title.strip()}
-    handle_set = set(handles)
-    last_refresh = 0.0
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        try:
-            fg = _user32.GetForegroundWindow()
-        except OSError:
-            return
-        if fg and not _user32.IsIconic(fg) and (fg in handle_set or (wanted and _window_process_matches(fg, wanted)) or (wanted_titles and _window_title(fg) in wanted_titles)):
-            minimize_hwnds([fg], log=log)
-        if refresh_handles is not None and time.monotonic() - last_refresh >= _WATCHER_HANDLE_REFRESH_SECONDS:
-            last_refresh = time.monotonic()
-            try:
-                fresh = refresh_handles()
-            except Exception:
-                fresh = None
-            if fresh:
-                handle_set = set(fresh)
-        time.sleep(interval)

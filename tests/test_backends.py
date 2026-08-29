@@ -435,7 +435,7 @@ class TestQuietWindowHandling(unittest.TestCase):
             "wosutil.emulator.backends.run_process_robust", return_value=completed_process(MUMU_INFO_OUTPUT)
         ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.minimize_foreground_watcher") as mock_watcher, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.start_instance(0))
 
         # Early pass right after launch + final pass after the boot confirmation.
@@ -447,10 +447,6 @@ class TestQuietWindowHandling(unittest.TestCase):
         self.assertEqual(mock_titles.call_count, 2)
         self.assertEqual(mock_titles.call_args.args[0], ("Healer",))
         # A watcher keeps the window minimized while the instance opens.
-        self.assertEqual(mock_watcher.call_count, 2)
-        self.assertEqual(mock_watcher.call_args.args[0], [0x840F4E, 0xB30C7A])
-        self.assertEqual(mock_watcher.call_args.args[1], backends.MUMU_WINDOW_PROCESS_NAMES)
-        self.assertEqual(mock_watcher.call_args.kwargs["titles"], ("Healer",))
 
     def test_mumu_start_skips_minimizing_when_disabled(self):
         """The preference off disables every window manipulation."""
@@ -459,12 +455,11 @@ class TestQuietWindowHandling(unittest.TestCase):
             "wosutil.emulator.backends.run_process_robust", return_value=completed_process(MUMU_INFO_OUTPUT)
         ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.minimize_foreground_watcher") as mock_watcher, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=False):
+        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=False):
             self.assertTrue(backend.start_instance(0))
         mock_hwnds.assert_not_called()
         mock_sweep.assert_not_called()
         mock_titles.assert_not_called()
-        mock_watcher.assert_not_called()
 
     def test_mumu_start_falls_back_to_process_sweep_without_info(self):
         """Older MuMuManager versions without `info` still minimize by name/title."""
@@ -473,47 +468,42 @@ class TestQuietWindowHandling(unittest.TestCase):
             "wosutil.emulator.backends.run_process_robust", return_value=completed_process("error: unknown command")
         ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.minimize_foreground_watcher") as mock_watcher, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.start_instance(0))
         mock_hwnds.assert_not_called()
         self.assertEqual(mock_sweep.call_count, 2)
         self.assertEqual(mock_titles.call_count, 2)
-        self.assertEqual(mock_watcher.call_count, 2)
 
     def test_mumu_stop_minimizes_related_windows(self):
         """The multi-instance manager window is minimized after a close."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
         with patch.object(backends.MuMuBackend, "_execute_mumu_cli", return_value="shutdown ok"), patch.object(backends.MuMuBackend, "_is_instance_running", return_value=False), patch(
             "wosutil.emulator.backends.minimize_process_windows"
-        ) as mock_sweep, patch("wosutil.emulator.backends.minimize_foreground_watcher") as mock_watcher, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        ) as mock_sweep, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.stop_instance(0))
         mock_sweep.assert_called_once_with(backends.MUMU_WINDOW_PROCESS_NAMES, backend.log)
-        self.assertEqual(mock_watcher.call_args.args[1], backends.MUMU_WINDOW_PROCESS_NAMES)
 
     def test_bluestacks_start_minimizes_player_windows(self):
         """HD-Player windows are minimized on launch and on success."""
         backend = backends.BlueStacksBackend(log_func=lambda *a, **k: None, conf_path=tempfile_helper(SAMPLE_CONF))
         with patch("subprocess.Popen"), patch.object(backend, "_is_instance_running", side_effect=[False, True]), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.minimize_foreground_watcher") as mock_watcher, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.start_instance(0))
         self.assertEqual(mock_sweep.call_count, 2)
         self.assertEqual(mock_sweep.call_args.args[0], backends.BLUESTACKS_WINDOW_PROCESS_NAMES)
         self.assertEqual(mock_titles.call_count, 2)
         self.assertEqual(mock_titles.call_args.args[0], ("Nougat",))
-        self.assertEqual(mock_watcher.call_count, 2)
-        self.assertEqual(mock_watcher.call_args.kwargs["titles"], ("Nougat",))
 
     def test_bluestacks_already_running_keeps_windows_background(self):
         """An already-running instance is minimized and watched as well."""
         backend = backends.BlueStacksBackend(log_func=lambda *a, **k: None, conf_path=tempfile_helper(SAMPLE_CONF))
         with patch.object(backend, "_is_instance_running", return_value=True), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.minimize_foreground_watcher") as mock_watcher, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.start_instance(0))
         mock_sweep.assert_called_once()
         mock_titles.assert_called_once()
-        mock_watcher.assert_called_once()
 
     def test_ldplayer_start_minimizes_player_windows(self):
         """Dnplayer windows are minimized on launch and on success."""
@@ -521,14 +511,12 @@ class TestQuietWindowHandling(unittest.TestCase):
         backend = backends.LDPlayerBackend(log_func=lambda *a, **k: None, config_dir=config_dir)
         with patch("subprocess.Popen"), patch.object(backend, "_is_instance_running", side_effect=[False, True]), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.minimize_foreground_watcher") as mock_watcher, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.start_instance(0))
         self.assertEqual(mock_sweep.call_count, 2)
         self.assertEqual(mock_sweep.call_args.args[0], backends.LDPLAYER_WINDOW_PROCESS_NAMES)
         self.assertEqual(mock_titles.call_count, 2)
         self.assertEqual(mock_titles.call_args.args[0], ("Mario",))
-        self.assertEqual(mock_watcher.call_count, 2)
-        self.assertEqual(mock_watcher.call_args.kwargs["titles"], ("Mario",))
 
     def test_startupinfo_asks_for_minimized_window(self):
         """The launched processes get a SW_SHOWMINNOACTIVE STARTUPINFO."""
