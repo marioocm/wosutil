@@ -521,8 +521,7 @@ def launch_game_activity(instance_index):
     result = execute_adb_command(["shell", "am", "start", "-n", f"{WHITEOUT_PACKAGE}/{WHITEOUT_ACTIVITY}"], instance_index)
     if not result or result.returncode != 0:
         log_message(f"Could not start the main activity '{WHITEOUT_ACTIVITY}'. Attempting to start with the general launcher...", level="warning")
-        # NOTE: avoid the -c flag: MuMuManager's argument parser swallows it,
-        # producing "adb.exe: unknown command android.intent.category.LAUNCHER".
+        # Fall back to the general launcher when the main activity is unknown.
         result_alt = execute_adb_command(["shell", "monkey", "-p", WHITEOUT_PACKAGE, "1"], instance_index)
         return result_alt and result_alt.returncode == 0
 

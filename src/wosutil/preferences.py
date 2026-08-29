@@ -356,8 +356,7 @@ def get_start_minimized(preferences=None):
     emulator is launched, so it never steals the foreground focus while the
     tool runs in the background. Windows returns the focus to whatever the
     user was doing before, and the emulator keeps rendering while minimized.
-    The multi-instance manager window that MuMu may open on close is minimized
-    as well.
+    Emulator windows left behind by MuMu on close are minimized as well.
 
     Args:
         preferences (dict, optional): Preferences data. If None, loads from disk.

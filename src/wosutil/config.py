@@ -49,7 +49,6 @@ def _templates_dir() -> str:
 # --- Paths Configuration ---
 MUMU_BASE_PATH = os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "nx_main")
 MUMU_ADB_PATH = os.path.join(MUMU_BASE_PATH, "adb.exe")
-MUMU_MULTI_PLAYER_PATH = os.path.join(MUMU_BASE_PATH, "MuMuManager.exe")
 MUMU_INSTANCE_BASE_PATH = os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "vms")
 
 # --- BlueStacks Paths Configuration ---

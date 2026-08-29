@@ -38,10 +38,9 @@ from wosutil.config import (
     MUMU_ADB_PATH,
     MUMU_BASE_PATH,
     MUMU_INSTANCE_BASE_PATH,
-    MUMU_MULTI_PLAYER_PATH,
 )
 from wosutil.emulator.instances_controller import MultiInstanceManager, save_instance_cache
-from wosutil.emulator.window_utils import minimize_hwnds, minimize_process_windows, minimize_windows_by_title
+from wosutil.emulator.window_utils import minimize_process_windows, minimize_windows_by_title
 from wosutil.utils import (
     _detached_creation_flags,
     _has_process_option,
@@ -60,8 +59,6 @@ EMULATOR_LDPLAYER = "ldplayer"
 
 _BLUESTACKS_INSTANCE_PORT_RE = re.compile(r"^bst\.instance\.([^.]+)\.status\.adb_port$")
 _LDPLAYER_CONFIG_RE = re.compile(r"^leidian(\d+)\.config$")
-_MUMU_WINDOW_HANDLE_RE = re.compile(r'"(main_wnd|render_wnd)"\s*:\s*"?([0-9A-Fa-f]+)"?')
-_MUMU_INSTANCE_NAME_RE = re.compile(r'"name"\s*:\s*"([^"]+)"')
 
 # Executable names whose windows belong to each emulator family (basename,
 # extensionless, case-insensitive). Used to minimize windows that would
@@ -91,42 +88,6 @@ def start_minimized_enabled():
     from wosutil.preferences import get_start_minimized
 
     return get_start_minimized()
-
-
-def parse_mumu_window_handles(info_output):
-    """Parse the main/render window handles from ``MuMuManager info`` output.
-
-    ``MuMuManager.exe info -v <index>`` reports the exact window handles of an
-    instance (``main_wnd`` and ``render_wnd``) when it is started, which is
-    more precise than matching windows by process name. Older versions without
-    the ``info`` command simply produce no matches.
-
-    Args:
-        info_output (str): Raw output of ``MuMuManager.exe info -v <index>``.
-
-    Returns:
-        list: Window handles (ints) found, main window first.
-    """
-    handles = []
-    for _key, value in _MUMU_WINDOW_HANDLE_RE.findall(info_output or ""):
-        handles.append(int(value, 16))
-    return handles
-
-
-def parse_mumu_instance_name(info_output):
-    """Parse the instance display name from ``MuMuManager info`` output.
-
-    The instance window is titled with this name, so it can be used to match
-    the window even when its owner process is elevated and unreadable.
-
-    Args:
-        info_output (str): Raw output of ``MuMuManager.exe info -v <index>``.
-
-    Returns:
-        str or None: The instance display name, or None when not present.
-    """
-    match = _MUMU_INSTANCE_NAME_RE.search(info_output or "")
-    return match.group(1) if match else None
 
 
 def parse_devices_output(stdout):
@@ -336,49 +297,28 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
     """MuMu Player backend.
 
     Reuses the existing :class:`MultiInstanceManager` for instance management
-    and adds the ADB command/connection helpers MuMu requires (via
-    ``MuMuManager.exe adb``).
+    and adds the ADB command/connection helpers MuMu requires (through its own
+    ``adb.exe``, targeting the predictable 16384 + 32*index serials).
     """
 
     name = EMULATOR_MUMU
 
-    def __init__(self, log_func=None, manager_path=MUMU_MULTI_PLAYER_PATH, adb_path=MUMU_ADB_PATH, instance_base_path=MUMU_INSTANCE_BASE_PATH):
-        """Initialize MuMu with the configured executable and instance paths."""
-        super().__init__(log_func=log_func, multi_player_path=manager_path, instance_base_path=instance_base_path)
-        self.manager_path = manager_path
+    def __init__(self, log_func=None, adb_path=MUMU_ADB_PATH, instance_base_path=MUMU_INSTANCE_BASE_PATH):
+        """Initialize MuMu with the configured adb binary and instance path."""
+        super().__init__(log_func=log_func, instance_base_path=instance_base_path)
         self.adb_path = adb_path
-
-    def _current_window_handles(self, instance_index):
-        """Return the main/render window handles of the instance via ``info``.
-
-        ``MuMuManager.exe info -v <index>`` reports the exact window handles
-        of a started instance (``main_wnd`` and ``render_wnd``), which works
-        even when the window owner process is elevated/unreadable. Older
-        versions without the ``info`` command yield no handles.
-        """
-        try:
-            result = run_process_robust([self.manager_path, "info", "-v", str(instance_index)], timeout=10)
-        except Exception:
-            return [], ""
-        if not result or result.returncode != 0:
-            return [], ""
-        return parse_mumu_window_handles(result.stdout), parse_mumu_instance_name(result.stdout)
 
     def _minimize_instance_windows(self, instance_index):
         """Minimize the instance windows so they never steal the foreground.
 
-        Minimizes the exact window handles reported by ``MuMuManager info``
-        (falling back to process-name and window-title sweeps, since MuMu
-        window owner processes can be elevated/unreadable). Only runs when the
-        instance is being opened by the tool: if the user restores the window
-        afterwards it is left alone.
+        Minimizes by process name and window title (the instance display
+        name), since MuMu window owner processes can be elevated/unreadable.
+        Only runs when the instance is being opened by the tool: if the user
+        restores the window afterwards it is left alone.
         """
         if not start_minimized_enabled():
             return
-        handles, instance_name = self._current_window_handles(instance_index)
-        titles = (instance_name,) if instance_name else ()
-        if handles:
-            minimize_hwnds(handles, self.log)
+        titles = (self._instance_name(instance_index),)
         minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
         minimize_windows_by_title(titles, self.log)
 
@@ -397,11 +337,11 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
     def stop_instance(self, instance_index):
         """Stop the instance and minimize any emulator window left behind.
 
-        MuMu may open its multi-instance manager window when an instance
-        closes; that window is minimized so the close never steals focus.
+        MuMu may show its manager window when an instance is closed or hung;
+        that window is minimized so the close never steals focus.
         """
         stopped = super().stop_instance(instance_index)
-        if stopped and start_minimized_enabled():
+        if start_minimized_enabled():
             minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
         return stopped
 
@@ -425,9 +365,9 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
             instance_index (int): Emulator instance index.
 
         Returns:
-            list: Full argv, e.g. [MuMuManager.exe, "adb", "-v", "0", ...].
+            list: Full argv, e.g. [adb.exe, "-s", "127.0.0.1:16416", ...].
         """
-        return [self.manager_path, "adb", "-v", str(instance_index)] + command_parts
+        return [self.adb_path, "-s", self.get_serial(instance_index)] + command_parts
 
     def list_devices(self):
         """List devices using MuMu's bundled adb binary."""
@@ -900,7 +840,7 @@ def detect_installed_emulators(emulator_paths=None):
     bluestacks_conf = _configured_path(emulator_paths, EMULATOR_BLUESTACKS, "config_path", BLUESTACKS_CONF)
     ldplayer_base_path = _configured_path(emulator_paths, EMULATOR_LDPLAYER, "base_path", LDPLAYER_BASE_PATH)
     installed = []
-    if os.path.exists(os.path.join(mumu_base_path, "MuMuManager.exe")):
+    if os.path.exists(os.path.join(mumu_base_path, "MuMuNxMain.exe")):
         installed.append(EMULATOR_MUMU)
     if os.path.exists(bluestacks_conf):
         installed.append(EMULATOR_BLUESTACKS)
@@ -943,7 +883,6 @@ def create_backend(emulator=None, log_func=None, emulator_paths=None):
         )
     return MuMuBackend(
         log_func=log_func,
-        manager_path=os.path.join(mumu_base_path, "MuMuManager.exe"),
         adb_path=os.path.join(mumu_base_path, "adb.exe"),
         instance_base_path=mumu_instance_base_path,
     )
