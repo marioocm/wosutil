@@ -221,11 +221,13 @@ def is_wos_running(instance_index, verbose=True):
 def is_wos_installed(instance_index, retries=3):
     """Checks if Whiteout Survival is installed on the emulator.
 
-    The check is resilient to transient ADB drops: it re-verifies the ADB
-    connection and retries the package query before concluding. It only
-    returns ``False`` when the device is reachable AND the package is truly
-    absent. If the connection cannot be established after the retries (e.g.
-    the instance closed mid-check), it returns ``True`` so callers never
+    The check is resilient to transient ADB drops and a still-booting
+    Android: it re-verifies the ADB connection and retries the package query
+    before concluding. It only returns ``False`` when the device is
+    reachable, the package query succeeds AND the package is truly absent.
+    If the query itself fails (e.g. Android is still booting and the
+    ``package`` service is not up yet) or the connection cannot be
+    established after the retries, it returns ``True`` so callers never
     abort an otherwise-healthy instance on a false negative; the subsequent
     launch phase will surface a real problem and retry/requeue as needed.
 
@@ -241,15 +243,19 @@ def is_wos_installed(instance_index, retries=3):
     for attempt in range(retries):
         if verify_adb_connected(instance_index, max_attempts=2, wait=2):
             result = execute_adb_command(["shell", "pm", "list", "packages", WHITEOUT_PACKAGE], instance_index)
-            if result and WHITEOUT_PACKAGE in result.stdout:
-                log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) is installed.", level="success")
-                return True
-            # ADB reachable but the package is absent: definitive.
-            log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) not installed.", level="info")
-            return False
-        # Device unreachable this attempt; wait before retrying (transient).
+            if result and result.returncode == 0:
+                if WHITEOUT_PACKAGE in result.stdout:
+                    log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) is installed.", level="success")
+                    return True
+                # The query succeeded and the package is absent: definitive.
+                log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) not installed.", level="info")
+                return False
+            # The package manager is not ready yet (e.g. Android is still
+            # booting); wait before retrying (transient).
+            log_message(f"Package query failed on instance {instance_index}, retrying...", level="warning")
+        # Device unreachable or query failed this attempt; wait before retrying.
         if attempt < retries - 1:
-            time.sleep(2)
+            time.sleep(3)
     # Never confirmed the device: assume installed to avoid a false abort.
     log_message(
         f"Could not verify whether Whiteout Survival is installed on instance {instance_index} (ADB unreachable). Assuming installed to avoid a false 'not installed' abort.",
