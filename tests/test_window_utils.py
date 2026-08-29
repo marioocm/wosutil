@@ -14,8 +14,6 @@ from wosutil.emulator.window_utils import (
     SW_MINIMIZE,
     SW_SHOWMINNOACTIVE,
     WS_EX_TOOLWINDOW,
-    _watch_foreground,
-    minimize_foreground_watcher,
     minimize_hwnds,
     minimize_process_windows,
     minimize_windows_by_title,
@@ -220,86 +218,6 @@ class TestWindowUtils(unittest.TestCase):
             minimize_hwnds([2], log=lambda message: one_arg.append(message))
         self.assertEqual(len(two_arg), 1)
         self.assertEqual(len(one_arg), 1)
-
-
-class TestForegroundWatcher(unittest.TestCase):
-    """The watcher minimizes emulator windows that take the foreground."""
-
-    def setUp(self):
-        """Reset the loaded-DLL state so tests control the platform."""
-        window_utils._user32 = None
-        window_utils._dwmapi = None
-        window_utils._wnd_enum_proc = None
-
-    def test_minimizes_matching_handle_when_it_takes_foreground(self):
-        """A watched handle that becomes foreground is minimized repeatedly."""
-        windows = {0x160680: {"visible": True, "iconic": False, "tool": False, "pid": 100}}
-        user32 = FakeUser32(windows)
-        enable_fake_win32(user32)
-        user32.foreground = 0x160680
-        with patch.object(window_utils, "_load_win32", return_value=True):
-            _watch_foreground([0x160680], (), (), seconds=0.05, interval=0.01, log=None, refresh_handles=None)
-        self.assertTrue(user32.minimized)
-        for hwnd, command in user32.minimized:
-            self.assertEqual((hwnd, command), (0x160680, SW_MINIMIZE))
-
-    def test_ignores_foreign_foreground_windows(self):
-        """Windows not owned by the emulator are never minimized."""
-        windows = {1: {"visible": True, "iconic": False, "tool": False, "pid": 100, "title": "Mario"}}
-        user32 = FakeUser32(windows)
-        enable_fake_win32(user32)
-        user32.foreground = 99
-        with patch.object(window_utils, "_load_win32", return_value=True):
-            _watch_foreground([], ("MuMuNxDevice",), ("Mario",), seconds=0.05, interval=0.01, log=None, refresh_handles=None)
-        self.assertEqual(user32.minimized, [])
-
-    def test_matches_foreground_window_by_process_name(self):
-        """A foreground window owned by a wanted process is minimized."""
-        windows = {1: {"visible": True, "iconic": False, "tool": False, "pid": 100}}
-        user32 = FakeUser32(windows)
-        enable_fake_win32(user32)
-        user32.foreground = 1
-        with patch.object(window_utils, "_load_win32", return_value=True), patch("psutil.Process", side_effect=lambda pid: type("P", (), {"name": lambda self: "MuMuNxDevice.exe"})()):
-            _watch_foreground([], ("MuMuNxDevice",), (), seconds=0.05, interval=0.01, log=None, refresh_handles=None)
-        self.assertTrue(user32.minimized)
-        for hwnd, command in user32.minimized:
-            self.assertEqual((hwnd, command), (1, SW_MINIMIZE))
-
-    def test_matches_foreground_window_by_title(self):
-        """A foreground window titled like the instance is minimized."""
-        windows = {1: {"visible": True, "iconic": False, "tool": False, "pid": 100, "title": "Mario"}}
-        user32 = FakeUser32(windows)
-        enable_fake_win32(user32)
-        user32.foreground = 1
-        with patch.object(window_utils, "_load_win32", return_value=True):
-            _watch_foreground([], (), ("Mario",), seconds=0.05, interval=0.01, log=None, refresh_handles=None)
-        self.assertTrue(user32.minimized)
-        for hwnd, command in user32.minimized:
-            self.assertEqual((hwnd, command), (1, SW_MINIMIZE))
-
-    def test_refresh_handles_updates_the_watched_set(self):
-        """Re-created emulator windows are picked up via refresh_handles."""
-        windows = {0x100: {"visible": True, "iconic": False, "tool": False, "pid": 1}, 0x200: {"visible": True, "iconic": False, "tool": False, "pid": 1}}
-        user32 = FakeUser32(windows)
-        enable_fake_win32(user32)
-        user32.foreground = 0x200
-        with patch.object(window_utils, "_load_win32", return_value=True), patch.object(window_utils, "_WATCHER_HANDLE_REFRESH_SECONDS", 0.01):
-            _watch_foreground([0x100], (), (), seconds=0.12, interval=0.01, log=None, refresh_handles=lambda: [0x200])
-        self.assertTrue(any(hwnd == 0x200 for hwnd, _ in user32.minimized))
-
-    def test_watcher_is_a_daemon_thread(self):
-        """minimize_foreground_watcher spawns a daemon thread on Windows."""
-        user32 = FakeUser32({})
-        enable_fake_win32(user32)
-        with patch.object(window_utils, "_load_win32", return_value=True):
-            minimize_foreground_watcher([], ("HD-Player",), seconds=0.01)
-        self.assertEqual(len(user32.minimized), 0)  # no crash, thread started
-
-    def test_watcher_is_noop_off_windows(self):
-        """On non-Windows platforms no thread is spawned."""
-        with patch.object(window_utils.os, "name", "posix"):
-            minimize_foreground_watcher([1], ("HD-Player",))
-            _watch_foreground([1], ("HD-Player",), (), 0.01, 0.01, None, None)
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ from wosutil.config import (
     MUMU_MULTI_PLAYER_PATH,
 )
 from wosutil.emulator.instances_controller import MultiInstanceManager, save_instance_cache
-from wosutil.emulator.window_utils import minimize_foreground_watcher, minimize_hwnds, minimize_process_windows, minimize_windows_by_title
+from wosutil.emulator.window_utils import minimize_hwnds, minimize_process_windows, minimize_windows_by_title
 from wosutil.utils import run_process_robust
 
 logger = logging.getLogger(__name__)
@@ -73,10 +73,6 @@ MUMU_WINDOW_PROCESS_NAMES = (
 )
 BLUESTACKS_WINDOW_PROCESS_NAMES = ("HD-Player",)
 LDPLAYER_WINDOW_PROCESS_NAMES = ("dnplayer",)
-
-# How long emulator windows are watched for focus stealing after a start/stop,
-# covering the whole opening phase (boot + ADB connect + game launch).
-EMULATOR_WATCHER_SECONDS = 180
 
 
 def start_minimized_enabled():
@@ -427,15 +423,14 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
             return [], ""
         return parse_mumu_window_handles(result.stdout), parse_mumu_instance_name(result.stdout)
 
-    def _minimize_instance_windows(self, instance_index, watch_seconds=EMULATOR_WATCHER_SECONDS):
+    def _minimize_instance_windows(self, instance_index):
         """Minimize the instance windows so they never steal the foreground.
 
         Minimizes the exact window handles reported by ``MuMuManager info``
         (falling back to process-name and window-title sweeps, since MuMu
-        window owner processes can be elevated/unreadable) and starts a
-        short-lived watcher that keeps minimizing them while the instance
-        opens: MuMu can re-show its window when the Android boot finishes or
-        the game starts, which would otherwise grab the focus again.
+        window owner processes can be elevated/unreadable). Only runs when the
+        instance is being opened by the tool: if the user restores the window
+        afterwards it is left alone.
         """
         if not start_minimized_enabled():
             return
@@ -445,21 +440,13 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
             minimize_hwnds(handles, self.log)
         minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
         minimize_windows_by_title(titles, self.log)
-        minimize_foreground_watcher(
-            handles,
-            MUMU_WINDOW_PROCESS_NAMES,
-            titles=titles,
-            seconds=watch_seconds,
-            log=self.log,
-            refresh_handles=lambda: self._current_window_handles(instance_index)[0],
-        )
 
     def start_instance(self, instance_index):
         """Start the instance and keep its window out of the foreground.
 
         The window is minimized right after the launch command is issued and
-        watched until the instance is fully open, so it never keeps the focus
-        while the tool works in the background.
+        again once the instance is confirmed running, so the opening never
+        steals the focus while the tool works in the background.
         """
         started = super().start_instance(instance_index, on_launch=lambda: self._minimize_instance_windows(instance_index))
         if started:
@@ -475,7 +462,6 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
         stopped = super().stop_instance(instance_index)
         if stopped and start_minimized_enabled():
             minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
-            minimize_foreground_watcher((), MUMU_WINDOW_PROCESS_NAMES, seconds=30, log=self.log)
         return stopped
 
     def get_serial(self, instance_index):
@@ -623,10 +609,12 @@ class BlueStacksBackend(EmulatorBackend):
         return devices.get(self.get_serial(instance_index)) == "device"
 
     def _keep_windows_background(self, instance_index):
-        """Minimize BlueStacks windows and watch them while the instance opens.
+        """Minimize BlueStacks windows while the instance opens.
 
         The window owner process can be elevated and unreadable, so the
-        instance display name (the window title) is matched as well.
+        instance display name (the window title) is matched as well. Only runs
+        when the instance is being opened by the tool: if the user restores
+        the window afterwards it is left alone.
         """
         if not start_minimized_enabled():
             return
@@ -634,7 +622,6 @@ class BlueStacksBackend(EmulatorBackend):
         titles = (instance["display_name"],)
         minimize_process_windows(BLUESTACKS_WINDOW_PROCESS_NAMES, self.log)
         minimize_windows_by_title(titles, self.log)
-        minimize_foreground_watcher((), BLUESTACKS_WINDOW_PROCESS_NAMES, titles=titles, seconds=EMULATOR_WATCHER_SECONDS, log=self.log)
 
     def start_instance(self, instance_index):
         """Start a BlueStacks instance via HD-Player and wait for it to boot.
@@ -840,10 +827,12 @@ class LDPlayerBackend(EmulatorBackend):
         return devices.get(self.get_serial(instance_index)) == "device"
 
     def _keep_windows_background(self, instance_index):
-        """Minimize LDPlayer windows and watch them while the instance opens.
+        """Minimize LDPlayer windows while the instance opens.
 
         The window owner process can be elevated and unreadable, so the
-        instance display name (the window title) is matched as well.
+        instance display name (the window title) is matched as well. Only runs
+        when the instance is being opened by the tool: if the user restores
+        the window afterwards it is left alone.
         """
         if not start_minimized_enabled():
             return
@@ -851,7 +840,6 @@ class LDPlayerBackend(EmulatorBackend):
         titles = (instance["display_name"],)
         minimize_process_windows(LDPLAYER_WINDOW_PROCESS_NAMES, self.log)
         minimize_windows_by_title(titles, self.log)
-        minimize_foreground_watcher((), LDPLAYER_WINDOW_PROCESS_NAMES, titles=titles, seconds=EMULATOR_WATCHER_SECONDS, log=self.log)
 
     def start_instance(self, instance_index):
         """Start an LDPlayer instance via ldconsole and wait for it to boot.
