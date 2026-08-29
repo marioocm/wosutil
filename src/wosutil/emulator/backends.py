@@ -107,6 +107,20 @@ def _minimized_startupinfo():
     return startupinfo
 
 
+def _detached_creation_flags():
+    """Return the Windows creation flags for a detached process (0 elsewhere).
+
+    Emulator processes are launched detached so they outlive the tool and are
+    monitored by polling. The flags only exist on Windows; the backends are
+    Windows-only at runtime, but tests also run on Linux CI.
+    """
+    if os.name != "nt":
+        return 0
+    import subprocess
+
+    return getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+
 def parse_mumu_window_handles(info_output):
     """Parse the main/render window handles from ``MuMuManager info`` output.
 
@@ -642,7 +656,7 @@ class BlueStacksBackend(EmulatorBackend):
         try:
             subprocess.Popen(
                 [self.player_path, "--instance", name],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                creationflags=_detached_creation_flags(),
                 startupinfo=_minimized_startupinfo(),
             )
         except OSError as e:
@@ -859,7 +873,7 @@ class LDPlayerBackend(EmulatorBackend):
         try:
             subprocess.Popen(
                 [self.console_path, "launch", "--index", str(instance_index)],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                creationflags=_detached_creation_flags(),
                 startupinfo=_minimized_startupinfo(),
             )
         except OSError as e:
