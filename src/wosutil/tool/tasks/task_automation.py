@@ -66,7 +66,7 @@ from wosutil.tool.tasks.task_helpers import (
     rescue_intel_survivor,
     start_pet_adventure_chests,
 )
-from wosutil.tool.utc_time import get_cached_bear_hunt_times, get_seconds_until_utc_midnight
+from wosutil.tool.utc_time import get_cached_bear_hunt_times, get_seconds_until_utc_midnight, sync_utc_time
 from wosutil.utils import get_roi, get_template_path, log_message
 
 # --- TASKS ---
@@ -1151,6 +1151,7 @@ def do_intel_missions(instance_index):
 BEAR_TRAP_DURATION_SECONDS = 30 * 60  # Duration of the bear trap attack window
 BEAR_TRAP_PREP_SECONDS = 5 * 60  # Preparation lead time before the bear hunt starts
 BEAR_TRAP_SCHEDULE_RETRY_SECONDS = 6 * 60 * 60  # Retry when no bear hunt schedule is known
+BEAR_TRAP_SCHEDULE_REFRESH_MARGIN_SECONDS = 2 * 60 * 60  # Re-read the schedule when the cached next hunt is farther than this
 
 
 def play_bear_trap(instance_index):
@@ -1163,6 +1164,13 @@ def play_bear_trap(instance_index):
     activate the battle pet skills), waits until the hunt start and then keeps
     every march joining ally rallies for the whole BEAR_TRAP_DURATION_SECONDS
     window.
+
+    The cached schedule is refreshed from the task list when it does not point
+    to an imminent hunt (empty, only ended hunts, or the next hunt is farther
+    than BEAR_TRAP_SCHEDULE_REFRESH_MARGIN_SECONDS away): a partial read or a
+    tool restart must not make the task skip a hunt that is about to start.
+    Once a hunt window ends the task list is read again and the task
+    reschedules for the next hunt.
 
     The bear trap must be attacked with all marches available, so every march
     still gathering or marching away from the city is recalled first. The task
@@ -1180,34 +1188,77 @@ def play_bear_trap(instance_index):
 
     Returns:
         bool or tuple: True (or (True, seconds)) when the task ran or was
-            scheduled for the upcoming bear hunt, False otherwise. The tuple
+            scheduled for an upcoming bear hunt, False otherwise. The tuple
             form reschedules the task so it runs exactly BEAR_TRAP_PREP_SECONDS
             before the hunt starts.
     """
     now = time.time()
     bear_hunts = get_cached_bear_hunt_times(instance_index)
     hunt_start = _next_bear_hunt_start(bear_hunts, now)
+    # Refresh the schedule when the cache does not point to an imminent hunt:
+    # a partial read (or a tool restart, which empties the in-memory cache)
+    # must not make the task skip a hunt that is about to start.
+    if hunt_start is None or hunt_start - now > BEAR_TRAP_SCHEDULE_REFRESH_MARGIN_SECONDS:
+        log_message("Refreshing the Bear Hunt schedule from the task list...", level="info")
+        sync_utc_time(instance_index)
+        now = time.time()
+        bear_hunts = get_cached_bear_hunt_times(instance_index)
+        hunt_start = _next_bear_hunt_start(bear_hunts, now)
     if hunt_start is None:
         if not bear_hunts:
             log_message("Bear Hunt schedule not available, running the bear trap right away.", level="warning")
-            return _bear_trap_prepare_and_join(instance_index, end=now + BEAR_TRAP_DURATION_SECONDS)
-        log_message("No upcoming Bear Hunt in the schedule, retrying later.", level="warning")
-        return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
+            played = _bear_trap_prepare_and_join(instance_index, end=now + BEAR_TRAP_DURATION_SECONDS)
+        else:
+            log_message("No upcoming Bear Hunt in the schedule, retrying later.", level="warning")
+            return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
+    else:
+        prep_at = hunt_start - BEAR_TRAP_PREP_SECONDS
+        if now < prep_at:
+            wait = prep_at - now
+            log_message(
+                f"Bear Hunt starts at {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(hunt_start))}, preparing in {wait:.0f} seconds.",
+                level="info",
+            )
+            return True, wait
 
-    prep_at = hunt_start - BEAR_TRAP_PREP_SECONDS
-    if now < prep_at:
-        wait = prep_at - now
         log_message(
-            f"Bear Hunt starts at {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(hunt_start))}, preparing in {wait:.0f} seconds.",
+            f"Bear Hunt window ({BEAR_TRAP_DURATION_SECONDS // 60} min) starting at {time.strftime('%H:%M:%S UTC', time.gmtime(hunt_start))}, preparing...",
             level="info",
         )
-        return True, wait
+        played = _bear_trap_prepare_and_join(instance_index, end=hunt_start + BEAR_TRAP_DURATION_SECONDS)
 
+    if not played:
+        return False
+    return _reschedule_after_bear_hunt(instance_index)
+
+
+def _reschedule_after_bear_hunt(instance_index):
+    """Re-read the task list after a Bear Hunt ends and reschedule for the next one.
+
+    The schedule is read again instead of trusting the cache used to join this
+    hunt: the list can change during or right after a hunt (the next hunt
+    becomes visible, times are adjusted...).
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        tuple: (True, seconds) until the preparation of the next Bear Hunt,
+            or (True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS) when none is known.
+    """
+    log_message("Bear Hunt window over, re-reading the task list schedule...", level="info")
+    sync_utc_time(instance_index)
+    now = time.time()
+    next_hunt = _next_bear_hunt_start(get_cached_bear_hunt_times(instance_index), now)
+    if next_hunt is None:
+        log_message("No upcoming Bear Hunt in the schedule, retrying later.", level="warning")
+        return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
+    wait = next_hunt - BEAR_TRAP_PREP_SECONDS - now
     log_message(
-        f"Bear Hunt window ({BEAR_TRAP_DURATION_SECONDS // 60} min) starting at {time.strftime('%H:%M:%S UTC', time.gmtime(hunt_start))}, preparing...",
+        f"Next Bear Hunt starts at {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(next_hunt))}, preparing in {max(0.0, wait):.0f} seconds.",
         level="info",
     )
-    return _bear_trap_prepare_and_join(instance_index, end=hunt_start + BEAR_TRAP_DURATION_SECONDS)
+    return True, max(0.0, wait)
 
 
 def _next_bear_hunt_start(bear_hunt_times, now):

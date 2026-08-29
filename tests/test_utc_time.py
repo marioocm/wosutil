@@ -16,6 +16,7 @@ from wosutil.tool.utc_time import (
     get_seconds_until_utc_hour,
     get_seconds_until_utc_midnight,
     parse_task_list_schedule,
+    set_cached_bear_hunt_times,
     set_cached_utc_time,
     sync_utc_time,
 )
@@ -191,6 +192,14 @@ class TestSyncUtcTime(unittest.TestCase):
         self.read_screen_utc_time.return_value = None
         self.assertFalse(sync_utc_time(0))
         self.assertIsNone(get_cached_utc_time(0))
+
+    def test_failed_read_clears_previous_bear_hunt_times(self):
+        """A failed schedule read must not leave stale Bear Hunt times behind."""
+        set_cached_bear_hunt_times(0, [(2026, 8, 11, 19, 0)])
+        self.read_bear_hunts.side_effect = RuntimeError("boom")
+        with self.assertRaises(RuntimeError):
+            sync_utc_time(0)
+        self.assertEqual(get_cached_bear_hunt_times(0), [])
 
 
 class TestParseTaskListSchedule(unittest.TestCase):

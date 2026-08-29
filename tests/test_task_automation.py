@@ -93,46 +93,89 @@ class TestPlayBearTrapScheduling(unittest.TestCase):
     """Test the bear trap scheduling around the Bear Hunt."""
 
     def test_schedules_preparation_before_next_hunt(self):
-        """A task run long before the hunt reschedules itself for T-5 minutes."""
-        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=NEXT_HUNT_START - 24 * 60 * 60), patch(
+        """A task run long before the hunt refreshes the schedule and reschedules for T-5 minutes."""
+        run_at = NEXT_HUNT_START - 24 * 60 * 60
+        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=run_at), patch(
             "wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]
-        ) as get_hunts, patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join") as prepare:
+        ) as get_hunts, patch("wosutil.tool.tasks.task_automation.sync_utc_time", return_value=True) as sync, patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join") as prepare:
             result = play_bear_trap(0)
 
-        self.assertEqual(result, (True, (NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS) - (NEXT_HUNT_START - 24 * 60 * 60)))
+        self.assertEqual(result, (True, (NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS) - run_at))
+        sync.assert_called_once_with(0)
         prepare.assert_not_called()
-        get_hunts.assert_called_once_with(0)
+        self.assertEqual(get_hunts.call_count, 2)
 
     def test_runs_preparation_window(self):
         """Within T-5 min and the hunt end the task prepares and joins."""
         run_at = NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS + 60
-        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=run_at), patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]), patch(
-            "wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True
-        ) as prepare:
+        with patch(
+            "wosutil.tool.tasks.task_automation.time.time",
+            side_effect=[run_at, NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS],
+        ), patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]), patch(
+            "wosutil.tool.tasks.task_automation.sync_utc_time", return_value=True
+        ) as sync, patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True) as prepare:
             result = play_bear_trap(0)
 
-        self.assertTrue(result)
+        self.assertEqual(result, (True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS))
         prepare.assert_called_once_with(0, end=NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS)
+        sync.assert_called_once_with(0)
 
     def test_runs_immediately_without_schedule(self):
         """Without any cached hunts the task keeps the legacy immediate behavior."""
         with patch("wosutil.tool.tasks.task_automation.time.time", return_value=NEXT_HUNT_START), patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[]), patch(
-            "wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True
-        ) as prepare:
+            "wosutil.tool.tasks.task_automation.sync_utc_time", return_value=True
+        ) as sync, patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True) as prepare:
             result = play_bear_trap(0)
 
-        self.assertTrue(result)
+        self.assertEqual(result, (True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS))
         prepare.assert_called_once_with(0, end=NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS)
+        self.assertEqual(sync.call_count, 2)
 
     def test_retries_when_only_ended_hunts_known(self):
         """Known hunts that all ended reschedule for a later retry instead of running."""
         with patch("wosutil.tool.tasks.task_automation.time.time", return_value=NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS), patch(
             "wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]
-        ), patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join") as prepare:
+        ), patch("wosutil.tool.tasks.task_automation.sync_utc_time", return_value=True) as sync, patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join") as prepare:
             result = play_bear_trap(0)
 
         self.assertEqual(result, (True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS))
+        sync.assert_called_once_with(0)
         prepare.assert_not_called()
+
+    def test_refreshes_stale_schedule_before_playing(self):
+        """A cache that lost the imminent hunt is refreshed before the task decides.
+
+        A partial read that dropped a hunt about to start must not make the
+        task skip it: the fire-time re-read recovers the imminent hunt.
+        """
+        later_hunt = (2026, 8, 26, 18, 0)  # 6 hours after the imminent hunt
+        run_at = NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS
+        with patch(
+            "wosutil.tool.tasks.task_automation.time.time",
+            side_effect=[run_at, run_at, NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS],
+        ), patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", side_effect=iter([[later_hunt], [NEXT_HUNT], [NEXT_HUNT]])) as get_hunts, patch(
+            "wosutil.tool.tasks.task_automation.sync_utc_time", return_value=True
+        ) as sync, patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True) as prepare:
+            result = play_bear_trap(0)
+
+        self.assertEqual(result, (True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS))
+        prepare.assert_called_once_with(0, end=NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS)
+        self.assertEqual(sync.call_count, 2)
+        self.assertEqual(get_hunts.call_count, 3)
+
+    def test_reschedules_for_next_hunt_after_playing(self):
+        """After a hunt the task list is re-read and the next hunt scheduled."""
+        next_hunt = (2026, 8, 27, 12, 0)
+        next_hunt_start = calendar.timegm((2026, 8, 27, 12, 0, 0, 0, 0))
+        run_at = NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS + 60
+        with patch("wosutil.tool.tasks.task_automation.time.time", return_value=run_at), patch(
+            "wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", side_effect=iter([[NEXT_HUNT], [next_hunt]])
+        ), patch("wosutil.tool.tasks.task_automation.sync_utc_time", return_value=True) as sync, patch("wosutil.tool.tasks.task_automation._bear_trap_prepare_and_join", return_value=True) as prepare:
+            result = play_bear_trap(0)
+
+        self.assertEqual(result, (True, next_hunt_start - BEAR_TRAP_PREP_SECONDS - run_at))
+        sync.assert_called_once_with(0)
+        prepare.assert_called_once_with(0, end=NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS)
 
 
 class TestBearTrapPrepareAndJoin(unittest.TestCase):
