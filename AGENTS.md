@@ -20,7 +20,7 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - Dev mode requires system-installed Tesseract OCR (pytesseract wrapper); the built exe bundles its own copy (resolved in `src/wosutil/emulator/image_utils.py:resolve_tesseract_cmd`).
 - In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil`.
 - Virtual env at `.venv/`.
-- Every feature/fix PR bumps `version` in `pyproject.toml` (patch unless a bigger bump is needed) **in the same branch as the change** — never in a separate release branch. Build the exe (`.\scripts\build.ps1`) before publishing the release — never ship without it.
+- Every change PR bumps `version` in `pyproject.toml` (in the same branch) and builds the exe (`.\scripts\build.ps1`) before publishing.
 - Templates and ROIs are defined in `src/wosutil/config.py` (TEMPLATE_PATHS, COORDINATES, ROI).
 
 ## Commands
@@ -63,8 +63,6 @@ Rules:
 3. Commit in small increments using the conventions above.
 4. Push the branch and open a Pull Request (even for solo work: it runs CI checks and forces a self-review of the diff).
 5. Merge via squash, then delete the remote and local branches.
-
-The version bump belongs in the same PR as the change it ships — there is never a separate release branch; releases are published by tagging the merged `main`.
 
 ### CI
 `.github/workflows/ci.yml` runs ruff, mypy and pytest on every push/PR. Agents must ensure checks pass before pushing; never merge a PR with failing checks.
