@@ -192,9 +192,7 @@ class TestStopInstance(unittest.TestCase):
     def test_stop_kills_when_terminate_is_not_enough(self):
         """A process that ignores terminate is killed after a short wait."""
         proc = fake_process()
-        with patch("wosutil.emulator.instances_controller.time.sleep"), patch.object(
-            self.manager, "_matching_instance_processes", side_effect=[[proc]] * 7 + [[]] * 5
-        ):
+        with patch("wosutil.emulator.instances_controller.time.sleep"), patch.object(self.manager, "_matching_instance_processes", side_effect=[[proc]] * 7 + [[]] * 5):
             result = self.manager.stop_instance(0)
 
         self.assertTrue(result)
