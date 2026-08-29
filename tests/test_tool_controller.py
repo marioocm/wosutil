@@ -159,7 +159,7 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         manager = FakeManagerRunning()
         controller = self._make_controller(manager)
         with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False), patch(
-            "wosutil.emulator.emulator_manager.launch_and_verify_game"
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen"
         ) as mock_launch:
             controller.run_profile_on_instance_with_slot(0, "profile_x")
         mock_launch.assert_not_called()
@@ -176,7 +176,7 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         controller = self._make_controller(manager)
         controller.dialog_queue = dialogs
         with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False), patch(
-            "wosutil.emulator.emulator_manager.launch_and_verify_game"
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen"
         ) as mock_launch:
             controller.run_profile_on_instance_with_slot(0, "profile_x")
         mock_launch.assert_not_called()
@@ -189,7 +189,7 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         manager = FakeManagerRunning()
         controller = self._make_controller(manager)
         with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False), patch(
-            "wosutil.emulator.emulator_manager.launch_and_verify_game"
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen"
         ) as mock_launch:
             controller.run_profile_on_instance_with_slot(0, "profile_x")
             controller.run_profile_on_instance_with_slot(0, "profile_x")
@@ -474,7 +474,7 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         controller.instances_profile_managers[0] = pm
         controller._selected_instances = {0}
         with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
-            "wosutil.emulator.emulator_manager.launch_and_verify_game", return_value=True
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen", return_value=True
         ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"):
             controller.run_profile_on_instance_with_slot(0, "All")
 

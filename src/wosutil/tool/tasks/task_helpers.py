@@ -22,9 +22,10 @@ from wosutil.emulator.emulator_manager import (
     click_on,
     click_on_coordinates,
     delete_temp_screenshot,
+    force_stop_game,
     is_wos_installed,
     is_wos_running,
-    launch_and_verify_game,
+    launch_game_activity,
     press_android_back_button,
     scroll_screen,
     take_screenshot,
@@ -56,6 +57,53 @@ def is_game_on_city_screen(instance_index):
         bool: True if on city screen, False otherwise.
     """
     return is_game_on_screen(instance_index, "city_icon", "city")
+
+
+def launch_and_reach_city_screen(instance_index):
+    """Launch the game and wait until the main city screen is reached.
+
+    Instead of verifying the process for its full duration first and only
+    then navigating, each iteration checks the process, then navigates
+    (back to dismiss startup popups, world-to-city switch) until the city
+    screen is detected, so fast devices finish as soon as the game opens.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True when the city screen was reached, False otherwise.
+    """
+    log_message(f"Closing and relaunching the game on instance {instance_index}...", "info")
+
+    # Close the game
+    force_stop_game(instance_index)
+
+    # Wait a bit before relaunching
+    if stop_signal.wait(timeout=2):
+        raise ToolStopped()
+
+    # Relaunch the game
+    launch_game_activity(instance_index)
+
+    # Verify the process stays active and navigate to the main screen
+    for check in range(1, 11):
+        if stop_signal.wait(timeout=3):
+            raise ToolStopped()
+        if not is_wos_running(instance_index, verbose=False):
+            log_message(f"Game process not detected during check {check}/10 on instance {instance_index}.", "warning")
+            return False
+        if is_game_on_city_screen(instance_index):
+            log_message(f"Game main screen reached on instance {instance_index}.", "success")
+            return True
+        if is_game_on_world_screen(instance_index):
+            log_message("Game is on world screen.", "info")
+            go_cityworld(instance_index)
+        else:
+            log_message(f"Not on main screen. Pressing back (check {check}/10).", "info")
+            press_android_back_button(instance_index)
+
+    log_message(f"Could not reach the main city screen on instance {instance_index}.", "error")
+    return False
 
 
 def _reach_city_screen(instance_index, attempt_label):
@@ -100,7 +148,7 @@ def ensure_city_screen(instance_index):
             return False
         log_message(f"Game not running on instance {instance_index}. Attempting to launch...", "info")
         if not retry_operation(
-            lambda: launch_and_verify_game(instance_index),
+            lambda: launch_and_reach_city_screen(instance_index),
             max_attempts=3,
             delay=2.0,
             retry_on_false=True,
@@ -115,7 +163,7 @@ def ensure_city_screen(instance_index):
                     if stop_signal.wait(timeout=30):
                         raise ToolStopped()
                     log_message(f"Emulator {instance_index} restarted. Attempting to launch game again...", "info")
-                    if not launch_and_verify_game(instance_index):
+                    if not launch_and_reach_city_screen(instance_index):
                         log_message(f"Failed to launch game after emulator restart on instance {instance_index}.", "error")
                         return False
                 except Exception as e:
@@ -128,26 +176,15 @@ def ensure_city_screen(instance_index):
             log_message(f"Game successfully launched on instance {instance_index}.", "success")
     else:
         log_message(f"Game already running on instance {instance_index}.", "info")
-
-    # Step 2: Check if on main city screen
-    if _reach_city_screen(instance_index, "Attempt"):
-        return True
-
-    # If we reach here, we failed to get to the city screen. Restart the game once and retry.
-    log_message("Could not reach city screen after all attempts. Restarting game and retrying...", level="warning")
-
-    stop_signal.check()
-
-    if not launch_and_verify_game(instance_index):
-        log_message("Game restart failed. Cannot reach city screen.", level="error")
-        return False
-
-    # Retry once more after restart
-    if _reach_city_screen(instance_index, "Retry"):
-        return True
-
-    log_message("Failed to reach city screen even after restarting the game.", level="error")
-    return False
+        if _reach_city_screen(instance_index, "Attempt"):
+            return True
+        # The game is running but its screen is stuck: restart it once.
+        log_message("Could not reach city screen after all attempts. Restarting game and retrying...", level="warning")
+        stop_signal.check()
+        if not launch_and_reach_city_screen(instance_index):
+            log_message("Game restart failed. Cannot reach city screen.", level="error")
+            return False
+    return True
 
 
 def is_game_on_world_screen(instance_index):

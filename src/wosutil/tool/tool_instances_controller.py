@@ -403,10 +403,10 @@ class MultiInstanceToolController:
         """
         from wosutil.emulator.emulator_manager import (
             is_wos_installed,
-            launch_and_verify_game,
             verify_adb_connected,
         )
         from wosutil.tool.profiles.profile_manager import ProfileManager
+        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen
 
         def instance_worker():
             try:
@@ -539,7 +539,7 @@ class MultiInstanceToolController:
 
                 # Retry game launch usando retry_operation
                 def try_launch_game():
-                    return launch_and_verify_game(instance_index=index)
+                    return launch_and_reach_city_screen(instance_index=index)
 
                 # Add timeout protection for game launch phase
                 game_launch_start_time = time.time()

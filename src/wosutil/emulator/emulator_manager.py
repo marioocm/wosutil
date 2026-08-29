@@ -15,7 +15,7 @@ from wosutil.config import (
     WHITEOUT_PACKAGE,
 )
 from wosutil.emulator.backends import MuMuBackend
-from wosutil.stop import ToolStopped, stop_signal
+from wosutil.stop import stop_signal
 from wosutil.utils import get_coordinates, log_message, run_process_robust
 
 # Successful ADB verifications per serial, cached for a short window
@@ -525,42 +525,6 @@ def launch_game_activity(instance_index):
         result_alt = execute_adb_command(["shell", "monkey", "-p", WHITEOUT_PACKAGE, "1"], instance_index)
         return result_alt and result_alt.returncode == 0
 
-    return True
-
-
-def launch_and_verify_game(instance_index):
-    """Close the game, relaunch it and verify that the process stays active.
-
-    Args:
-        instance_index (int): Instance index.
-
-    Returns:
-        bool: True if the game process is verified active, False otherwise.
-    """
-    log_message(f"Closing and relaunching the game on instance {instance_index}...", "info")
-
-    # Close the game
-    force_stop_game(instance_index)
-
-    # Wait a bit before relaunching
-    if stop_signal.wait(timeout=2):
-        raise ToolStopped()
-
-    # Relaunch the game
-    launch_game_activity(instance_index)
-
-    # Verify the process stays active every 5 seconds for 35 seconds
-    for check in range(7):  # 7 checks * 5 seconds = 35 seconds total
-        if stop_signal.wait(timeout=5):
-            raise ToolStopped()
-
-        if not is_wos_running(instance_index, verbose=False):
-            log_message(f"Game process not detected during check {check + 1}/7 on instance {instance_index}.", "warning")
-            return False
-        else:
-            log_message(f"Game process verified active (check {check + 1}/7) on instance {instance_index}.", "info")
-
-    log_message(f"Game successfully launched and verified active on instance {instance_index}.", "success")
     return True
 
 
