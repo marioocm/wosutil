@@ -1,30 +1,17 @@
 """Multi-instance emulator controller.
 
-Manages launching, monitoring, and controlling multiple MuMu Player instances
-without requiring the MuMu multi-instance manager: instances are discovered
-from the ``vms`` folder, launched directly with MuMuNxDevice.exe and closed by
-terminating their shell/hypervisor processes.
+Manages discovering and identifying MuMu Player instances without requiring
+the MuMu multi-instance manager: instances are read from the ``vms`` folder
+and matched to their shell/hypervisor processes.
 """
 
 import json
 import logging
 import os
 import re
-import subprocess
-import time
-
-import psutil
 
 from wosutil.config import INSTANCE_CACHE_FILE, MUMU_INSTANCE_BASE_PATH
-from wosutil.utils import (
-    _detached_creation_flags,
-    _has_process_option,
-    _is_process_named,
-    _iter_processes,
-    _minimized_startupinfo,
-    load_json_file,
-    save_json_file,
-)
+from wosutil.utils import _has_process_option, _is_process_named, _iter_processes, load_json_file, save_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +19,7 @@ _VM_FOLDER_RE = re.compile(r"^MuMuPlayerGlobal-[\d.]+-(\d+)$")
 
 
 class MultiInstanceManager:
-    """Manages multiple MuMu emulator instances: listing, starting, and stopping."""
+    """Manages multiple MuMu emulator instances: listing and identifying them."""
 
     def __init__(self, log_func=None, instance_base_path=MUMU_INSTANCE_BASE_PATH):
         """Initializes the MultiInstanceManager.
@@ -127,7 +114,7 @@ class MultiInstanceManager:
         """
         return [self._device_executable(idx), "-v", str(idx), "--vm", self._vm_name(idx)]
 
-    def _matching_instance_processes(self, idx):
+    def _matching_processes(self, idx):
         """Return the shell and hypervisor processes of an instance.
 
         The instance is the VM run by MuMuVMMHeadless (identified by its
@@ -174,110 +161,6 @@ class MultiInstanceManager:
             self.instances.append({"index": idx, "name": self._instance_name(idx)})
         save_instance_cache(self.instances)
         return self.instances
-
-    def _is_instance_running(self, index):
-        """Checks if a specific emulator instance is running.
-
-        The shell process (MuMuNxDevice.exe) or its hypervisor process
-        (MuMuVMMHeadless.exe) only exist while the instance is up, so their
-        ``--vm``/``--comment`` arguments identify the instance without any
-        manager.
-
-        Args:
-            index (int): Instance index.
-
-        Returns:
-            bool: True if running, False otherwise.
-        """
-        return bool(self._matching_instance_processes(index))
-
-    def start_instance(self, index, on_launch=None):
-        """Starts a MuMu emulator instance and waits until it is running.
-
-        The instance VM is launched directly with MuMuNxDevice.exe (the same
-        argv the multi-instance manager uses internally), so neither the
-        manager window nor its process needs to be running first.
-
-        Args:
-            index (int): Instance index.
-            on_launch (callable, optional): Called right after the launch
-                command is issued, before waiting for the instance to boot
-                (e.g. to minimize the emulator window as soon as it appears).
-
-        Returns:
-            bool: True if started successfully, False otherwise.
-        """
-        self.log(f"Starting MuMu instance {index}...", "info")
-        if self._is_instance_running(index):
-            self.log(f"Instance {index} is already running.", "info")
-            if on_launch is not None:
-                on_launch()
-            return True
-        try:
-            subprocess.Popen(
-                self._device_argv(index),
-                creationflags=_detached_creation_flags(),
-                startupinfo=_minimized_startupinfo(),
-            )
-        except OSError as e:
-            self.log(f"Could not launch instance {index}: {e}", "error")
-            return False
-        if on_launch is not None:
-            on_launch()
-        # Wait until the instance is running
-        for _ in range(30):
-            running = self._is_instance_running(index)
-            self.log(f"Instance {index} state: {'running' if running else 'not running'}", "debug")
-            if running:
-                self.log(f"Instance {index} started.", "success")
-                return True
-            time.sleep(2)
-        self.log(f"Could not start instance {index}.", "error")
-        return False
-
-    def stop_instance(self, index):
-        """Stops a MuMu emulator instance by terminating its processes.
-
-        The shell and hypervisor processes are terminated directly (like the
-        BlueStacks backend does), so no manager process or window is involved
-        and a hung emulator is closed as fast as it can be killed. A graceful
-        shutdown through the manager CLI is not attempted: the CLI may spawn
-        the manager window when its process is not running.
-
-        Args:
-            index (int): Instance index.
-
-        Returns:
-            bool: True if stopped successfully, False otherwise.
-        """
-        self.log(f"Stopping MuMu instance {index}...", "info")
-        processes = self._matching_instance_processes(index)
-        if not processes:
-            self.log(f"Instance {index} is not running.", "info")
-            return True
-        for proc in processes:
-            try:
-                proc.terminate()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        # Wait until the instance is stopped
-        for _ in range(5):
-            if not self._matching_instance_processes(index):
-                self.log(f"Instance {index} stopped.", "success")
-                return True
-            time.sleep(2)
-        for proc in self._matching_instance_processes(index):
-            try:
-                proc.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        for _ in range(5):
-            if not self._matching_instance_processes(index):
-                self.log(f"Instance {index} stopped.", "success")
-                return True
-            time.sleep(2)
-        self.log(f"Could not stop instance {index}.", "error")
-        return False
 
 
 def save_instance_cache(instances):

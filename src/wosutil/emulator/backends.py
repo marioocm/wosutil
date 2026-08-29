@@ -233,9 +233,21 @@ def list_ldplayer_instances(config_dir=LDPLAYER_INSTANCE_CONFIG_DIR):
 
 
 class EmulatorBackend(ABC):
-    """Uniform interface implemented by every supported emulator."""
+    """Uniform interface implemented by every supported emulator.
+
+    The instance lifecycle (start/stop, window minimizing, ADB server helpers)
+    is shared by every backend; subclasses only provide the emulator-specific
+    details: how instances are discovered on disk, how one is launched and
+    matched to its processes, and how ADB commands reach it.
+    """
 
     name = ""
+    window_process_names = ()
+
+    def __init__(self, log_func=None, adb_path=None):
+        """Initialize the backend with a logging function and ADB binary."""
+        self.log = log_func or logger.info
+        self.adb_path = adb_path
 
     @abstractmethod
     def get_instances(self):
@@ -245,16 +257,6 @@ class EmulatorBackend(ABC):
     @abstractmethod
     def _is_instance_running(self, instance_index):
         """Return True if the given instance is currently running."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def start_instance(self, instance_index):
-        """Start the instance and wait until it is up. Return True on success."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def stop_instance(self, instance_index):
-        """Stop the instance and wait until it is down. Return True on success."""
         raise NotImplementedError
 
     @abstractmethod
@@ -268,82 +270,183 @@ class EmulatorBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def list_devices(self):
-        """Return {serial: state} from the backend ADB devices command."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def connect(self, serial):
-        """Ask the backend ADB server to connect to ``serial``."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def kill_server(self):
-        """Stop the backend ADB server."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def restart_server(self):
-        """Restart the backend ADB server."""
-        raise NotImplementedError
-
-    @abstractmethod
     def check_adb_access(self):
         """Return non-empty user-facing warnings about ADB access."""
         raise NotImplementedError
+
+    @abstractmethod
+    def _launch_argv(self, instance_index):
+        """Return the argv that starts the instance (a long-lived process).
+
+        The process must not be awaited: instances boot on their own and are
+        monitored by polling, like the other emulator backends do.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _matching_processes(self, instance_index):
+        """Return the running processes that belong to the instance."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _display_name(self, instance_index):
+        """Return the instance display name (its window title)."""
+        raise NotImplementedError
+
+    def _graceful_stop(self, instance_index):
+        """Ask the emulator to close the instance gracefully (optional hook)."""
+        return None
+
+    def _keep_windows_background(self, instance_index):
+        """Minimize the emulator windows so they never steal the foreground.
+
+        The window owner process can be elevated and unreadable, so the
+        instance display name (the window title) is matched as well. Only runs
+        when the instance is being opened by the tool: if the user restores
+        the window afterwards it is left alone.
+        """
+        if not start_minimized_enabled():
+            return
+        titles = (self._display_name(instance_index),)
+        minimize_process_windows(self.window_process_names, self.log)
+        minimize_windows_by_title(titles, self.log)
+
+    def start_instance(self, instance_index):
+        """Start an instance and wait for it to boot. Return True on success.
+
+        The window is launched minimized when the emulator honors the initial
+        window state and is otherwise minimized as soon as it appears, so it
+        never keeps the foreground focus.
+
+        Return False after a generous (60s) window without confirmation.
+        """
+        name = self._display_name(instance_index)
+        self.log(f"Starting instance {name}...", "info")
+        if self._is_instance_running(instance_index):
+            self.log(f"Instance {name} is already running.", "info")
+            self._keep_windows_background(instance_index)
+            return True
+        try:
+            subprocess.Popen(
+                self._launch_argv(instance_index),
+                creationflags=_detached_creation_flags(),
+                startupinfo=_minimized_startupinfo(),
+            )
+        except OSError as e:
+            self.log(f"Could not launch instance {name}: {e}", "error")
+            return False
+        # Minimize as soon as the window appears (and again once confirmed
+        # running) so it never keeps the foreground focus.
+        self._keep_windows_background(instance_index)
+        for _ in range(30):
+            if self._is_instance_running(instance_index):
+                self._keep_windows_background(instance_index)
+                self.log(f"Instance {name} started.", "success")
+                return True
+            time.sleep(2)
+        self.log(f"Could not confirm instance {name} started.", "error")
+        return False
+
+    def stop_instance(self, instance_index):
+        """Stop an instance: graceful request first, then terminate processes.
+
+        The graceful request (when the emulator provides one) is followed by
+        terminating the instance processes directly, which closes a hung
+        emulator fast without needing any manager UI.
+
+        Return False after a short window without confirmation.
+        """
+        name = self._display_name(instance_index)
+        self.log(f"Stopping instance {name}...", "info")
+        if not self._is_instance_running(instance_index):
+            self.log(f"Instance {name} is not running.", "info")
+        else:
+            self._graceful_stop(instance_index)
+            processes = self._matching_processes(instance_index)
+            for proc in processes:
+                try:
+                    proc.terminate()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            for _ in range(5):
+                if not self._matching_processes(instance_index):
+                    self.log(f"Instance {name} stopped.", "success")
+                    break
+                time.sleep(2)
+            else:
+                for proc in self._matching_processes(instance_index):
+                    try:
+                        proc.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                for _ in range(5):
+                    if not self._matching_processes(instance_index):
+                        self.log(f"Instance {name} stopped.", "success")
+                        break
+                    time.sleep(2)
+                else:
+                    self.log(f"Could not stop instance {name}.", "error")
+                    if start_minimized_enabled():
+                        minimize_process_windows(self.window_process_names, self.log)
+                    return False
+        # The emulator may leave windows behind when an instance closes (e.g.
+        # the MuMu manager); minimize them so the close never steals focus.
+        if start_minimized_enabled():
+            minimize_process_windows(self.window_process_names, self.log)
+        return True
+
+    def list_devices(self):
+        """List devices using the backend adb binary."""
+        result = run_process_robust([self.adb_path, "devices"], timeout=15)
+        if not result:
+            return {}
+        return parse_devices_output(result.stdout)
+
+    def connect(self, serial):
+        """Ask the backend ADB server to connect to ``serial``."""
+        run_process_robust([self.adb_path, "connect", serial], timeout=10)
+
+    def kill_server(self):
+        """Stop the backend ADB server."""
+        run_process_robust([self.adb_path, "kill-server"], timeout=10)
+
+    def restart_server(self):
+        """Restart the backend ADB server."""
+        self.kill_server()
+        run_process_robust([self.adb_path, "start-server"], timeout=10)
 
 
 class MuMuBackend(MultiInstanceManager, EmulatorBackend):
     """MuMu Player backend.
 
-    Reuses the existing :class:`MultiInstanceManager` for instance management
+    Reuses the existing :class:`MultiInstanceManager` for instance discovery
     and adds the ADB command/connection helpers MuMu requires (through its own
     ``adb.exe``, targeting the predictable 16384 + 32*index serials).
     """
 
     name = EMULATOR_MUMU
+    window_process_names = MUMU_WINDOW_PROCESS_NAMES
 
     def __init__(self, log_func=None, adb_path=MUMU_ADB_PATH, instance_base_path=MUMU_INSTANCE_BASE_PATH):
         """Initialize MuMu with the configured adb binary and instance path."""
         super().__init__(log_func=log_func, instance_base_path=instance_base_path)
         self.adb_path = adb_path
 
-    def _minimize_instance_windows(self, instance_index):
-        """Minimize the instance windows so they never steal the foreground.
+    def _launch_argv(self, instance_index):
+        """Launch the instance VM directly with its device shell."""
+        return self._device_argv(instance_index)
 
-        Minimizes by process name and window title (the instance display
-        name), since MuMu window owner processes can be elevated/unreadable.
-        Only runs when the instance is being opened by the tool: if the user
-        restores the window afterwards it is left alone.
-        """
-        if not start_minimized_enabled():
-            return
-        titles = (self._instance_name(instance_index),)
-        minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
-        minimize_windows_by_title(titles, self.log)
+    def _matching_processes(self, instance_index):
+        """Match the instance by its shell or hypervisor process."""
+        return super()._matching_processes(instance_index)
 
-    def start_instance(self, instance_index):
-        """Start the instance and keep its window out of the foreground.
+    def _display_name(self, instance_index):
+        """Return the instance display name (the window title)."""
+        return self._instance_name(instance_index)
 
-        The window is minimized right after the launch command is issued and
-        again once the instance is confirmed running, so the opening never
-        steals the focus while the tool works in the background.
-        """
-        started = super().start_instance(instance_index, on_launch=lambda: self._minimize_instance_windows(instance_index))
-        if started:
-            self._minimize_instance_windows(instance_index)
-        return started
-
-    def stop_instance(self, instance_index):
-        """Stop the instance and minimize any emulator window left behind.
-
-        MuMu may show its manager window when an instance is closed or hung;
-        that window is minimized so the close never steals focus.
-        """
-        stopped = super().stop_instance(instance_index)
-        if start_minimized_enabled():
-            minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
-        return stopped
+    def _is_instance_running(self, instance_index):
+        """Check whether the instance is running via its processes."""
+        return bool(self._matching_processes(instance_index))
 
     def get_serial(self, instance_index):
         """Return the MuMu ADB serial for the instance index.
@@ -369,26 +472,6 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
         """
         return [self.adb_path, "-s", self.get_serial(instance_index)] + command_parts
 
-    def list_devices(self):
-        """List devices using MuMu's bundled adb binary."""
-        result = run_process_robust([self.adb_path, "devices"], timeout=15)
-        if not result:
-            return {}
-        return parse_devices_output(result.stdout)
-
-    def connect(self, serial):
-        """Connect the MuMu adb server to the given serial."""
-        run_process_robust([self.adb_path, "connect", serial], timeout=10)
-
-    def kill_server(self):
-        """Stop the MuMu adb server."""
-        run_process_robust([self.adb_path, "kill-server"], timeout=10)
-
-    def restart_server(self):
-        """Restart the MuMu adb server."""
-        self.kill_server()
-        run_process_robust([self.adb_path, "start-server"], timeout=10)
-
     def check_adb_access(self):
         """MuMu does not restrict out-of-the-box ADB usage."""
         return []
@@ -403,6 +486,7 @@ class BlueStacksBackend(EmulatorBackend):
     """
 
     name = EMULATOR_BLUESTACKS
+    window_process_names = BLUESTACKS_WINDOW_PROCESS_NAMES
 
     def __init__(self, log_func=None, conf_path=BLUESTACKS_CONF, adb_path=BLUESTACKS_ADB_PATH, player_path=BLUESTACKS_HD_PLAYER_PATH):
         """Initialize the BlueStacks backend.
@@ -413,9 +497,8 @@ class BlueStacksBackend(EmulatorBackend):
             adb_path (str): Path to HD-Adb.exe.
             player_path (str): Path to HD-Player.exe.
         """
-        self.log = log_func or logger.info
+        super().__init__(log_func=log_func, adb_path=adb_path)
         self.conf_path = conf_path
-        self.adb_path = adb_path
         self.player_path = player_path
         self._instances = []
         self._index_map = {}
@@ -447,6 +530,14 @@ class BlueStacksBackend(EmulatorBackend):
     def _instance_name(self, instance_index):
         """Return the config key (e.g. "Pie64") of an instance slot."""
         return self._get_instance(instance_index)["name"]
+
+    def _display_name(self, instance_index):
+        """Return the instance display name (the window title)."""
+        return self._get_instance(instance_index)["display_name"]
+
+    def _launch_argv(self, instance_index):
+        """Launch the instance through HD-Player.exe."""
+        return [self.player_path, "--instance", self._instance_name(instance_index)]
 
     def get_instances(self):
         """List BlueStacks instances with stable integer indices (by ADB port).
@@ -489,101 +580,6 @@ class BlueStacksBackend(EmulatorBackend):
         devices = self.list_devices()
         return devices.get(self.get_serial(instance_index)) == "device"
 
-    def _keep_windows_background(self, instance_index):
-        """Minimize BlueStacks windows while the instance opens.
-
-        The window owner process can be elevated and unreadable, so the
-        instance display name (the window title) is matched as well. Only runs
-        when the instance is being opened by the tool: if the user restores
-        the window afterwards it is left alone.
-        """
-        if not start_minimized_enabled():
-            return
-        instance = self._get_instance(instance_index)
-        titles = (instance["display_name"],)
-        minimize_process_windows(BLUESTACKS_WINDOW_PROCESS_NAMES, self.log)
-        minimize_windows_by_title(titles, self.log)
-
-    def start_instance(self, instance_index):
-        """Start a BlueStacks instance via HD-Player and wait for it to boot.
-
-        The window is launched minimized when the emulator honors the initial
-        window state and is otherwise minimized as soon as it appears, so it
-        never keeps the foreground focus.
-
-        Return False after a generous (60s) window without confirmation.
-        """
-        name = self._instance_name(instance_index)
-        self.log(f"Starting BlueStacks instance {name}...", "info")
-        if self._is_instance_running(instance_index):
-            self.log(f"BlueStacks instance {name} is already running.", "info")
-            self._keep_windows_background(instance_index)
-            return True
-        # HD-Player.exe hosts the instance and never exits on its own, so it
-        # must be launched detached and monitored by polling, not awaited.
-        try:
-            subprocess.Popen(
-                [self.player_path, "--instance", name],
-                creationflags=_detached_creation_flags(),
-                startupinfo=_minimized_startupinfo(),
-            )
-        except OSError as e:
-            self.log(f"Could not launch BlueStacks instance {name}: {e}", "error")
-            return False
-        # Minimize as soon as the window appears (and again once confirmed
-        # running) so it never keeps the foreground focus.
-        self._keep_windows_background(instance_index)
-        for _ in range(30):
-            if self._is_instance_running(instance_index):
-                self._keep_windows_background(instance_index)
-                self.log(f"BlueStacks instance {name} started.", "success")
-                return True
-            time.sleep(2)
-        self.log(f"Could not confirm BlueStacks instance {name} started.", "error")
-        return False
-
-    def stop_instance(self, instance_index):
-        """Terminate the BlueStacks processes of the instance."""
-        name = self._instance_name(instance_index)
-        self.log(f"Stopping BlueStacks instance {name}...", "info")
-        processes = self._matching_processes(instance_index)
-        if not processes:
-            self.log(f"BlueStacks instance {name} is not running.", "info")
-            return True
-        for proc in processes:
-            try:
-                proc.terminate()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        for _ in range(30):
-            remaining = self._matching_processes(instance_index)
-            if not remaining:
-                self.log(f"BlueStacks instance {name} stopped.", "success")
-                return True
-            time.sleep(2)
-        self.log(f"Could not stop BlueStacks instance {name}.", "error")
-        return False
-
-    def list_devices(self):
-        """List devices using BlueStacks' own HD-Adb."""
-        result = run_process_robust([self.adb_path, "devices"], timeout=15)
-        if not result:
-            return {}
-        return parse_devices_output(result.stdout)
-
-    def connect(self, device):
-        """Connect BlueStacks' HD-Adb server to the given serial."""
-        run_process_robust([self.adb_path, "connect", device], timeout=10)
-
-    def kill_server(self):
-        """Stop BlueStacks' HD-Adb server."""
-        run_process_robust([self.adb_path, "kill-server"], timeout=10)
-
-    def restart_server(self):
-        """Restart BlueStacks' HD-Adb server."""
-        self.kill_server()
-        run_process_robust([self.adb_path, "start-server"], timeout=10)
-
     def check_adb_access(self):
         """Warn when BlueStacks blocks out-of-band ADB shell access.
 
@@ -612,6 +608,7 @@ class LDPlayerBackend(EmulatorBackend):
     """
 
     name = EMULATOR_LDPLAYER
+    window_process_names = LDPLAYER_WINDOW_PROCESS_NAMES
 
     def __init__(
         self,
@@ -630,10 +627,9 @@ class LDPlayerBackend(EmulatorBackend):
             adb_path (str): Path to LDPlayer's bundled adb.exe.
             player_path (str): Path to dnplayer.exe.
         """
-        self.log = log_func or logger.info
+        super().__init__(log_func=log_func, adb_path=adb_path)
         self.config_dir = config_dir
         self.console_path = console_path
-        self.adb_path = adb_path
         self.player_path = player_path
         self._instances = []
         self._index_map = {}
@@ -699,6 +695,18 @@ class LDPlayerBackend(EmulatorBackend):
         """Return the dnplayer processes launched for an instance."""
         return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "dnplayer") and _has_process_option(cmdline, "index", instance_index)]
 
+    def _display_name(self, instance_index):
+        """Return the instance display name (the window title)."""
+        return self._get_instance(instance_index)["display_name"]
+
+    def _launch_argv(self, instance_index):
+        """Launch the instance through ldconsole (asynchronous)."""
+        return [self.console_path, "launch", "--index", str(instance_index)]
+
+    def _graceful_stop(self, instance_index):
+        """Ask ldconsole to close the instance gracefully."""
+        run_process_robust([self.console_path, "quit", "--index", str(instance_index)], timeout=15)
+
     def _is_instance_running(self, instance_index):
         """Check whether the instance is running via its dnplayer process."""
         if self._matching_processes(instance_index):
@@ -706,96 +714,6 @@ class LDPlayerBackend(EmulatorBackend):
         # Fallback: the instance may run headless, visible only as ADB device.
         devices = self.list_devices()
         return devices.get(self.get_serial(instance_index)) == "device"
-
-    def _keep_windows_background(self, instance_index):
-        """Minimize LDPlayer windows while the instance opens.
-
-        The window owner process can be elevated and unreadable, so the
-        instance display name (the window title) is matched as well. Only runs
-        when the instance is being opened by the tool: if the user restores
-        the window afterwards it is left alone.
-        """
-        if not start_minimized_enabled():
-            return
-        instance = self._get_instance(instance_index)
-        titles = (instance["display_name"],)
-        minimize_process_windows(LDPLAYER_WINDOW_PROCESS_NAMES, self.log)
-        minimize_windows_by_title(titles, self.log)
-
-    def start_instance(self, instance_index):
-        """Start an LDPlayer instance via ldconsole and wait for it to boot.
-
-        The window is minimized as soon as it appears, so it never keeps the
-        foreground focus.
-
-        Return False after a generous (60s) window without confirmation.
-        """
-        instance = self._get_instance(instance_index)
-        display_name = instance["display_name"]
-        self.log(f"Starting LDPlayer instance {display_name}...", "info")
-        if self._is_instance_running(instance_index):
-            self.log(f"LDPlayer instance {display_name} is already running.", "info")
-            self._keep_windows_background(instance_index)
-            return True
-        # ldconsole launch is asynchronous: it returns immediately and the
-        # emulator boots on its own, so it must be polled, not awaited.
-        try:
-            subprocess.Popen(
-                [self.console_path, "launch", "--index", str(instance_index)],
-                creationflags=_detached_creation_flags(),
-                startupinfo=_minimized_startupinfo(),
-            )
-        except OSError as e:
-            self.log(f"Could not launch LDPlayer instance {display_name}: {e}", "error")
-            return False
-        # Minimize as soon as the window appears (and again once confirmed
-        # running) so it never keeps the foreground focus.
-        self._keep_windows_background(instance_index)
-        for _ in range(30):
-            if self._is_instance_running(instance_index):
-                self._keep_windows_background(instance_index)
-                self.log(f"LDPlayer instance {display_name} started.", "success")
-                return True
-            time.sleep(2)
-        self.log(f"Could not confirm LDPlayer instance {display_name} started.", "error")
-        return False
-
-    def stop_instance(self, instance_index):
-        """Stop an LDPlayer instance gracefully via ldconsole quit."""
-        instance = self._get_instance(instance_index)
-        display_name = instance["display_name"]
-        self.log(f"Stopping LDPlayer instance {display_name}...", "info")
-        if not self._is_instance_running(instance_index):
-            self.log(f"LDPlayer instance {display_name} is not running.", "info")
-            return True
-        run_process_robust([self.console_path, "quit", "--index", str(instance_index)], timeout=15)
-        for _ in range(30):
-            if not self._matching_processes(instance_index):
-                self.log(f"LDPlayer instance {display_name} stopped.", "success")
-                return True
-            time.sleep(2)
-        self.log(f"Could not stop LDPlayer instance {display_name}.", "error")
-        return False
-
-    def list_devices(self):
-        """List devices using LDPlayer's own adb binary."""
-        result = run_process_robust([self.adb_path, "devices"], timeout=15)
-        if not result:
-            return {}
-        return parse_devices_output(result.stdout)
-
-    def connect(self, device):
-        """Connect LDPlayer's adb server to the given serial."""
-        run_process_robust([self.adb_path, "connect", device], timeout=10)
-
-    def kill_server(self):
-        """Stop LDPlayer's adb server."""
-        run_process_robust([self.adb_path, "kill-server"], timeout=10)
-
-    def restart_server(self):
-        """Restart LDPlayer's adb server."""
-        self.kill_server()
-        run_process_robust([self.adb_path, "start-server"], timeout=10)
 
     def check_adb_access(self):
         """Warn when LDPlayer instances block out-of-band ADB usage.
