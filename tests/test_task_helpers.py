@@ -922,7 +922,7 @@ class TestEnsureCityScreenNotInstalled(unittest.TestCase):
     def test_aborts_without_launching_when_game_missing(self):
         """Missing game: clear error and no launch/restart of the emulator."""
         with patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_wos_installed", return_value=False), patch(
-            "wosutil.tool.tasks.task_helpers.launch_and_verify_game"
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen"
         ) as mock_launch, patch("wosutil.tool.tasks.task_helpers.get_multi_instance_manager") as mock_manager:
             from wosutil.tool.tasks.task_helpers import ensure_city_screen
 
@@ -1166,6 +1166,64 @@ class TestCallBearRally(unittest.TestCase):
 
         self.assertIsNone(result)
         self.back_button.assert_called_once_with(0)
+
+
+class TestLaunchAndReachCityScreen(unittest.TestCase):
+    """The game launch unifies process checks and city-screen navigation."""
+
+    def setUp(self):
+        """Patch the launch flow so no real ADB or sleeps are used."""
+        self.patches = [
+            patch("wosutil.tool.tasks.task_helpers.force_stop_game"),
+            patch("wosutil.tool.tasks.task_helpers.launch_game_activity"),
+            patch("wosutil.tool.tasks.task_helpers.stop_signal.wait", return_value=False),
+            patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False),
+            patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=False),
+            patch("wosutil.tool.tasks.task_helpers.go_cityworld"),
+            patch("wosutil.tool.tasks.task_helpers.press_android_back_button"),
+        ]
+        for p in self.patches:
+            p.start()
+        self.addCleanup(self._stop_patches)
+
+    def _stop_patches(self):
+        for p in self.patches:
+            p.stop()
+
+    def test_reaches_city_screen_and_stops_early(self):
+        """The launch ends on the first check the city screen appears."""
+        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, launch_and_reach_city_screen, press_android_back_button
+
+        is_game_on_city_screen.side_effect = [False, True]
+        result = launch_and_reach_city_screen(0)
+
+        self.assertTrue(result)
+        self.assertEqual(is_game_on_city_screen.call_count, 2)
+        press_android_back_button.assert_called_once_with(0)
+
+    def test_aborts_when_process_disappears(self):
+        """A missing game process fails the launch immediately."""
+        from wosutil.tool.tasks.task_helpers import is_wos_running, launch_and_reach_city_screen
+
+        is_wos_running.return_value = False
+        self.assertFalse(launch_and_reach_city_screen(0))
+
+    def test_switches_from_world_screen(self):
+        """A world screen is switched back to the city instead of pressing back."""
+        from wosutil.tool.tasks.task_helpers import go_cityworld, is_game_on_world_screen, launch_and_reach_city_screen, press_android_back_button
+
+        is_game_on_world_screen.side_effect = [True] + [False] * 9
+        self.assertFalse(launch_and_reach_city_screen(0))
+        go_cityworld.assert_called_once_with(0)
+        self.assertEqual(press_android_back_button.call_count, 9)
+
+    def test_gives_up_after_ten_checks(self):
+        """Without a city screen the launch fails after 10 navigations."""
+        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen, press_android_back_button
+
+        self.assertFalse(launch_and_reach_city_screen(0))
+        self.assertEqual(press_android_back_button.call_count, 10)
 
 
 if __name__ == "__main__":
