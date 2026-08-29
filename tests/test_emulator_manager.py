@@ -62,6 +62,25 @@ class TestIsWosInstalled(unittest.TestCase):
         # It should have retried the connection before giving up.
         self.assertGreaterEqual(self.verify_adb_connected.call_count, 2)
 
+    def test_assumes_installed_when_package_query_fails(self):
+        """A failing package query (e.g. Android still booting) is not 'not installed'."""
+        self.verify_adb_connected.return_value = True
+        # "cmd: Can't find service: package" — the package manager is not up yet.
+        self.execute_adb_command.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="cmd: Can't find service: package\n")
+        self.assertTrue(is_wos_installed(0))
+        # The query should have been retried before giving up.
+        self.assertGreaterEqual(self.execute_adb_command.call_count, 3)
+
+    def test_not_installed_requires_a_successful_query(self):
+        """Only a successful query without the package is definitive."""
+        self.verify_adb_connected.return_value = True
+        self.execute_adb_command.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=1, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="package:com.other.app\n"),
+        ]
+        self.assertFalse(is_wos_installed(0))
+        self.assertEqual(self.execute_adb_command.call_count, 2)
+
 
 class TestScrollScreen(unittest.TestCase):
     """Test cases for the scroll gesture helper."""
