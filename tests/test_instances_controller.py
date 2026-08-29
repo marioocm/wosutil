@@ -1,5 +1,6 @@
 """Unit tests for the emulator instance cache boundary."""
 
+import json
 import os
 import tempfile
 import unittest
@@ -8,12 +9,29 @@ from unittest.mock import patch
 from wosutil.emulator.instances_controller import MultiInstanceManager, load_instance_cache
 
 
-def vm_dir_helper(folders):
-    """Create a temp MuMu vms dir holding the given instance folders."""
+def vm_dir_helper(folders, names=None):
+    """Create a temp MuMu vms dir holding the given instance folders.
+
+    Args:
+        folders (list): Instance folder names, e.g. ["MuMuPlayerGlobal-15.0-0"].
+        names (dict, optional): playerName by folder, e.g. {"MuMuPlayerGlobal-15.0-0": "Healer"}.
+    """
     directory = tempfile.mkdtemp(suffix=".vms")
     for folder in folders:
-        os.makedirs(os.path.join(directory, folder, "configs"), exist_ok=True)
+        configs = os.path.join(directory, folder, "configs")
+        os.makedirs(configs, exist_ok=True)
+        name = (names or {}).get(folder, "Instance")
+        with open(os.path.join(configs, "extra_config.json"), "w", encoding="utf-8") as f:
+            json.dump({"playerName": name}, f)
     return directory
+
+
+def fake_process():
+    """Build a minimal psutil-like process object."""
+    proc = unittest.mock.Mock()
+    proc.terminate.return_value = None
+    proc.kill.return_value = None
+    return proc
 
 
 class TestLoadInstanceCache(unittest.TestCase):
@@ -48,11 +66,7 @@ class TestVmResolution(unittest.TestCase):
     def setUp(self):
         """Create a manager bound to a temp vms dir with two series."""
         self.vms = vm_dir_helper(["MuMuPlayerGlobal-15.0-0", "MuMuPlayerGlobal-12.0-1"])
-        self.manager = MultiInstanceManager(
-            log_func=lambda *a, **k: None,
-            multi_player_path="C:/MuMu/nx_main/MuMuManager.exe",
-            instance_base_path=self.vms,
-        )
+        self.manager = MultiInstanceManager(log_func=lambda *a, **k: None, instance_base_path=self.vms)
 
     def test_vm_name_matches_the_instance_folder(self):
         """The folder of the instance series is used as the VM name."""
@@ -65,28 +79,42 @@ class TestVmResolution(unittest.TestCase):
         self.assertEqual(manager._vm_name(2), "MuMuPlayerGlobal-12.0-2")
 
     def test_device_executable_uses_the_instance_series(self):
-        """Each series resolves to its own nx_device shell."""
-        self.assertEqual(
-            self.manager._device_executable(0),
-            os.path.normpath("C:/MuMu/nx_device/15.0/shell/MuMuNxDevice.exe"),
-        )
-        self.assertEqual(
-            self.manager._device_executable(1),
-            os.path.normpath("C:/MuMu/nx_device/12.0/shell/MuMuNxDevice.exe"),
-        )
+        """Each series resolves to its own nx_device shell next to vms."""
+        expected = os.path.normpath(os.path.join(os.path.dirname(self.vms), "nx_device", "15.0", "shell", "MuMuNxDevice.exe"))
+        self.assertEqual(self.manager._device_executable(0), expected)
 
     def test_device_argv_launches_the_vm_directly(self):
         """The launch argv targets the instance folder without the manager."""
-        self.assertEqual(
-            self.manager._device_argv(0),
-            [
-                os.path.normpath("C:/MuMu/nx_device/15.0/shell/MuMuNxDevice.exe"),
-                "-v",
-                "0",
-                "--vm",
-                "MuMuPlayerGlobal-15.0-0",
-            ],
+        expected = [
+            os.path.normpath(os.path.join(os.path.dirname(self.vms), "nx_device", "15.0", "shell", "MuMuNxDevice.exe")),
+            "-v",
+            "0",
+            "--vm",
+            "MuMuPlayerGlobal-15.0-0",
+        ]
+        self.assertEqual(self.manager._device_argv(0), expected)
+
+
+class TestListInstances(unittest.TestCase):
+    """Instances are discovered by scanning the vms folder."""
+
+    def test_get_instances_reads_folders_and_names(self):
+        """Indices come from the folder names, names from extra_config.json."""
+        self.vms = vm_dir_helper(
+            ["MuMuPlayerGlobal-15.0-0", "MuMuPlayerGlobal-12.0-1", "not-an-instance"],
+            {"MuMuPlayerGlobal-15.0-0": "Healer", "MuMuPlayerGlobal-12.0-1": "Antnee"},
         )
+        manager = MultiInstanceManager(log_func=lambda *a, **k: None, instance_base_path=self.vms)
+        with patch("wosutil.emulator.instances_controller.save_instance_cache") as mock_save:
+            instances = manager.get_instances()
+
+        self.assertEqual(instances, [{"index": 0, "name": "Healer"}, {"index": 1, "name": "Antnee"}])
+        mock_save.assert_called_once_with(instances)
+
+    def test_get_instances_missing_dir_returns_empty(self):
+        """A missing vms dir yields no instances."""
+        manager = MultiInstanceManager(log_func=lambda *a, **k: None, instance_base_path="nonexistent_dir")
+        self.assertEqual(manager.get_instances(), [])
 
 
 class TestStartInstanceOnLaunchHook(unittest.TestCase):
@@ -95,11 +123,7 @@ class TestStartInstanceOnLaunchHook(unittest.TestCase):
     def setUp(self):
         """Create a manager bound to a temp vms dir with one instance."""
         self.vms = vm_dir_helper(["MuMuPlayerGlobal-15.0-0"])
-        self.manager = MultiInstanceManager(
-            log_func=lambda *a, **k: None,
-            multi_player_path="C:/MuMu/nx_main/MuMuManager.exe",
-            instance_base_path=self.vms,
-        )
+        self.manager = MultiInstanceManager(log_func=lambda *a, **k: None, instance_base_path=self.vms)
 
     def test_on_launch_runs_after_the_launch_command(self):
         """The callback is invoked after the device launch and before polling."""
@@ -112,7 +136,13 @@ class TestStartInstanceOnLaunchHook(unittest.TestCase):
         mock_popen.assert_called_once()
         self.assertEqual(
             mock_popen.call_args.args[0],
-            [os.path.normpath("C:/MuMu/nx_device/15.0/shell/MuMuNxDevice.exe"), "-v", "0", "--vm", "MuMuPlayerGlobal-15.0-0"],
+            [
+                os.path.normpath(os.path.join(os.path.dirname(self.vms), "nx_device", "15.0", "shell", "MuMuNxDevice.exe")),
+                "-v",
+                "0",
+                "--vm",
+                "MuMuPlayerGlobal-15.0-0",
+            ],
         )
 
     def test_start_without_callback_still_works(self):
@@ -127,16 +157,54 @@ class TestStartInstanceOnLaunchHook(unittest.TestCase):
         self.assertTrue(result)
         mock_popen.assert_not_called()
 
-    def test_is_running_matches_the_device_process(self):
-        """Only the MuMuNxDevice process of this VM counts as running."""
+    def test_is_running_matches_device_and_hypervisor_processes(self):
+        """The shell and the hypervisor both identify the instance."""
         with patch(
             "wosutil.emulator.instances_controller._iter_processes",
             return_value=[
                 (object(), "MuMuNxDevice.exe", ["MuMuNxDevice.exe", "-v", "0", "--vm", "MuMuPlayerGlobal-15.0-0"]),
-                (object(), "MuMuNxDevice.exe", ["MuMuNxDevice.exe", "-v", "0", "--vm", "MuMuPlayerGlobal-15.0-00"]),
+                (object(), "MuMuVMMHeadless.exe", ["MuMuVMMHeadless.exe", "--comment", "MuMuPlayerGlobal-15.0-0", "--startvm", "abc"]),
+                (object(), "MuMuVMMHeadless.exe", ["MuMuVMMHeadless.exe", "--comment", "MuMuPlayerGlobal-12.0-10", "--startvm", "def"]),
             ],
         ):
             self.assertTrue(self.manager._is_instance_running(0))
+            self.assertFalse(self.manager._is_instance_running(1))
+
+
+class TestStopInstance(unittest.TestCase):
+    """Stopping terminates the instance processes, fast."""
+
+    def setUp(self):
+        """Create a manager bound to a temp vms dir with one instance."""
+        self.vms = vm_dir_helper(["MuMuPlayerGlobal-15.0-0"])
+        self.manager = MultiInstanceManager(log_func=lambda *a, **k: None, instance_base_path=self.vms)
+
+    def test_stop_terminates_and_waits_short(self):
+        """The instance processes are terminated and a short poll confirms."""
+        proc = fake_process()
+        with patch.object(self.manager, "_matching_instance_processes", side_effect=[[proc], [], [], [], [], []]):
+            result = self.manager.stop_instance(0)
+
+        self.assertTrue(result)
+        proc.terminate.assert_called_once()
+        proc.kill.assert_not_called()
+
+    def test_stop_kills_when_terminate_is_not_enough(self):
+        """A process that ignores terminate is killed after a short wait."""
+        proc = fake_process()
+        with patch("wosutil.emulator.instances_controller.time.sleep"), patch.object(self.manager, "_matching_instance_processes", side_effect=[[proc]] * 7 + [[]] * 5):
+            result = self.manager.stop_instance(0)
+
+        self.assertTrue(result)
+        proc.terminate.assert_called_once()
+        proc.kill.assert_called_once()
+
+    def test_stop_when_not_running_is_an_immediate_success(self):
+        """An already stopped instance needs no process handling."""
+        with patch.object(self.manager, "_matching_instance_processes", return_value=[]):
+            result = self.manager.stop_instance(0)
+
+        self.assertTrue(result)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from wosutil.emulator import backends
 from wosutil.emulator.emulator_manager import get_active_backend, set_active_backend
@@ -68,12 +68,12 @@ class TestMumuBackend(unittest.TestCase):
         self.assertEqual(backend.get_serial(1), "127.0.0.1:16416")
 
     def test_build_command_shape(self):
-        """MuMu build_adb_command matches the original MuMuManager argv."""
-        from wosutil.config import MUMU_MULTI_PLAYER_PATH
+        """MuMu adb commands target the instance serial directly."""
+        from wosutil.config import MUMU_ADB_PATH
 
         backend = backends.MuMuBackend()
         command = backend.build_adb_command(["shell", "input", "tap", "100", "200"], 1)
-        self.assertEqual(command, [MUMU_MULTI_PLAYER_PATH, "adb", "-v", "1", "shell", "input", "tap", "100", "200"])
+        self.assertEqual(command, [MUMU_ADB_PATH, "-s", "127.0.0.1:16416", "shell", "input", "tap", "100", "200"])
 
     def test_no_adb_warnings(self):
         """MuMu produces no ADB access warnings."""
@@ -251,10 +251,10 @@ class TestBackendFactory(unittest.TestCase):
             self.assertEqual(backends.detect_installed_emulators(), [])
 
     def test_detect_installed_mumu_only(self):
-        """Only MuMu is detected when only its manager exists."""
+        """Only MuMu is detected when only its main executable exists."""
 
         def exists(path):
-            return path == backends.MUMU_MULTI_PLAYER_PATH
+            return path == os.path.normpath(os.path.join(backends.MUMU_BASE_PATH, "MuMuNxMain.exe"))
 
         with patch.object(backends.os.path, "exists", side_effect=exists):
             self.assertEqual(backends.detect_installed_emulators(), [backends.EMULATOR_MUMU])
@@ -284,7 +284,7 @@ class TestBackendFactory(unittest.TestCase):
             backends.EMULATOR_LDPLAYER: {"base_path": "F:/LDPlayer", "instance_config_dir": "F:/LDPlayer/vms/config"},
         }
         existing = {
-            os.path.normpath(os.path.join("D:/MuMu", "MuMuManager.exe")),
+            os.path.normpath(os.path.join("D:/MuMu", "MuMuNxMain.exe")),
             os.path.normpath("E:/Data/bluestacks.conf"),
             os.path.normpath(os.path.join("F:/LDPlayer", "ldconsole.exe")),
         }
@@ -315,7 +315,6 @@ class TestBackendFactory(unittest.TestCase):
         }
 
         mumu = backends.create_backend(backends.EMULATOR_MUMU, emulator_paths=paths)
-        self.assertEqual(mumu.manager_path, os.path.normpath(os.path.join("D:/MuMu", "MuMuManager.exe")))
         self.assertEqual(mumu.adb_path, os.path.normpath(os.path.join("D:/MuMu", "adb.exe")))
         self.assertEqual(mumu.instance_base_path, os.path.normpath("D:/MuMu/vms"))
 
@@ -392,55 +391,20 @@ class TestActiveBackend(unittest.TestCase):
         self.assertIs(get_active_backend(), fake)
 
 
-MUMU_INFO_OUTPUT = """{
-    "adb_port": 16384,
-    "index": "2",
-    "main_wnd": "00840F4E",
-    "name": "Healer",
-    "render_wnd": "00B30C7A",
-    "player_state": "start_finished"
-}"""
-
-
-def completed_process(stdout):
-    """Build a CompletedProcess with the given stdout and exit code 0."""
-    import subprocess
-
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
-
-
 class TestQuietWindowHandling(unittest.TestCase):
     """Emulator windows must be minimized so they never steal the focus."""
-
-    def test_parse_mumu_window_handles(self):
-        """Info output yields the main and render window handles."""
-        self.assertEqual(backends.parse_mumu_window_handles(MUMU_INFO_OUTPUT), [0x840F4E, 0xB30C7A])
-
-    def test_parse_mumu_instance_name(self):
-        """Info output yields the instance display name (the window title)."""
-        self.assertEqual(backends.parse_mumu_instance_name(MUMU_INFO_OUTPUT), "Healer")
-        self.assertIsNone(backends.parse_mumu_instance_name("error: unknown command"))
-        self.assertIsNone(backends.parse_mumu_instance_name(None))
-
-    def test_parse_mumu_window_handles_tolerates_bad_output(self):
-        """Unparseable or missing info output yields no handles."""
-        self.assertEqual(backends.parse_mumu_window_handles(""), [])
-        self.assertEqual(backends.parse_mumu_window_handles("error: unknown command"), [])
-        self.assertEqual(backends.parse_mumu_window_handles(None), [])
 
     def test_mumu_start_minimizes_after_launch_and_when_running(self):
         """The window is minimized right after launch and again on success."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch(
-            "wosutil.emulator.backends.run_process_robust", return_value=completed_process(MUMU_INFO_OUTPUT)
-        ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
-            "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch.object(
+            backends.MuMuBackend, "_instance_name", return_value="Healer"
+        ), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch("wosutil.emulator.backends.minimize_windows_by_title") as mock_titles, patch(
+            "wosutil.emulator.backends.start_minimized_enabled", return_value=True
+        ):
             self.assertTrue(backend.start_instance(0))
 
         # Early pass right after launch + final pass after the boot confirmation.
-        self.assertEqual(mock_hwnds.call_count, 2)
-        self.assertEqual(mock_hwnds.call_args.args[0], [0x840F4E, 0xB30C7A])
         self.assertEqual(mock_sweep.call_count, 2)
         self.assertEqual(mock_sweep.call_args.args[0], backends.MUMU_WINDOW_PROCESS_NAMES)
         # The instance display name (the window title) is matched too.
@@ -450,36 +414,32 @@ class TestQuietWindowHandling(unittest.TestCase):
     def test_mumu_start_skips_minimizing_when_disabled(self):
         """The preference off disables every window manipulation."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch(
-            "wosutil.emulator.backends.run_process_robust", return_value=completed_process(MUMU_INFO_OUTPUT)
-        ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
-            "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=False):
+        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch.object(
+            backends.MuMuBackend, "_instance_name", return_value="Healer"
+        ), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch("wosutil.emulator.backends.minimize_windows_by_title") as mock_titles, patch(
+            "wosutil.emulator.backends.start_minimized_enabled", return_value=False
+        ):
             self.assertTrue(backend.start_instance(0))
-        mock_hwnds.assert_not_called()
         mock_sweep.assert_not_called()
         mock_titles.assert_not_called()
 
-    def test_mumu_start_falls_back_to_process_sweep_without_info(self):
-        """MuMuManager versions without `info` still minimize by name/title."""
+    def test_mumu_stop_minimizes_windows_after_close(self):
+        """Any emulator window left behind is minimized after a close."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch(
-            "wosutil.emulator.backends.run_process_robust", return_value=completed_process("error: unknown command")
-        ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
-            "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
-            self.assertTrue(backend.start_instance(0))
-        mock_hwnds.assert_not_called()
-        self.assertEqual(mock_sweep.call_count, 2)
-        self.assertEqual(mock_titles.call_count, 2)
+        with patch.object(backends.MuMuBackend, "_matching_instance_processes", side_effect=[[], [], [], [], [], []]), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
+            "wosutil.emulator.backends.start_minimized_enabled", return_value=True
+        ):
+            self.assertTrue(backend.stop_instance(0))
+        mock_sweep.assert_called_once_with(backends.MUMU_WINDOW_PROCESS_NAMES, backend.log)
 
-    def test_mumu_stop_minimizes_related_windows(self):
-        """The multi-instance manager window is minimized after a close."""
+    def test_mumu_stop_minimizes_windows_even_when_the_stop_fails(self):
+        """The manager window is minimized even if the instance cannot be stopped."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch.object(backends.MuMuBackend, "_execute_mumu_cli", return_value="shutdown ok"), patch.object(backends.MuMuBackend, "_is_instance_running", return_value=False), patch(
+        proc = Mock()
+        with patch("wosutil.emulator.instances_controller.time.sleep"), patch.object(backends.MuMuBackend, "_matching_instance_processes", return_value=[proc]), patch(
             "wosutil.emulator.backends.minimize_process_windows"
         ) as mock_sweep, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
-            self.assertTrue(backend.stop_instance(0))
+            self.assertFalse(backend.stop_instance(0))
         mock_sweep.assert_called_once_with(backends.MUMU_WINDOW_PROCESS_NAMES, backend.log)
 
     def test_bluestacks_start_minimizes_player_windows(self):
