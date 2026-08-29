@@ -41,6 +41,7 @@ from wosutil.config import (
     MUMU_MULTI_PLAYER_PATH,
 )
 from wosutil.emulator.instances_controller import MultiInstanceManager, save_instance_cache
+from wosutil.emulator.window_utils import minimize_foreground_watcher, minimize_hwnds, minimize_process_windows, minimize_windows_by_title
 from wosutil.utils import run_process_robust
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,108 @@ EMULATOR_LDPLAYER = "ldplayer"
 
 _BLUESTACKS_INSTANCE_PORT_RE = re.compile(r"^bst\.instance\.([^.]+)\.status\.adb_port$")
 _LDPLAYER_CONFIG_RE = re.compile(r"^leidian(\d+)\.config$")
+_MUMU_WINDOW_HANDLE_RE = re.compile(r'"(main_wnd|render_wnd)"\s*:\s*"?([0-9A-Fa-f]+)"?')
+_MUMU_INSTANCE_NAME_RE = re.compile(r'"name"\s*:\s*"([^"]+)"')
+
+# Executable names whose windows belong to each emulator family (basename,
+# extensionless, case-insensitive). Used to minimize windows that would
+# otherwise steal the foreground focus. MuMu 12 runs its instances through
+# MuMuNxDevice.exe (shells/renderers spawn short-lived helper processes that
+# may be unreadable, so the stable names are listed too).
+MUMU_WINDOW_PROCESS_NAMES = (
+    "MuMuNxDevice",
+    "MuMuNxMain",
+    "MuMuNxService",
+    "MuMuNxLauncher",
+    "MuMuPlayer",
+    "NemuPlayer",
+    "MuMuManager",
+    "MuMuPlayerHomepage",
+)
+BLUESTACKS_WINDOW_PROCESS_NAMES = ("HD-Player",)
+LDPLAYER_WINDOW_PROCESS_NAMES = ("dnplayer",)
+
+# How long emulator windows are watched for focus stealing after a start/stop,
+# covering the whole opening phase (boot + ADB connect + game launch).
+EMULATOR_WATCHER_SECONDS = 180
+
+
+def start_minimized_enabled():
+    """Return whether emulator windows must be minimized on start/stop.
+
+    Lazily imports the preference to avoid a circular import (preferences
+    imports the backend identifiers from this module).
+    """
+    from wosutil.preferences import get_start_minimized
+
+    return get_start_minimized()
+
+
+def _minimized_startupinfo():
+    """Return a STARTUPINFO asking the launched app to show minimized.
+
+    Some emulators honor the initial window state for their main window, so
+    the window can appear already minimized. Only meaningful on Windows; the
+    post-launch minimize sweep covers emulators that ignore it.
+    """
+    if os.name != "nt":
+        return None
+    import subprocess
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimized, not activated
+    return startupinfo
+
+
+def _detached_creation_flags():
+    """Return the Windows creation flags for a detached process (0 elsewhere).
+
+    Emulator processes are launched detached so they outlive the tool and are
+    monitored by polling. The flags only exist on Windows; the backends are
+    Windows-only at runtime, but tests also run on Linux CI.
+    """
+    if os.name != "nt":
+        return 0
+    import subprocess
+
+    return getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+
+def parse_mumu_window_handles(info_output):
+    """Parse the main/render window handles from ``MuMuManager info`` output.
+
+    ``MuMuManager.exe info -v <index>`` reports the exact window handles of an
+    instance (``main_wnd`` and ``render_wnd``) when it is started, which is
+    more precise than matching windows by process name. Older versions without
+    the ``info`` command simply produce no matches.
+
+    Args:
+        info_output (str): Raw output of ``MuMuManager.exe info -v <index>``.
+
+    Returns:
+        list: Window handles (ints) found, main window first.
+    """
+    handles = []
+    for _key, value in _MUMU_WINDOW_HANDLE_RE.findall(info_output or ""):
+        handles.append(int(value, 16))
+    return handles
+
+
+def parse_mumu_instance_name(info_output):
+    """Parse the instance display name from ``MuMuManager info`` output.
+
+    The instance window is titled with this name, so it can be used to match
+    the window even when its owner process is elevated and unreadable.
+
+    Args:
+        info_output (str): Raw output of ``MuMuManager.exe info -v <index>``.
+
+    Returns:
+        str or None: The instance display name, or None when not present.
+    """
+    match = _MUMU_INSTANCE_NAME_RE.search(info_output or "")
+    return match.group(1) if match else None
 
 
 def parse_devices_output(stdout):
@@ -308,6 +411,73 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
         self.manager_path = manager_path
         self.adb_path = adb_path
 
+    def _current_window_handles(self, instance_index):
+        """Return the main/render window handles of the instance via ``info``.
+
+        ``MuMuManager.exe info -v <index>`` reports the exact window handles
+        of a started instance (``main_wnd`` and ``render_wnd``), which works
+        even when the window owner process is elevated/unreadable. Older
+        versions without the ``info`` command yield no handles.
+        """
+        try:
+            result = run_process_robust([self.manager_path, "info", "-v", str(instance_index)], timeout=10)
+        except Exception:
+            return [], ""
+        if not result or result.returncode != 0:
+            return [], ""
+        return parse_mumu_window_handles(result.stdout), parse_mumu_instance_name(result.stdout)
+
+    def _minimize_instance_windows(self, instance_index, watch_seconds=EMULATOR_WATCHER_SECONDS):
+        """Minimize the instance windows so they never steal the foreground.
+
+        Minimizes the exact window handles reported by ``MuMuManager info``
+        (falling back to process-name and window-title sweeps, since MuMu
+        window owner processes can be elevated/unreadable) and starts a
+        short-lived watcher that keeps minimizing them while the instance
+        opens: MuMu can re-show its window when the Android boot finishes or
+        the game starts, which would otherwise grab the focus again.
+        """
+        if not start_minimized_enabled():
+            return
+        handles, instance_name = self._current_window_handles(instance_index)
+        titles = (instance_name,) if instance_name else ()
+        if handles:
+            minimize_hwnds(handles, self.log)
+        minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
+        minimize_windows_by_title(titles, self.log)
+        minimize_foreground_watcher(
+            handles,
+            MUMU_WINDOW_PROCESS_NAMES,
+            titles=titles,
+            seconds=watch_seconds,
+            log=self.log,
+            refresh_handles=lambda: self._current_window_handles(instance_index)[0],
+        )
+
+    def start_instance(self, instance_index):
+        """Start the instance and keep its window out of the foreground.
+
+        The window is minimized right after the launch command is issued and
+        watched until the instance is fully open, so it never keeps the focus
+        while the tool works in the background.
+        """
+        started = super().start_instance(instance_index, on_launch=lambda: self._minimize_instance_windows(instance_index))
+        if started:
+            self._minimize_instance_windows(instance_index)
+        return started
+
+    def stop_instance(self, instance_index):
+        """Stop the instance and minimize any emulator window left behind.
+
+        MuMu may open its multi-instance manager window when an instance
+        closes; that window is minimized so the close never steals focus.
+        """
+        stopped = super().stop_instance(instance_index)
+        if stopped and start_minimized_enabled():
+            minimize_process_windows(MUMU_WINDOW_PROCESS_NAMES, self.log)
+            minimize_foreground_watcher((), MUMU_WINDOW_PROCESS_NAMES, seconds=30, log=self.log)
+        return stopped
+
     def get_serial(self, instance_index):
         """Return the MuMu ADB serial for the instance index.
 
@@ -452,8 +622,26 @@ class BlueStacksBackend(EmulatorBackend):
         devices = self.list_devices()
         return devices.get(self.get_serial(instance_index)) == "device"
 
+    def _keep_windows_background(self, instance_index):
+        """Minimize BlueStacks windows and watch them while the instance opens.
+
+        The window owner process can be elevated and unreadable, so the
+        instance display name (the window title) is matched as well.
+        """
+        if not start_minimized_enabled():
+            return
+        instance = self._get_instance(instance_index)
+        titles = (instance["display_name"],)
+        minimize_process_windows(BLUESTACKS_WINDOW_PROCESS_NAMES, self.log)
+        minimize_windows_by_title(titles, self.log)
+        minimize_foreground_watcher((), BLUESTACKS_WINDOW_PROCESS_NAMES, titles=titles, seconds=EMULATOR_WATCHER_SECONDS, log=self.log)
+
     def start_instance(self, instance_index):
         """Start a BlueStacks instance via HD-Player and wait for it to boot.
+
+        The window is launched minimized when the emulator honors the initial
+        window state and is otherwise minimized as soon as it appears, so it
+        never keeps the foreground focus.
 
         Return False after a generous (60s) window without confirmation.
         """
@@ -461,19 +649,25 @@ class BlueStacksBackend(EmulatorBackend):
         self.log(f"Starting BlueStacks instance {name}...", "info")
         if self._is_instance_running(instance_index):
             self.log(f"BlueStacks instance {name} is already running.", "info")
+            self._keep_windows_background(instance_index)
             return True
         # HD-Player.exe hosts the instance and never exits on its own, so it
         # must be launched detached and monitored by polling, not awaited.
         try:
             subprocess.Popen(
                 [self.player_path, "--instance", name],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                creationflags=_detached_creation_flags(),
+                startupinfo=_minimized_startupinfo(),
             )
         except OSError as e:
             self.log(f"Could not launch BlueStacks instance {name}: {e}", "error")
             return False
+        # Minimize as soon as the window appears (and again once confirmed
+        # running) so it never keeps the foreground focus.
+        self._keep_windows_background(instance_index)
         for _ in range(30):
             if self._is_instance_running(instance_index):
+                self._keep_windows_background(instance_index)
                 self.log(f"BlueStacks instance {name} started.", "success")
                 return True
             time.sleep(2)
@@ -645,8 +839,25 @@ class LDPlayerBackend(EmulatorBackend):
         devices = self.list_devices()
         return devices.get(self.get_serial(instance_index)) == "device"
 
+    def _keep_windows_background(self, instance_index):
+        """Minimize LDPlayer windows and watch them while the instance opens.
+
+        The window owner process can be elevated and unreadable, so the
+        instance display name (the window title) is matched as well.
+        """
+        if not start_minimized_enabled():
+            return
+        instance = self._get_instance(instance_index)
+        titles = (instance["display_name"],)
+        minimize_process_windows(LDPLAYER_WINDOW_PROCESS_NAMES, self.log)
+        minimize_windows_by_title(titles, self.log)
+        minimize_foreground_watcher((), LDPLAYER_WINDOW_PROCESS_NAMES, titles=titles, seconds=EMULATOR_WATCHER_SECONDS, log=self.log)
+
     def start_instance(self, instance_index):
         """Start an LDPlayer instance via ldconsole and wait for it to boot.
+
+        The window is minimized as soon as it appears, so it never keeps the
+        foreground focus.
 
         Return False after a generous (60s) window without confirmation.
         """
@@ -655,19 +866,25 @@ class LDPlayerBackend(EmulatorBackend):
         self.log(f"Starting LDPlayer instance {display_name}...", "info")
         if self._is_instance_running(instance_index):
             self.log(f"LDPlayer instance {display_name} is already running.", "info")
+            self._keep_windows_background(instance_index)
             return True
         # ldconsole launch is asynchronous: it returns immediately and the
         # emulator boots on its own, so it must be polled, not awaited.
         try:
             subprocess.Popen(
                 [self.console_path, "launch", "--index", str(instance_index)],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                creationflags=_detached_creation_flags(),
+                startupinfo=_minimized_startupinfo(),
             )
         except OSError as e:
             self.log(f"Could not launch LDPlayer instance {display_name}: {e}", "error")
             return False
+        # Minimize as soon as the window appears (and again once confirmed
+        # running) so it never keeps the foreground focus.
+        self._keep_windows_background(instance_index)
         for _ in range(30):
             if self._is_instance_running(instance_index):
+                self._keep_windows_background(instance_index)
                 self.log(f"LDPlayer instance {display_name} started.", "success")
                 return True
             time.sleep(2)

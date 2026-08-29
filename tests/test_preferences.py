@@ -23,6 +23,7 @@ from wosutil.preferences import (
     get_mystery_shop_level,
     get_remember_schedule,
     get_requirements_reminder_seen,
+    get_start_minimized,
     get_task_priorities,
     load_preferences,
     mark_requirements_reminder_seen,
@@ -68,6 +69,25 @@ class TestPreferences(unittest.TestCase):
         self.assertEqual(get_task_priorities({}), {})
         with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
             self.assertEqual(get_task_priorities(None), {})
+
+    def test_start_minimized_defaults_to_enabled(self):
+        """Emulators are minimized by default so they never steal focus."""
+        self.assertTrue(get_start_minimized({}))
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            self.assertTrue(get_start_minimized(None))
+
+    def test_start_minimized_honors_the_saved_value(self):
+        """The saved preference wins over the default."""
+        self.assertFalse(get_start_minimized({"start_minimized": False}))
+        self.assertTrue(get_start_minimized({"start_minimized": True}))
+
+    def test_start_minimized_persists_across_sessions(self):
+        """Disabling the preference is saved and reloaded."""
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            preferences = load_preferences() or {}
+            preferences["start_minimized"] = False
+            self.assertTrue(save_preferences(preferences))
+            self.assertFalse(get_start_minimized(None))
 
     def test_get_task_priorities_valid(self):
         """Test that valid priorities are returned as integers."""

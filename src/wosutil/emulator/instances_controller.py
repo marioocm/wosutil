@@ -120,11 +120,14 @@ class MultiInstanceManager:
         self.log(f"player_state output for instance {index}: {out}", "debug")
         return "state=start_finished" in out
 
-    def start_instance(self, index):
+    def start_instance(self, index, on_launch=None):
         """Starts a MuMu emulator instance and waits until it is running.
 
         Args:
             index (int): Instance index.
+            on_launch (callable, optional): Called right after the launch
+                command is issued, before waiting for the instance to boot
+                (e.g. to minimize the emulator window as soon as it appears).
 
         Returns:
             bool: True if started successfully, False otherwise.
@@ -132,6 +135,8 @@ class MultiInstanceManager:
         self.log(f"Starting MuMu instance {index}...", "info")
         out = self._execute_mumu_cli(["-v", str(index), "launch_player"])
         self.log(f"MuMu CLI output: {out}", "debug")
+        if on_launch is not None:
+            on_launch()
         # Wait until the instance is running
         for _ in range(30):
             running = self._is_instance_running(index)

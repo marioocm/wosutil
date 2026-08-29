@@ -349,6 +349,27 @@ def save_emulator(emulator):
     return save_preferences(preferences)
 
 
+def get_start_minimized(preferences=None):
+    """Return whether emulator windows are minimized when the tool starts/stops them.
+
+    When enabled (default) every instance window is minimized right after the
+    emulator is launched, so it never steals the foreground focus while the
+    tool runs in the background. Windows returns the focus to whatever the
+    user was doing before, and the emulator keeps rendering while minimized.
+    The multi-instance manager window that MuMu may open on close is minimized
+    as well.
+
+    Args:
+        preferences (dict, optional): Preferences data. If None, loads from disk.
+
+    Returns:
+        bool: True when emulator windows should be minimized.
+    """
+    if preferences is None:
+        preferences = load_preferences()
+    return preferences.get("start_minimized", True) is not False
+
+
 def get_requirements_reminder_seen(preferences=None):
     """Return True when the first-run setup requirements reminder was shown.
 

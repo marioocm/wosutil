@@ -36,6 +36,7 @@ from wosutil.preferences import (
     get_kill_beast_march,
     get_mystery_shop_level,
     get_remember_schedule,
+    get_start_minimized,
     load_preferences,
     save_preferences,
 )
@@ -360,6 +361,22 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         justify="left",
     ).pack(side="left", fill="x", expand=True)
 
+    # --- Background emulator windows ---
+    background_frame = ttk.LabelFrame(scrollable_frame, text="Emulator Windows")
+    background_frame.pack(pady=10, padx=10, fill="x")
+
+    background_row = ttk.Frame(background_frame)
+    background_row.pack(anchor="w", padx=10, pady=10, fill="x")
+
+    start_minimized_var = tk.BooleanVar(value=get_start_minimized())
+    ttk.Checkbutton(background_row, text="", variable=start_minimized_var).pack(side="left", padx=5)
+    ttk.Label(
+        background_row,
+        text="Start emulators minimized (keep them out of the foreground while the tool runs)",
+        wraplength=500,
+        justify="left",
+    ).pack(side="left", fill="x", expand=True)
+
     # --- Debug mode ---
     debug_frame = ttk.LabelFrame(scrollable_frame, text="Debug")
     debug_frame.pack(pady=10, padx=10, fill="x")
@@ -431,6 +448,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         prefs["mystery_shop_level"] = level
         prefs["debug_mode"] = bool(debug_var.get())
         prefs["remember_schedule"] = bool(remember_var.get())
+        prefs["start_minimized"] = bool(start_minimized_var.get())
         if save_preferences(prefs):
             log_message("Preferences saved successfully.", "success")
             paths_changed = new_emulator_paths != previous_emulator_paths
