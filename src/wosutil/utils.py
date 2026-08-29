@@ -19,6 +19,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
 
+import psutil
+
 from wosutil.config import LOG_FILE
 from wosutil.stop import ToolStopped
 
@@ -314,6 +316,68 @@ def run_process_robust(command: list, timeout: int = 30):
         )
     except OSError as e:
         return subprocess.CompletedProcess(args=command, returncode=-1, stdout="", stderr=str(e))
+
+
+def _iter_processes():
+    """Yield (process, name, argv) for every inspectable process."""
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            yield proc, proc.info["name"] or "", proc.info["cmdline"] or []
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+
+def _minimized_startupinfo():
+    """Return a STARTUPINFO asking the launched app to show minimized.
+
+    Some emulators honor the initial window state for their main window, so
+    the window can appear already minimized. Only meaningful on Windows; the
+    post-launch minimize sweep covers emulators that ignore it.
+    """
+    if os.name != "nt":
+        return None
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimized, not activated
+    return startupinfo
+
+
+def _detached_creation_flags():
+    """Return the Windows creation flags for a detached process (0 elsewhere).
+
+    Emulator processes are launched detached so they outlive the tool and are
+    monitored by polling. The flags only exist on Windows; the backends are
+    Windows-only at runtime, but tests also run on Linux CI.
+    """
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+
+def _is_process_named(name, expected_name):
+    """Compare process basenames without accepting similarly named programs."""
+    return os.path.splitext(os.path.basename(name))[0].casefold() == expected_name.casefold()
+
+
+def _has_process_option(cmdline, option, expected_value):
+    """Return whether an option has the exact expected value in an argv list.
+
+    Supports the forms used by emulator processes: ``--option value``,
+    ``--option=value`` and the equivalent form without leading dashes.
+    Exact token comparison prevents instance ``1`` from matching ``10``.
+    """
+    option = option.lstrip("-").casefold()
+    expected_value = str(expected_value).casefold()
+    for position, argument in enumerate(cmdline):
+        normalized = str(argument).strip('"').lstrip("-")
+        key, separator, value = normalized.partition("=")
+        if separator and key.casefold() == option and value.casefold() == expected_value:
+            return True
+        if not separator and normalized.casefold() == option and position + 1 < len(cmdline):
+            next_value = str(cmdline[position + 1]).strip('"').casefold()
+            if next_value == expected_value:
+                return True
+    return False
 
 
 def log_message(message, level="info"):
