@@ -285,6 +285,20 @@ def _read_task_list_bear_hunt_times(instance_index: int, utc: Tuple[int, int, in
         log_message("Could not confirm the task list shows UTC time; skipping the Bear Hunt schedule read.", level="warning")
         return []
 
+    # The panel can open with the list scrolled down (the game keeps the last
+    # scroll position), which would silently drop the top entries: scroll back
+    # to the top before the first read.
+    scroll_screen(
+        _TASK_LIST_SCROLL_END[0],
+        _TASK_LIST_SCROLL_END[1],
+        _TASK_LIST_SCROLL_START[0],
+        _TASK_LIST_SCROLL_START[1],
+        _TASK_LIST_SCROLL_DURATION_MS,
+        instance_index,
+        hold_end_ms=_TASK_LIST_SCROLL_HOLD_MS,
+    )
+    time.sleep(_TASK_LIST_SCROLL_SETTLE_SECONDS)
+
     events = set()
     last_signature = None
     for scroll_index in range(_TASK_LIST_MAX_SCROLLS + 1):
@@ -408,6 +422,10 @@ def sync_utc_time(instance_index: int) -> bool:
 
     bear_hunts: List[Tuple[int, int, int, int, int]] = []
     if utc is not None:
+        # Reset the previous schedule before reading the new list: the task
+        # list is the single source of truth, and a hunt whose time changed
+        # (or was cancelled) must not survive a fresh read.
+        set_cached_bear_hunt_times(instance_index, [])
         bear_hunts = _read_task_list_bear_hunt_times(instance_index, utc)
     set_cached_bear_hunt_times(instance_index, bear_hunts)
 
