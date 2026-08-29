@@ -7,10 +7,20 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 
 from wosutil.config import INSTANCE_CACHE_FILE, MUMU_INSTANCE_BASE_PATH, MUMU_MULTI_PLAYER_PATH
-from wosutil.utils import load_json_file, run_process_robust, save_json_file
+from wosutil.utils import (
+    _detached_creation_flags,
+    _has_process_option,
+    _is_process_named,
+    _iter_processes,
+    _minimized_startupinfo,
+    load_json_file,
+    run_process_robust,
+    save_json_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +66,8 @@ class MultiInstanceManager:
             self.log(f"Error executing MuMu CLI: {e}", "error")
             return ""
 
-    def _instance_config_path(self, idx):
-        """Locate the extra_config.json of an instance by its index.
+    def _vm_name(self, idx):
+        """Return the instance folder name, e.g. ``MuMuPlayerGlobal-15.0-0``.
 
         MuMu names the per-instance folder after the emulator series it was
         created with (e.g. ``MuMuPlayerGlobal-12.0-2`` or
@@ -67,17 +77,65 @@ class MultiInstanceManager:
             idx (int): Instance index.
 
         Returns:
-            str: Path to the instance's extra_config.json. The best-effort
-            guess (``MuMuPlayerGlobal-12.0-{idx}``) is returned when no folder
-            matches, so a missing file still surfaces as a warning.
+            str: The instance folder name. The best-effort guess
+            (``MuMuPlayerGlobal-12.0-{idx}``) is returned when no folder
+            matches, so a missing instance still surfaces as a warning.
         """
         if not os.path.isdir(self.instance_base_path):
-            return os.path.join(self.instance_base_path, f"MuMuPlayerGlobal-12.0-{idx}", "configs", "extra_config.json")
+            return f"MuMuPlayerGlobal-12.0-{idx}"
         try:
-            version_dir = next(folder for folder in os.listdir(self.instance_base_path) if re.fullmatch(rf"MuMuPlayerGlobal-[\d.]+-{idx}", folder))
+            return next(folder for folder in os.listdir(self.instance_base_path) if re.fullmatch(rf"MuMuPlayerGlobal-[\d.]+-{idx}", folder))
         except StopIteration:
-            version_dir = f"MuMuPlayerGlobal-12.0-{idx}"
-        return os.path.join(self.instance_base_path, version_dir, "configs", "extra_config.json")
+            return f"MuMuPlayerGlobal-12.0-{idx}"
+
+    def _instance_config_path(self, idx):
+        """Locate the extra_config.json of an instance by its index.
+
+        Args:
+            idx (int): Instance index.
+
+        Returns:
+            str: Path to the instance's extra_config.json.
+        """
+        return os.path.join(self.instance_base_path, self._vm_name(idx), "configs", "extra_config.json")
+
+    def _device_executable(self, idx):
+        """Return the MuMuNxDevice.exe shell for the instance's series.
+
+        Each instance series ships its own shell under
+        ``nx_device/<series>/shell`` next to the ``nx_main`` directory that
+        holds MuMuManager.exe.
+
+        Args:
+            idx (int): Instance index.
+
+        Returns:
+            str: Path to the instance's MuMuNxDevice.exe.
+        """
+        series = re.match(r"^MuMuPlayerGlobal-([\d.]+)-\d+$", self._vm_name(idx)).group(1)
+        root = os.path.dirname(os.path.dirname(self.multi_player_path))
+        return os.path.normpath(os.path.join(root, "nx_device", series, "shell", "MuMuNxDevice.exe"))
+
+    def _device_argv(self, idx):
+        """Return the argv that launches the instance VM directly.
+
+        ``MuMuNxDevice.exe -v <index> --vm <folder>`` is exactly how the
+        multi-instance manager opens an instance internally, so no manager
+        process or window needs to be running first.
+
+        Args:
+            idx (int): Instance index.
+
+        Returns:
+            list: Full argv, e.g. [MuMuNxDevice.exe, "-v", "0", "--vm",
+                "MuMuPlayerGlobal-15.0-0"].
+        """
+        return [self._device_executable(idx), "-v", str(idx), "--vm", self._vm_name(idx)]
+
+    def _matching_device_processes(self, idx):
+        """Return the MuMuNxDevice processes launched for an instance."""
+        vm_name = self._vm_name(idx)
+        return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "MuMuNxDevice") and _has_process_option(cmdline, "vm", vm_name)]
 
     def get_instances(self):
         """Retrieves the list of emulator instances and their names.
@@ -110,18 +168,24 @@ class MultiInstanceManager:
     def _is_instance_running(self, index):
         """Checks if a specific emulator instance is running.
 
+        The instance shell process (MuMuNxDevice.exe) only exists while the
+        instance is up, so its ``--vm <folder>`` argument identifies the
+        instance without asking the manager CLI.
+
         Args:
             index (int): Instance index.
 
         Returns:
             bool: True if running, False otherwise.
         """
-        out = self._execute_mumu_cli(["-v", str(index), "player_state"])
-        self.log(f"player_state output for instance {index}: {out}", "debug")
-        return "state=start_finished" in out
+        return bool(self._matching_device_processes(index))
 
     def start_instance(self, index, on_launch=None):
         """Starts a MuMu emulator instance and waits until it is running.
+
+        The instance VM is launched directly with MuMuNxDevice.exe (the same
+        argv the multi-instance manager uses internally), so neither the
+        manager window nor its process needs to be running first.
 
         Args:
             index (int): Instance index.
@@ -133,8 +197,20 @@ class MultiInstanceManager:
             bool: True if started successfully, False otherwise.
         """
         self.log(f"Starting MuMu instance {index}...", "info")
-        out = self._execute_mumu_cli(["-v", str(index), "launch_player"])
-        self.log(f"MuMu CLI output: {out}", "debug")
+        if self._is_instance_running(index):
+            self.log(f"Instance {index} is already running.", "info")
+            if on_launch is not None:
+                on_launch()
+            return True
+        try:
+            subprocess.Popen(
+                self._device_argv(index),
+                creationflags=_detached_creation_flags(),
+                startupinfo=_minimized_startupinfo(),
+            )
+        except OSError as e:
+            self.log(f"Could not launch instance {index}: {e}", "error")
+            return False
         if on_launch is not None:
             on_launch()
         # Wait until the instance is running

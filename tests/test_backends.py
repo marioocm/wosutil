@@ -431,7 +431,7 @@ class TestQuietWindowHandling(unittest.TestCase):
     def test_mumu_start_minimizes_after_launch_and_when_running(self):
         """The window is minimized right after launch and again on success."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch.object(backends.MuMuBackend, "_execute_mumu_cli", return_value="launch ok"), patch.object(backends.MuMuBackend, "_is_instance_running", return_value=True), patch(
+        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch(
             "wosutil.emulator.backends.run_process_robust", return_value=completed_process(MUMU_INFO_OUTPUT)
         ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
@@ -446,12 +446,11 @@ class TestQuietWindowHandling(unittest.TestCase):
         # The instance display name (the window title) is matched too.
         self.assertEqual(mock_titles.call_count, 2)
         self.assertEqual(mock_titles.call_args.args[0], ("Healer",))
-        # A watcher keeps the window minimized while the instance opens.
 
     def test_mumu_start_skips_minimizing_when_disabled(self):
         """The preference off disables every window manipulation."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch.object(backends.MuMuBackend, "_execute_mumu_cli", return_value="launch ok"), patch.object(backends.MuMuBackend, "_is_instance_running", return_value=True), patch(
+        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch(
             "wosutil.emulator.backends.run_process_robust", return_value=completed_process(MUMU_INFO_OUTPUT)
         ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
@@ -462,9 +461,9 @@ class TestQuietWindowHandling(unittest.TestCase):
         mock_titles.assert_not_called()
 
     def test_mumu_start_falls_back_to_process_sweep_without_info(self):
-        """Older MuMuManager versions without `info` still minimize by name/title."""
+        """MuMuManager versions without `info` still minimize by name/title."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch.object(backends.MuMuBackend, "_execute_mumu_cli", return_value="launch ok"), patch.object(backends.MuMuBackend, "_is_instance_running", return_value=True), patch(
+        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch(
             "wosutil.emulator.backends.run_process_robust", return_value=completed_process("error: unknown command")
         ), patch("wosutil.emulator.backends.minimize_hwnds") as mock_hwnds, patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.minimize_windows_by_title"
