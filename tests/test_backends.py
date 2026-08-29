@@ -426,7 +426,7 @@ class TestQuietWindowHandling(unittest.TestCase):
     def test_mumu_stop_minimizes_windows_after_close(self):
         """Any emulator window left behind is minimized after a close."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch.object(backends.MuMuBackend, "_matching_instance_processes", side_effect=[[], [], [], [], [], []]), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
+        with patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[], [], [], [], [], []]), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
             "wosutil.emulator.backends.start_minimized_enabled", return_value=True
         ):
             self.assertTrue(backend.stop_instance(0))
@@ -436,11 +436,36 @@ class TestQuietWindowHandling(unittest.TestCase):
         """The manager window is minimized even if the instance cannot be stopped."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
         proc = Mock()
-        with patch("wosutil.emulator.instances_controller.time.sleep"), patch.object(backends.MuMuBackend, "_matching_instance_processes", return_value=[proc]), patch(
+        with patch("wosutil.emulator.backends.time.sleep"), patch.object(backends.MuMuBackend, "_matching_processes", return_value=[proc]), patch(
             "wosutil.emulator.backends.minimize_process_windows"
         ) as mock_sweep, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertFalse(backend.stop_instance(0))
         mock_sweep.assert_called_once_with(backends.MUMU_WINDOW_PROCESS_NAMES, backend.log)
+
+    def test_stop_terminates_processes_and_waits_short(self):
+        """Every backend stops by terminating the instance processes fast."""
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
+        proc = Mock()
+        with patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[proc], [proc], [], [], [], []]):
+            self.assertTrue(backend.stop_instance(0))
+        proc.terminate.assert_called_once()
+
+    def test_bluestacks_stop_terminates_processes(self):
+        """BlueStacks instances are stopped by terminating HD-Player."""
+        backend = backends.BlueStacksBackend(log_func=lambda *a, **k: None, conf_path=tempfile_helper(SAMPLE_CONF))
+        proc = Mock()
+        with patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]):
+            self.assertTrue(backend.stop_instance(0))
+        proc.terminate.assert_called_once()
+
+    def test_ldplayer_stop_requests_graceful_quit_then_terminates(self):
+        """LDPlayer tries ldconsole quit before terminating dnplayer."""
+        backend = backends.LDPlayerBackend(log_func=lambda *a, **k: None, config_dir=ldplayer_config_dir_helper({"leidian0.config": LDPLAYER_INSTANCE_0}))
+        proc = Mock()
+        with patch("wosutil.emulator.backends.run_process_robust") as mock_run, patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]):
+            self.assertTrue(backend.stop_instance(0))
+        mock_run.assert_called_once_with([backend.console_path, "quit", "--index", "0"], timeout=15)
+        proc.terminate.assert_called_once()
 
     def test_bluestacks_start_minimizes_player_windows(self):
         """HD-Player windows are minimized on launch and on success."""
