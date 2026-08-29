@@ -397,18 +397,18 @@ class TestQuietWindowHandling(unittest.TestCase):
     def test_mumu_start_minimizes_after_launch_and_when_running(self):
         """The window is minimized right after launch and again on success."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch("subprocess.Popen"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]), patch.object(
+        with patch("subprocess.Popen"), patch("wosutil.emulator.backends.time.sleep"), patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, False, True]), patch.object(
             backends.MuMuBackend, "_instance_name", return_value="Healer"
         ), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch("wosutil.emulator.backends.minimize_windows_by_title") as mock_titles, patch(
             "wosutil.emulator.backends.start_minimized_enabled", return_value=True
         ):
             self.assertTrue(backend.start_instance(0))
 
-        # Early pass right after launch + final pass after the boot confirmation.
-        self.assertEqual(mock_sweep.call_count, 2)
+        # Right after launch + while booting + through the appearance grace period.
+        self.assertEqual(mock_sweep.call_count, 4)
         self.assertEqual(mock_sweep.call_args.args[0], backends.MUMU_WINDOW_PROCESS_NAMES)
         # The instance display name (the window title) is matched too.
-        self.assertEqual(mock_titles.call_count, 2)
+        self.assertEqual(mock_titles.call_count, 4)
         self.assertEqual(mock_titles.call_args.args[0], ("Healer",))
 
     def test_mumu_start_skips_minimizing_when_disabled(self):
@@ -470,13 +470,13 @@ class TestQuietWindowHandling(unittest.TestCase):
     def test_bluestacks_start_minimizes_player_windows(self):
         """HD-Player windows are minimized on launch and on success."""
         backend = backends.BlueStacksBackend(log_func=lambda *a, **k: None, conf_path=tempfile_helper(SAMPLE_CONF))
-        with patch("subprocess.Popen"), patch.object(backend, "_is_instance_running", side_effect=[False, True]), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
-            "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        with patch("subprocess.Popen"), patch("wosutil.emulator.backends.time.sleep"), patch.object(backend, "_is_instance_running", side_effect=[False, False, True]), patch(
+            "wosutil.emulator.backends.minimize_process_windows"
+        ) as mock_sweep, patch("wosutil.emulator.backends.minimize_windows_by_title") as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.start_instance(0))
-        self.assertEqual(mock_sweep.call_count, 2)
+        self.assertEqual(mock_sweep.call_count, 4)
         self.assertEqual(mock_sweep.call_args.args[0], backends.BLUESTACKS_WINDOW_PROCESS_NAMES)
-        self.assertEqual(mock_titles.call_count, 2)
+        self.assertEqual(mock_titles.call_count, 4)
         self.assertEqual(mock_titles.call_args.args[0], ("Nougat",))
 
     def test_bluestacks_already_running_keeps_windows_background(self):
@@ -493,13 +493,13 @@ class TestQuietWindowHandling(unittest.TestCase):
         """Dnplayer windows are minimized on launch and on success."""
         config_dir = ldplayer_config_dir_helper({"leidian0.config": LDPLAYER_INSTANCE_0})
         backend = backends.LDPlayerBackend(log_func=lambda *a, **k: None, config_dir=config_dir)
-        with patch("subprocess.Popen"), patch.object(backend, "_is_instance_running", side_effect=[False, True]), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
-            "wosutil.emulator.backends.minimize_windows_by_title"
-        ) as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
+        with patch("subprocess.Popen"), patch("wosutil.emulator.backends.time.sleep"), patch.object(backend, "_is_instance_running", side_effect=[False, False, True]), patch(
+            "wosutil.emulator.backends.minimize_process_windows"
+        ) as mock_sweep, patch("wosutil.emulator.backends.minimize_windows_by_title") as mock_titles, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.start_instance(0))
-        self.assertEqual(mock_sweep.call_count, 2)
+        self.assertEqual(mock_sweep.call_count, 4)
         self.assertEqual(mock_sweep.call_args.args[0], backends.LDPLAYER_WINDOW_PROCESS_NAMES)
-        self.assertEqual(mock_titles.call_count, 2)
+        self.assertEqual(mock_titles.call_count, 4)
         self.assertEqual(mock_titles.call_args.args[0], ("Mario",))
 
     def test_startupinfo_asks_for_minimized_window(self):

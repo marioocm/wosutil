@@ -340,9 +340,16 @@ class EmulatorBackend(ABC):
         self._keep_windows_background(instance_index)
         for _ in range(30):
             if self._is_instance_running(instance_index):
-                self._keep_windows_background(instance_index)
+                # The instance process may be confirmed before its window
+                # exists (the emulator spawns it in the first seconds); keep
+                # minimizing for a short grace period so the window never
+                # steals the foreground when it appears.
+                for _ in range(2):
+                    self._keep_windows_background(instance_index)
+                    time.sleep(2)
                 self.log(f"Instance {name} started.", "success")
                 return True
+            self._keep_windows_background(instance_index)
             time.sleep(2)
         self.log(f"Could not confirm instance {name} started.", "error")
         return False
