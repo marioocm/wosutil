@@ -411,8 +411,7 @@ class MultiInstanceToolController:
                 # Reset the counter so the next retry round starts fresh.
                 self.instance_launch_attempts[index] = 0
             self.log_message(
-                f"Instance {index} has failed {attempts} consecutive startup attempts. "
-                f"Pausing it for {RETRY_COOLDOWN_SECONDS // 60} minutes before retrying.",
+                f"Instance {index} has failed {attempts} consecutive startup attempts. Pausing it for {RETRY_COOLDOWN_SECONDS // 60} minutes before retrying.",
                 level="error",
             )
             # The failed instance already released its slot above. Re-queue it

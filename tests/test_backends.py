@@ -426,11 +426,9 @@ class TestQuietWindowHandling(unittest.TestCase):
     def test_mumu_stop_minimizes_windows_after_close(self):
         """Any emulator window left behind is minimized after a close."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
-        with patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[], [], [], [], [], []]), patch.object(
-            backends.MuMuBackend, "_graceful_stop", return_value=False
-        ), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
-            "wosutil.emulator.backends.start_minimized_enabled", return_value=True
-        ):
+        with patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[], [], [], [], [], []]), patch.object(backends.MuMuBackend, "_graceful_stop", return_value=False), patch(
+            "wosutil.emulator.backends.minimize_process_windows"
+        ) as mock_sweep, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertTrue(backend.stop_instance(0))
         mock_sweep.assert_called_once_with(backends.MUMU_WINDOW_PROCESS_NAMES, backend.log)
 
@@ -440,9 +438,7 @@ class TestQuietWindowHandling(unittest.TestCase):
         proc = Mock()
         with patch("wosutil.emulator.backends.time.sleep"), patch.object(backends.MuMuBackend, "_matching_processes", return_value=[proc]), patch.object(
             backends.MuMuBackend, "_graceful_stop", return_value=False
-        ), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch(
-            "wosutil.emulator.backends.start_minimized_enabled", return_value=True
-        ):
+        ), patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=True):
             self.assertFalse(backend.stop_instance(0))
         mock_sweep.assert_called_once_with(backends.MUMU_WINDOW_PROCESS_NAMES, backend.log)
 
@@ -450,9 +446,7 @@ class TestQuietWindowHandling(unittest.TestCase):
         """Every backend stops by terminating the instance processes fast."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
         proc = Mock()
-        with patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[proc], [proc], [], [], [], []]), patch.object(
-            backends.MuMuBackend, "_graceful_stop", return_value=False
-        ):
+        with patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[proc], [proc], [], [], [], []]), patch.object(backends.MuMuBackend, "_graceful_stop", return_value=False):
             self.assertTrue(backend.stop_instance(0))
         proc.terminate.assert_called_once()
 
@@ -473,9 +467,9 @@ class TestQuietWindowHandling(unittest.TestCase):
         """A graceful shutdown accepted by the manager is waited on, not killed."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None, manager_path="C:\\MuMuManager.exe")
         proc = Mock()
-        with patch("wosutil.emulator.backends.time.sleep"), patch.object(
-            backends.MuMuBackend, "_matching_processes", side_effect=[[proc], [proc], [], [], [], []]
-        ), patch.object(backends.MuMuBackend, "_graceful_stop", return_value=True):
+        with patch("wosutil.emulator.backends.time.sleep"), patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[proc], [proc], [], [], [], []]), patch.object(
+            backends.MuMuBackend, "_graceful_stop", return_value=True
+        ):
             self.assertTrue(backend.stop_instance(0))
         proc.terminate.assert_not_called()
 

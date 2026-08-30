@@ -209,11 +209,9 @@ class TestForceRestartEmulator(unittest.TestCase):
         def fake_health(_index):
             return next(health, True)
 
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch(
-            "wosutil.emulator.emulator_manager._connect_adb_device"
-        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
-            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
-        ):
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
+            "wosutil.emulator.emulator_manager.time.sleep"
+        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
             result = force_restart_emulator(0, manager, boot_timeout=60)
 
         self.assertTrue(result)
@@ -227,11 +225,9 @@ class TestForceRestartEmulator(unittest.TestCase):
         def fake_health(_index):
             return True
 
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch(
-            "wosutil.emulator.emulator_manager._connect_adb_device"
-        ) as connect, patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
-            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
-        ):
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch("wosutil.emulator.emulator_manager._connect_adb_device") as connect, patch(
+            "wosutil.emulator.emulator_manager.time.sleep"
+        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
             force_restart_emulator(0, manager, boot_timeout=60)
 
         connect.assert_called()
@@ -241,11 +237,9 @@ class TestForceRestartEmulator(unittest.TestCase):
     def test_restart_gives_up_after_timeout(self):
         """A restart that never boots within the timeout is a failure."""
         manager = self._manager()
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch(
-            "wosutil.emulator.emulator_manager._connect_adb_device"
-        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
-            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
-        ):
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
+            "wosutil.emulator.emulator_manager.time.sleep"
+        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
             result = force_restart_emulator(0, manager, boot_timeout=1)
 
         self.assertFalse(result)
@@ -257,22 +251,18 @@ class TestForceRestartEmulator(unittest.TestCase):
         from wosutil.stop import ToolStopped
 
         manager = self._manager()
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch(
-            "wosutil.emulator.emulator_manager._connect_adb_device"
-        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
-            "wosutil.emulator.emulator_manager.stop_signal.wait", side_effect=[True]
-        ), self.assertRaises(ToolStopped):
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
+            "wosutil.emulator.emulator_manager.time.sleep"
+        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", side_effect=[True]), self.assertRaises(ToolStopped):
             force_restart_emulator(0, manager, boot_timeout=60)
 
     def test_restart_reports_manager_errors(self):
         """A failing stop/start is surfaced as a failed restart."""
         manager = self._manager()
         manager.start_instance.side_effect = RuntimeError("boom")
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=True), patch(
-            "wosutil.emulator.emulator_manager._connect_adb_device"
-        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
-            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
-        ):
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=True), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
+            "wosutil.emulator.emulator_manager.time.sleep"
+        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
             result = force_restart_emulator(0, manager, boot_timeout=60)
 
         self.assertFalse(result)
