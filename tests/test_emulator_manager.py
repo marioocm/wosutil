@@ -2,13 +2,14 @@
 
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from wosutil.emulator.emulator_manager import (
     WHITEOUT_PACKAGE,
     AdbCommandError,
     _scroll_with_hold,
     click_on_coordinates,
+    force_restart_emulator,
     force_stop_game,
     is_wos_installed,
     scroll_screen,
@@ -184,6 +185,97 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
             self.assertEqual(take_screenshot(0), local_path)
 
         delete.assert_not_called()
+
+
+class TestForceRestartEmulator(unittest.TestCase):
+    """Force restarts wait for the instance to boot before giving up."""
+
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        from wosutil.stop import stop_signal
+
+        stop_signal.clear()
+
+    def _manager(self):
+        """A stub multi-instance manager that records stop/start calls."""
+        manager = MagicMock()
+        return manager
+
+    def test_restart_waits_for_boot_up_to_timeout(self):
+        """A restart is not declared failed while Android is still booting."""
+        manager = self._manager()
+        health = iter([False, False, True])  # booting, booting, ready
+
+        def fake_health(_index):
+            return next(health, True)
+
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch(
+            "wosutil.emulator.emulator_manager._connect_adb_device"
+        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
+            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
+        ):
+            result = force_restart_emulator(0, manager, boot_timeout=60)
+
+        self.assertTrue(result)
+        manager.stop_instance.assert_called_once_with(0)
+        manager.start_instance.assert_called_once_with(0)
+
+    def test_restart_reconnects_adb_on_every_probe(self):
+        """Each boot probe re-establishes the ADB connection explicitly."""
+        manager = self._manager()
+
+        def fake_health(_index):
+            return True
+
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch(
+            "wosutil.emulator.emulator_manager._connect_adb_device"
+        ) as connect, patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
+            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
+        ):
+            force_restart_emulator(0, manager, boot_timeout=60)
+
+        connect.assert_called()
+        # The serial of instance 0 is the one being reconnected.
+        self.assertEqual(connect.call_args[0][0], "127.0.0.1:16384")
+
+    def test_restart_gives_up_after_timeout(self):
+        """A restart that never boots within the timeout is a failure."""
+        manager = self._manager()
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch(
+            "wosutil.emulator.emulator_manager._connect_adb_device"
+        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
+            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
+        ):
+            result = force_restart_emulator(0, manager, boot_timeout=1)
+
+        self.assertFalse(result)
+        manager.stop_instance.assert_called_once_with(0)
+        manager.start_instance.assert_called_once_with(0)
+
+    def test_restart_aborts_when_stop_requested(self):
+        """A requested stop aborts the boot wait instead of blocking."""
+        from wosutil.stop import ToolStopped
+
+        manager = self._manager()
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch(
+            "wosutil.emulator.emulator_manager._connect_adb_device"
+        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
+            "wosutil.emulator.emulator_manager.stop_signal.wait", side_effect=[True]
+        ), self.assertRaises(ToolStopped):
+            force_restart_emulator(0, manager, boot_timeout=60)
+
+    def test_restart_reports_manager_errors(self):
+        """A failing stop/start is surfaced as a failed restart."""
+        manager = self._manager()
+        manager.start_instance.side_effect = RuntimeError("boom")
+        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=True), patch(
+            "wosutil.emulator.emulator_manager._connect_adb_device"
+        ), patch("wosutil.emulator.emulator_manager.time.sleep"), patch(
+            "wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False
+        ):
+            result = force_restart_emulator(0, manager, boot_timeout=60)
+
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":

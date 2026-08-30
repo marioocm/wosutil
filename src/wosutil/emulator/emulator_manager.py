@@ -15,7 +15,7 @@ from wosutil.config import (
     WHITEOUT_PACKAGE,
 )
 from wosutil.emulator.backends import MuMuBackend
-from wosutil.stop import stop_signal
+from wosutil.stop import ToolStopped, stop_signal
 from wosutil.utils import get_coordinates, log_message, run_process_robust
 
 # Successful ADB verifications per serial, cached for a short window
@@ -566,12 +566,18 @@ def check_emulator_health(instance_index):
         return False
 
 
-def force_restart_emulator(instance_index, multi_instance_manager):
+def force_restart_emulator(instance_index, multi_instance_manager, boot_timeout=60):
     """Forces a restart of the emulator instance when it's hanging.
+
+    After restarting, waits for the instance to boot (Android takes longer
+    than a few seconds to come up after a cold start) instead of declaring
+    the restart failed immediately.
 
     Args:
         instance_index (int): Emulator instance index.
         multi_instance_manager: The multi-instance manager object.
+        boot_timeout (int): Maximum seconds to wait for the instance to
+            respond after restarting.
 
     Returns:
         bool: True if restart was successful, False otherwise.
@@ -587,15 +593,30 @@ def force_restart_emulator(instance_index, multi_instance_manager):
         # Start the instance again
         multi_instance_manager.start_instance(instance_index)
         stop_signal.check()
-        time.sleep(5)  # Wait for emulator to start
 
-        # Check if restart was successful
-        if check_emulator_health(instance_index):
-            log_message(f"Emulator instance {instance_index} restarted successfully.", level="success")
-            return True
-        else:
-            log_message(f"Emulator instance {instance_index} still unresponsive after restart.", level="error")
-            return False
+        # Android needs time to boot after a cold start: poll the health
+        # check for up to boot_timeout seconds before giving up. The ADB
+        # connection is re-established on every probe because a freshly
+        # started instance is not registered with the ADB server until the
+        # guest's adbd comes up and the server has seen it.
+        log_message(
+            f"Waiting up to {boot_timeout} seconds for emulator instance {instance_index} to boot after restart...",
+            level="info",
+        )
+        serial = get_adb_serial(instance_index)
+        deadline = time.time() + boot_timeout
+        while time.time() < deadline:
+            if stop_signal.wait(timeout=5):
+                raise ToolStopped()
+            _connect_adb_device(serial)
+            if check_emulator_health(instance_index):
+                log_message(f"Emulator instance {instance_index} restarted successfully.", level="success")
+                return True
+
+        log_message(f"Emulator instance {instance_index} still unresponsive after restart.", level="error")
+        return False
+    except ToolStopped:
+        raise
     except Exception as e:
         log_message(f"Error during force restart of emulator instance {instance_index}: {e}", level="error")
         return False
