@@ -38,6 +38,7 @@ from wosutil.config import (
     MUMU_ADB_PATH,
     MUMU_BASE_PATH,
     MUMU_INSTANCE_BASE_PATH,
+    MUMU_MULTI_PLAYER_PATH,
 )
 from wosutil.emulator.instances_controller import MultiInstanceManager, save_instance_cache
 from wosutil.emulator.window_utils import minimize_process_windows, minimize_windows_by_title
@@ -357,9 +358,11 @@ class EmulatorBackend(ABC):
     def stop_instance(self, instance_index):
         """Stop an instance: graceful request first, then terminate processes.
 
-        The graceful request (when the emulator provides one) is followed by
-        terminating the instance processes directly, which closes a hung
-        emulator fast without needing any manager UI.
+        The graceful request (when the emulator provides one) is given time
+        to close the VM cleanly before the instance processes are terminated
+        directly: killing a legacy VM process (MuMuVMMHeadless.exe) crashes
+        the MuMuVMMSVC hypervisor service, so direct termination is only the
+        fallback for a hung emulator.
 
         Return False after a short window without confirmation.
         """
@@ -368,7 +371,19 @@ class EmulatorBackend(ABC):
         if not self._is_instance_running(instance_index):
             self.log(f"Instance {name} is not running.", "info")
         else:
-            self._graceful_stop(instance_index)
+            if self._graceful_stop(instance_index):
+                # The manager accepted a graceful shutdown: wait for the VM
+                # to close on its own before terminating anything.
+                for _ in range(30):
+                    if not self._matching_processes(instance_index):
+                        self.log(f"Instance {name} stopped.", "success")
+                        break
+                    time.sleep(2)
+                if not self._matching_processes(instance_index):
+                    if start_minimized_enabled():
+                        minimize_process_windows(self.window_process_names, self.log)
+                    return True
+                self.log(f"Graceful shutdown of instance {name} did not complete. Terminating processes...", "warning")
             processes = self._matching_processes(instance_index)
             for proc in processes:
                 try:
@@ -434,10 +449,43 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
     name = EMULATOR_MUMU
     window_process_names = MUMU_WINDOW_PROCESS_NAMES
 
-    def __init__(self, log_func=None, adb_path=MUMU_ADB_PATH, instance_base_path=MUMU_INSTANCE_BASE_PATH):
-        """Initialize MuMu with the configured adb binary and instance path."""
+    def __init__(self, log_func=None, adb_path=MUMU_ADB_PATH, instance_base_path=MUMU_INSTANCE_BASE_PATH, manager_path=MUMU_MULTI_PLAYER_PATH):
+        """Initialize MuMu with the configured adb binary and instance path.
+
+        Args:
+            log_func (callable, optional): Logging function.
+            adb_path (str): Path to the MuMu adb.exe.
+            instance_base_path (str): Directory containing the instance VMs.
+            manager_path (str): Path to MuMuManager.exe used for graceful
+                instance shutdowns (falls back to terminating processes when
+                missing).
+        """
         super().__init__(log_func=log_func, instance_base_path=instance_base_path)
         self.adb_path = adb_path
+        self.manager_path = manager_path
+
+    def _graceful_stop(self, instance_index):
+        """Shut the instance down through MuMuManager instead of killing it.
+
+        Terminating the instance processes directly (MuMuVMMHeadless.exe for
+        legacy Android 12 VMs) makes the MuMuVMMSVC hypervisor service crash
+        with an R6025 "pure virtual function call"; asking the manager to
+        shut the player down first lets the hypervisor release the VM
+        cleanly.
+
+        Returns:
+            bool: True when the manager accepted the shutdown request, False
+            when it is missing or the request failed (callers then fall back
+            to terminating the processes directly).
+        """
+        if not os.path.exists(self.manager_path):
+            self.log(f"MuMuManager.exe not found at {self.manager_path}, falling back to process termination.", "warning")
+            return False
+        result = run_process_robust([self.manager_path, "control", "--vmindex", str(instance_index), "shutdown"], timeout=30)
+        if result and result.returncode == 0:
+            return True
+        self.log(f"MuMuManager shutdown request failed for instance {instance_index}.", "warning")
+        return False
 
     def _launch_argv(self, instance_index):
         """Launch the instance VM directly with its device shell."""
@@ -810,4 +858,5 @@ def create_backend(emulator=None, log_func=None, emulator_paths=None):
         log_func=log_func,
         adb_path=os.path.join(mumu_base_path, "adb.exe"),
         instance_base_path=mumu_instance_base_path,
+        manager_path=os.path.join(mumu_base_path, "MuMuManager.exe"),
     )

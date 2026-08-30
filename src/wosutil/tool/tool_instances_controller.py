@@ -28,6 +28,12 @@ from wosutil.utils import load_json_file, retry_operation, safe_int, save_json_f
 # order wins instead of the task that was read a second earlier.
 TASK_GROUPING_WINDOW_SECONDS = 5.0
 
+# Seconds an instance waits before being retried after exhausting its
+# consecutive launch attempts. The retry is delayed instead of being dropped
+# so transient emulator/hypervisor failures (e.g. a crashed virtualization
+# service) recover without a full tool restart.
+RETRY_COOLDOWN_SECONDS = 600
+
 
 def pick_scheduled_task(task_state, now):
     """Choose the task to run or wait for, grouping close run times.
@@ -142,6 +148,9 @@ class MultiInstanceToolController:
         self.tool_running = False
         self.max_launch_attempts = 3
         self.instance_launch_attempts: Dict[int, int] = {}
+        # Timestamps until which an instance must not be relaunched after
+        # exhausting its consecutive launch attempts (retry cooldown).
+        self._retry_blocked_until: Dict[int, float] = {}
 
         # Memory management
         self._state_lock = threading.RLock()
@@ -227,6 +236,7 @@ class MultiInstanceToolController:
             self.instance_queue.clear()
             self.active_instances.clear()
             self.instance_launch_attempts.clear()
+            self._retry_blocked_until.clear()
             self.instance_threads.clear()
 
         self.tool_should_stop.clear()
@@ -348,17 +358,28 @@ class MultiInstanceToolController:
                 # Prioritize the instance whose next task is soonest, not the one
                 # that arrived first to the queue. Ties keep the arrival order.
                 self.instance_queue.sort(key=self._queue_sort_key)
-                idx, profile_name = self.instance_queue.pop(0)
-                if idx in self.active_instances:
-                    continue
-                pm = self.instances_profile_managers.get(idx)
-                next_run_time = None
+                # Drop stale entries for instances that are already active.
+                self.instance_queue = [item for item in self.instance_queue if item[0] not in self.active_instances]
                 now = time.time()
-                if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
-                    next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
-                if next_run_time is not None and next_run_time - now > 120:
-                    self.instance_queue.insert(0, (idx, profile_name))
+                candidate = None
+                for pos, (idx, _profile_name) in enumerate(self.instance_queue):
+                    # Skip instances paused by the retry cooldown; they are
+                    # picked up again once the cooldown expires.
+                    if now < self._retry_blocked_until.get(idx, 0):
+                        continue
+                    pm = self.instances_profile_managers.get(idx)
+                    next_run_time = None
+                    if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
+                        next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
+                    if next_run_time is not None and next_run_time - now > 120:
+                        # The queue is sorted by task time, so every remaining
+                        # instance has an even later task: nothing to launch.
+                        return
+                    candidate = pos
+                    break
+                if candidate is None:
                     return
+                idx, profile_name = self.instance_queue.pop(candidate)
                 self.active_instances.add(idx)
                 thread = threading.Thread(
                     target=self.run_profile_on_instance_with_slot,
@@ -371,22 +392,32 @@ class MultiInstanceToolController:
             self.cleanup_memory()
 
     def _requeue_with_limit(self, index, profile_name):
-        """Re-queues an instance for retry, giving up after max_launch_attempts.
+        """Re-queues an instance for retry, backing off after max_launch_attempts.
 
         Prevents the infinite loop of starting/closing the emulator when the
-        game or ADB keeps failing to come up.
+        game or ADB keeps failing to come up: after the consecutive attempts
+        are exhausted, the instance is blocked for a cooldown period instead
+        of being dropped forever, so a transient emulator/hypervisor failure
+        (e.g. a crashed virtualization service) can recover without a full
+        tool restart.
         """
         with self._state_lock:
             attempts = self.instance_launch_attempts.get(index, 0) + 1
             self.instance_launch_attempts[index] = attempts
             self.active_instances.discard(index)
         if attempts >= self.max_launch_attempts:
+            with self._state_lock:
+                self._retry_blocked_until[index] = time.time() + RETRY_COOLDOWN_SECONDS
+                # Reset the counter so the next retry round starts fresh.
+                self.instance_launch_attempts[index] = 0
             self.log_message(
-                f"Instance {index} has failed {attempts} consecutive startup attempts. Stopping it to avoid an infinite loop.",
+                f"Instance {index} has failed {attempts} consecutive startup attempts. Pausing it for {RETRY_COOLDOWN_SECONDS // 60} minutes before retrying.",
                 level="error",
             )
-            # The failed instance already released its slot above. Wake the
+            # The failed instance already released its slot above. Re-queue it
+            # (the launcher skips it while the cooldown runs) and wake the
             # queue so another selected instance can use that slot.
+            self._enqueue_instance(index, profile_name)
             self.launch_next_instances()
             return
         self._enqueue_instance(index, profile_name)

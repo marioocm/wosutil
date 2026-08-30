@@ -229,8 +229,38 @@ class TestLaunchRetryQueue(unittest.TestCase):
             controller._requeue_with_limit(0, "profile_x")
 
         self.assertNotIn(0, controller.active_instances)
-        self.assertEqual(controller.instance_queue, [(1, "profile_y")])
+        self.assertEqual(controller.instance_queue, [(1, "profile_y"), (0, "profile_x")])
+        self.assertGreater(controller._retry_blocked_until[0], time.time())
         launch_next.assert_called_once_with()
+
+    def test_retry_cooldown_expires_and_instance_requeues(self):
+        """A failed instance is retried after the cooldown, not dropped."""
+        controller = MultiInstanceToolController(
+            log_message=lambda _msg, level="info": None,
+            TASK_DEFINITIONS={},
+            multi_instance_manager=FakeManagerOpen(),
+            profile_manager=MagicMock(),
+            instances_profile_managers={},
+            instance_queue=[(0, "profile_x")],
+            active_instances={0},
+            instance_widgets=[],
+            save_instance_selection=lambda _selection: None,
+            load_instance_selection=lambda: {},
+        )
+        controller.max_launch_attempts = 1
+        with patch.object(controller, "launch_next_instances"):
+            controller._requeue_with_limit(0, "profile_x")
+        # After the cooldown the counter is reset for a fresh attempt.
+        self.assertEqual(controller.instance_launch_attempts[0], 0)
+        controller._retry_blocked_until[0] = time.time() - 1
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
+            fake_thread = MagicMock()
+            mock_thread.return_value = fake_thread
+            controller.launch_next_instances()
+        fake_thread.start.assert_called_once()
+        _, kwargs = mock_thread.call_args
+        self.assertEqual(kwargs["args"], (0, "profile_x"))
+        self.assertEqual(kwargs["target"], controller.run_profile_on_instance_with_slot)
 
 
 class TestPickScheduledTask(unittest.TestCase):
