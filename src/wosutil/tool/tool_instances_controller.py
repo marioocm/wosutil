@@ -359,7 +359,9 @@ class MultiInstanceToolController:
                 # that arrived first to the queue. Ties keep the arrival order.
                 self.instance_queue.sort(key=self._queue_sort_key)
                 # Drop stale entries for instances that are already active.
-                self.instance_queue = [item for item in self.instance_queue if item[0] not in self.active_instances]
+                # Filter in place so the list shared with the GUI keeps the
+                # same reference and the shown queue order stays in sync.
+                self.instance_queue[:] = [item for item in self.instance_queue if item[0] not in self.active_instances]
                 now = time.time()
                 candidate = None
                 for pos, (idx, _profile_name) in enumerate(self.instance_queue):
