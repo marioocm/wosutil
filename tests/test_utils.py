@@ -1,13 +1,15 @@
 """Unit tests for utility functions."""
 
 import json
+import logging
 import os
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from wosutil.stop import StopSignal, ToolStopped
 from wosutil.utils import (
+    RecoverableRotatingFileHandler,
     ensure_directory_exists,
     load_json_file,
     retry_operation,
@@ -209,6 +211,64 @@ class TestStopSignal(unittest.TestCase):
         """Test that wait() returns False on timeout while the signal is clear."""
         signal = StopSignal()
         self.assertFalse(signal.wait(timeout=0.05))
+
+
+class TestRecoverableRotatingFileHandler(unittest.TestCase):
+    """The file handler keeps logging after a broken stream or failed rollover."""
+
+    def setUp(self):
+        """Create a temp log file and a logger using the recoverable handler."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.log_path = os.path.join(self.temp_dir, "app.log")
+        self.handler = RecoverableRotatingFileHandler(self.log_path, maxBytes=1024, backupCount=1, encoding="utf-8")
+        self.logger = logging.getLogger(f"recoverable_test_{id(self)}")
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.addHandler(self.handler)
+
+    def tearDown(self):
+        """Close the handler and remove the temp directory."""
+        import shutil
+
+        self.logger.removeHandler(self.handler)
+        self.handler.close()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _content(self):
+        """Read the full log file content."""
+        with open(self.log_path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_logs_survive_a_broken_stream(self):
+        """A closed/dropped stream is reopened on the next record."""
+        self.logger.info("before")
+        self.handler.stream.close()
+        self.handler.stream = None
+
+        self.logger.info("after")
+
+        content = self._content()
+        self.assertIn("before", content)
+        self.assertIn("after", content)
+
+    def test_logs_survive_a_failed_rollover(self):
+        """A rollover failure (stream closed, rename error) does not kill logging."""
+        self.logger.info("before")
+
+        def broken_rollover(*_args, **_kwargs):
+            # doRollover closes the stream first, then fails (e.g. the backup
+            # file is locked by another process on Windows).
+            self.handler.stream.close()
+            self.handler.stream = None
+            raise PermissionError("backup log file is locked")
+
+        with patch.object(self.handler, "doRollover", side_effect=broken_rollover):
+            self.logger.info("during")
+
+        self.logger.info("after")
+
+        content = self._content()
+        self.assertIn("before", content)
+        self.assertIn("after", content)
 
 
 if __name__ == "__main__":
