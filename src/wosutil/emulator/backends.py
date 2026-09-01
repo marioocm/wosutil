@@ -362,7 +362,8 @@ class EmulatorBackend(ABC):
         to close the VM cleanly before the instance processes are terminated
         directly: killing a legacy VM process (MuMuVMMHeadless.exe) crashes
         the MuMuVMMSVC hypervisor service, so direct termination is only the
-        fallback for a hung emulator.
+        fallback for a hung emulator (and backends may forbid killing some
+        processes entirely, see :meth:`_terminate_matching_processes`).
 
         Return False after a short window without confirmation.
         """
@@ -372,50 +373,64 @@ class EmulatorBackend(ABC):
             self.log(f"Instance {name} is not running.", "info")
         else:
             if self._graceful_stop(instance_index):
-                # The manager accepted a graceful shutdown: wait for the VM
-                # to close on its own before terminating anything.
-                for _ in range(30):
+                # The manager accepted a graceful shutdown: keep the request
+                # alive (a hung guest may only answer a later one) and wait
+                # for the VM to close on its own before terminating anything.
+                for attempt in range(30):
                     if not self._matching_processes(instance_index):
                         self.log(f"Instance {name} stopped.", "success")
                         break
+                    if attempt and attempt % 5 == 0:
+                        self._graceful_stop(instance_index)
                     time.sleep(2)
                 if not self._matching_processes(instance_index):
                     if start_minimized_enabled():
                         minimize_process_windows(self.window_process_names, self.log)
                     return True
                 self.log(f"Graceful shutdown of instance {name} did not complete. Terminating processes...", "warning")
-            processes = self._matching_processes(instance_index)
-            for proc in processes:
-                try:
-                    proc.terminate()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            for _ in range(5):
-                if not self._matching_processes(instance_index):
-                    self.log(f"Instance {name} stopped.", "success")
-                    break
-                time.sleep(2)
-            else:
-                for proc in self._matching_processes(instance_index):
-                    try:
-                        proc.kill()
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                for _ in range(5):
-                    if not self._matching_processes(instance_index):
-                        self.log(f"Instance {name} stopped.", "success")
-                        break
-                    time.sleep(2)
-                else:
-                    self.log(f"Could not stop instance {name}.", "error")
-                    if start_minimized_enabled():
-                        minimize_process_windows(self.window_process_names, self.log)
-                    return False
+            if not self._terminate_matching_processes(instance_index):
+                self.log(f"Could not stop instance {name}.", "error")
+                if start_minimized_enabled():
+                    minimize_process_windows(self.window_process_names, self.log)
+                return False
+            self.log(f"Instance {name} stopped.", "success")
         # The emulator may leave windows behind when an instance closes (e.g.
         # the MuMu manager); minimize them so the close never steals focus.
         if start_minimized_enabled():
             minimize_process_windows(self.window_process_names, self.log)
         return True
+
+    def _terminate_matching_processes(self, instance_index):
+        """Terminate the instance processes directly, waiting between attempts.
+
+        Terminates then kills the processes matched to the instance, giving
+        them a short window to exit after each step. Backends whose processes
+        must never be killed directly (MuMu legacy VMs crash the hypervisor
+        service) override this to exclude them.
+
+        Returns:
+            bool: True when the instance processes are all gone afterwards.
+        """
+        processes = self._matching_processes(instance_index)
+        for proc in processes:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        for _ in range(5):
+            if not self._matching_processes(instance_index):
+                return True
+            time.sleep(2)
+        for proc in self._matching_processes(instance_index):
+            try:
+                proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        for _ in range(5):
+            if not self._matching_processes(instance_index):
+                return True
+            time.sleep(2)
+        return False
 
     def list_devices(self):
         """List devices using the backend adb binary."""
@@ -471,20 +486,58 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
         legacy Android 12 VMs) makes the MuMuVMMSVC hypervisor service crash
         with an R6025 "pure virtual function call"; asking the manager to
         shut the player down first lets the hypervisor release the VM
-        cleanly.
+        cleanly. The request is retried a few times: a busy manager (e.g.
+        still answering another instance) can reject the first one.
 
         Returns:
             bool: True when the manager accepted the shutdown request, False
-            when it is missing or the request failed (callers then fall back
-            to terminating the processes directly).
+            when it is missing or every attempt failed (callers then fall
+            back to terminating the shell processes only, never the VM).
         """
-        if not os.path.exists(self.manager_path):
-            self.log(f"MuMuManager.exe not found at {self.manager_path}, falling back to process termination.", "warning")
-            return False
-        result = run_process_robust([self.manager_path, "control", "--vmindex", str(instance_index), "shutdown"], timeout=30)
-        if result and result.returncode == 0:
-            return True
+        for _ in range(3):
+            if not os.path.exists(self.manager_path):
+                self.log(f"MuMuManager.exe not found at {self.manager_path}, falling back to process termination.", "warning")
+                return False
+            result = run_process_robust([self.manager_path, "control", "--vmindex", str(instance_index), "shutdown"], timeout=30)
+            if result and result.returncode == 0:
+                return True
+            time.sleep(2)
         self.log(f"MuMuManager shutdown request failed for instance {instance_index}.", "warning")
+        return False
+
+    def _terminate_matching_processes(self, instance_index):
+        """Kill the instance shell processes, never the VM process.
+
+        Terminating MuMuVMMHeadless.exe (the VirtualBox VM process behind
+        Android 12 instances) directly crashes the MuMuVMMSVC hypervisor
+        service with an R6025 "pure virtual function call", so the VM is
+        left running when the manager cannot close it: the stop is reported
+        as failed and the instance is retried later instead of taking the
+        ADB of every instance down with it.
+
+        Returns:
+            bool: True when the instance processes are all gone afterwards.
+        """
+        vm_name = self._vm_name(instance_index)
+        shells = [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "MuMuNxDevice") and _has_process_option(cmdline, "vm", vm_name)]
+        for proc in shells:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        for _ in range(5):
+            if not self._matching_processes(instance_index):
+                return True
+            time.sleep(2)
+        for proc in shells:
+            try:
+                proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        for _ in range(5):
+            if not self._matching_processes(instance_index):
+                return True
+            time.sleep(2)
         return False
 
     def _launch_argv(self, instance_index):
