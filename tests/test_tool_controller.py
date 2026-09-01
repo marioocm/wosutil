@@ -548,5 +548,109 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         mock_save.assert_not_called()
 
 
+class TestSelfHealingQueue(unittest.TestCase):
+    """The launcher re-queues selected instances that fell out of the queue."""
+
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        stop_signal.clear()
+
+    def tearDown(self):
+        """Do not leak the stop signal into other tests."""
+        stop_signal.clear()
+
+    def _make_controller(self):
+        """Build a controller ready to launch up to 3 instances."""
+        controller = MultiInstanceToolController(
+            log_message=lambda _msg, level="info": None,
+            TASK_DEFINITIONS={},
+            multi_instance_manager=FakeManagerOpen(),
+            profile_manager=MagicMock(),
+            instances_profile_managers={},
+            instance_queue=[],
+            active_instances=set(),
+            instance_widgets=[],
+            save_instance_selection=lambda _selection: None,
+            load_instance_selection=lambda: {},
+        )
+        max_var = MagicMock()
+        max_var.get.return_value = 3
+        controller.max_instances_var = max_var
+        return controller
+
+    def _pm_with_tasks(self):
+        """A profile manager whose next task is already due."""
+        pm = MagicMock()
+        pm.running_tasks_state = [{"id": "x", "name": "X", "next_run_time": time.time() - 1}]
+        return pm
+
+    def _checked_widget(self, index=0, profile_name="All"):
+        """A checked instance widget for the given index."""
+        checked = MagicMock()
+        checked.get.return_value = True
+        profile_var = MagicMock()
+        profile_var.get.return_value = profile_name
+        return {"index": index, "checked": checked, "profile_var": profile_var}
+
+    def test_lost_instance_is_requeued_and_launched_when_due(self):
+        """A selected instance missing from the queue is launched again."""
+        controller = self._make_controller()
+        controller._selected_instances = {0}
+        controller.instances_profile_managers[0] = self._pm_with_tasks()
+        controller.instance_widgets.append(self._checked_widget())
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
+            fake_thread = MagicMock()
+            mock_thread.return_value = fake_thread
+            controller.launch_next_instances()
+        fake_thread.start.assert_called_once()
+        _, kwargs = mock_thread.call_args
+        self.assertEqual(kwargs["args"], (0, "All"))
+
+    def test_instance_without_scheduled_tasks_is_not_requeued(self):
+        """A profile with no tasks stays out of the queue (no busy loop)."""
+        controller = self._make_controller()
+        controller._selected_instances = {0}
+        pm = MagicMock()
+        pm.running_tasks_state = []
+        controller.instances_profile_managers[0] = pm
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
+            controller.launch_next_instances()
+        mock_thread.assert_not_called()
+        self.assertEqual(controller.instance_queue, [])
+
+    def test_aborted_instance_is_not_requeued(self):
+        """A permanently aborted instance (game missing) is never resurrected."""
+        controller = self._make_controller()
+        controller._selected_instances = {0}
+        controller._aborted_instances = {0}
+        controller.instances_profile_managers[0] = self._pm_with_tasks()
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
+            controller.launch_next_instances()
+        mock_thread.assert_not_called()
+        self.assertEqual(controller.instance_queue, [])
+
+    def test_retry_blocked_instance_is_not_launched_until_cooldown(self):
+        """A paused instance is skipped while the retry cooldown runs."""
+        controller = self._make_controller()
+        controller._selected_instances = {0}
+        controller._retry_blocked_until[0] = time.time() + 300
+        controller.instances_profile_managers[0] = self._pm_with_tasks()
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
+            controller.launch_next_instances()
+        mock_thread.assert_not_called()
+        self.assertEqual(controller.instance_queue, [])
+
+    def test_active_instance_is_not_duplicated_in_the_queue(self):
+        """An instance already running keeps its slot and is not re-queued."""
+        controller = self._make_controller()
+        controller._selected_instances = {0}
+        controller.active_instances.add(0)
+        controller.instances_profile_managers[0] = self._pm_with_tasks()
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
+            controller.launch_next_instances()
+        mock_thread.assert_not_called()
+        self.assertEqual(controller.instance_queue, [])
+
+
 if __name__ == "__main__":
     unittest.main()
