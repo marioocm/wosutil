@@ -539,8 +539,8 @@ def go_worldmap_search(instance_index, scroll=True):
             WORLD_MAP_SEARCH_SCROLL_END[1],
             WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
             instance_index,
+            delay=1.0,
         )
-        time.sleep(1.0)
     return True
 
 
@@ -1518,6 +1518,7 @@ def select_march(instance_index, march):
             KILL_BEAST_MARCH_SCROLL_END[1],
             200,
             instance_index,
+            delay=0.5,
         )
     click_on_coordinates(*KILL_BEAST_MARCH_POSITIONS[march], instance_index, delay=0.3)
 

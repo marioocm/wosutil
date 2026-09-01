@@ -296,8 +296,8 @@ def _read_task_list_bear_hunt_times(instance_index: int, utc: Tuple[int, int, in
         _TASK_LIST_SCROLL_DURATION_MS,
         instance_index,
         hold_end_ms=_TASK_LIST_SCROLL_HOLD_MS,
+        delay=_TASK_LIST_SCROLL_SETTLE_SECONDS,
     )
-    time.sleep(_TASK_LIST_SCROLL_SETTLE_SECONDS)
 
     events = set()
     last_signature = None
@@ -323,8 +323,8 @@ def _read_task_list_bear_hunt_times(instance_index: int, utc: Tuple[int, int, in
                 _TASK_LIST_SCROLL_DURATION_MS,
                 instance_index,
                 hold_end_ms=_TASK_LIST_SCROLL_HOLD_MS,
+                delay=_TASK_LIST_SCROLL_SETTLE_SECONDS,
             )
-            time.sleep(_TASK_LIST_SCROLL_SETTLE_SECONDS)
 
     if events:
         schedule = ", ".join(f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d} UTC" for year, month, day, hour, minute in sorted(events))

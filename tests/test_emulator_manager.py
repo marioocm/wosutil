@@ -103,6 +103,17 @@ class TestScrollScreen(unittest.TestCase):
         self.execute_adb_command.assert_called_once_with([SHELL, INPUT, "swipe", "13", "500", "13", "0", "200"], 0)
         self.time_sleep.assert_not_called()
 
+    def test_delay_sleeps_after_scroll(self):
+        """A positive delay sleeps after the scroll completes."""
+        scroll_screen(13, 500, 13, 0, 200, 0, delay=1.0)
+        self.execute_adb_command.assert_called_once_with([SHELL, INPUT, "swipe", "13", "500", "13", "0", "200"], 0)
+        self.time_sleep.assert_called_once_with(1.0)
+
+    def test_delay_sleeps_after_held_scroll(self):
+        """A positive delay sleeps after a held scroll completes."""
+        scroll_screen(13, 500, 13, 0, 200, 0, hold_end_ms=150, delay=0.5)
+        self.time_sleep.assert_called_with(0.5)
+
     def test_hold_uses_continuous_motionevent_gesture(self):
         """A held scroll sends DOWN, moves, waits and lifts with a single continuous gesture."""
         self.execute_adb_command.return_value = _ok()

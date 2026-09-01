@@ -178,8 +178,7 @@ def claim_island_idle(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=500)
-    time.sleep(1.0)
+    scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=500, delay=1.0)
 
     if not click_on_text("Tree", instance_index, roi=get_roi("sidemenu"), delay=4):
         log_message("Tree entry NOT found in side menu. Aborting.", level="warning")
