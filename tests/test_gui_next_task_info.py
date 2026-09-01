@@ -124,7 +124,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
             [
                 self._task("send_pet_adventure_chests", "Send Pet Adventure Chests", 9, 1787616002.5451596),
                 self._task("claim_pet_adventure_ally_treasure", "Claim Pet Adventure Ally Treasure", 10, 1787616002.6933224),
-                self._task("do_intel_missions", "Hunt All Intel Beasts", 11, 1787616002.9505522),
+                self._task("do_intel_missions", "Do Intel Missions", 11, 1787616002.9505522),
                 self._task("claim_storehouse_stamina", "Claim Storehouse Stamina", 6, 1787616005.4818602),
             ]
         )

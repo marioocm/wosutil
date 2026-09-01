@@ -114,7 +114,7 @@ class TestGetAllTasksInfo(unittest.TestCase):
             [
                 self._task("send_pet_adventure_chests", "Send Pet Adventure Chests", 1787616002.5451596, priority=9),
                 self._task("claim_pet_adventure_ally_treasure", "Claim Pet Adventure Ally Treasure", 1787616002.6933224, priority=10),
-                self._task("do_intel_missions", "Hunt All Intel Beasts", 1787616002.9505522, priority=11),
+                self._task("do_intel_missions", "Do Intel Missions", 1787616002.9505522, priority=11),
                 self._task("claim_storehouse_stamina", "Claim Storehouse Stamina", 1787616005.4818602, priority=6),
             ]
         )
@@ -124,7 +124,7 @@ class TestGetAllTasksInfo(unittest.TestCase):
                 ("Claim Storehouse Stamina", 5),
                 ("Send Pet Adventure Chests", 2),
                 ("Claim Pet Adventure Ally Treasure", 2),
-                ("Hunt All Intel Beasts", 2),
+                ("Do Intel Missions", 2),
             ],
         )
 
