@@ -444,11 +444,30 @@ class TestQuietWindowHandling(unittest.TestCase):
 
     def test_stop_terminates_processes_and_waits_short(self):
         """Every backend stops by terminating the instance processes fast."""
-        backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
+        backend = backends.BlueStacksBackend(log_func=lambda *a, **k: None, conf_path=tempfile_helper(SAMPLE_CONF))
         proc = Mock()
-        with patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[proc], [proc], [], [], [], []]), patch.object(backends.MuMuBackend, "_graceful_stop", return_value=False):
+        with patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]), patch.object(backend, "_graceful_stop", return_value=False):
             self.assertTrue(backend.stop_instance(0))
         proc.terminate.assert_called_once()
+
+    def test_mumu_stop_terminates_only_shell_processes(self):
+        """MuMu kills the instance shell but never the VM process."""
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
+        shell = Mock()
+        vm = Mock()
+        with patch.object(backends.MuMuBackend, "_vm_name", return_value="MuMuPlayerGlobal-12.0-1"), patch.object(
+            backends.MuMuBackend, "_matching_processes", side_effect=[[shell, vm], [shell, vm], [vm], [vm], [vm], [vm], [vm], [vm], [vm], [vm], [vm]]
+        ), patch.object(backends.MuMuBackend, "_graceful_stop", return_value=False), patch(
+            "wosutil.emulator.backends._iter_processes",
+            return_value=[
+                (shell, "MuMuNxDevice.exe", ["MuMuNxDevice.exe", "-v", "1", "--vm", "MuMuPlayerGlobal-12.0-1"]),
+                (vm, "MuMuVMMHeadless.exe", ["MuMuVMMHeadless.exe", "--comment", "MuMuPlayerGlobal-12.0-1"]),
+            ],
+        ), patch("wosutil.emulator.backends.time.sleep"), patch("wosutil.emulator.backends.start_minimized_enabled", return_value=False):
+            self.assertFalse(backend.stop_instance(1))
+        shell.terminate.assert_called_once()
+        vm.terminate.assert_not_called()
+        vm.kill.assert_not_called()
 
     def test_mumu_graceful_stop_uses_manager_when_present(self):
         """MuMu asks MuMuManager to shut the VM down cleanly before killing."""
@@ -462,6 +481,26 @@ class TestQuietWindowHandling(unittest.TestCase):
         """A missing MuMuManager lets the caller terminate processes directly."""
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None, manager_path="C:\\does_not_exist\\MuMuManager.exe")
         self.assertFalse(backend._graceful_stop(1))
+
+    def test_mumu_graceful_stop_retries_transient_failures(self):
+        """A failed shutdown request is retried before giving up."""
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None, manager_path="C:\\MuMuManager.exe")
+        with patch("wosutil.emulator.backends.run_process_robust") as mock_run, patch("wosutil.emulator.backends.os.path.exists", return_value=True), patch("wosutil.emulator.backends.time.sleep"):
+            mock_run.side_effect = [Mock(returncode=1), Mock(returncode=0)]
+            self.assertTrue(backend._graceful_stop(1))
+        self.assertEqual(mock_run.call_count, 2)
+
+    def test_mumu_stop_repeats_shutdown_request_while_waiting(self):
+        """The shutdown request is re-issued while the VM is still closing."""
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None, manager_path="C:\\MuMuManager.exe")
+        proc = Mock()
+        processes = [[proc], [proc], [proc], [proc], [proc], [proc], [proc], [], []]
+        with patch("wosutil.emulator.backends.time.sleep"), patch.object(backends.MuMuBackend, "_matching_processes", side_effect=processes), patch.object(
+            backends.MuMuBackend, "_graceful_stop", return_value=True
+        ) as mock_graceful, patch("wosutil.emulator.backends.start_minimized_enabled", return_value=False):
+            self.assertTrue(backend.stop_instance(0))
+        self.assertEqual(mock_graceful.call_count, 2)
+        proc.terminate.assert_not_called()
 
     def test_mumu_stop_waits_for_graceful_shutdown_before_killing(self):
         """A graceful shutdown accepted by the manager is waited on, not killed."""
