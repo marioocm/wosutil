@@ -130,8 +130,8 @@ def get_task_definitions():
         },
         "do_intel_missions": {
             "id": "do_intel_missions",
-            "name": "Hunt All Intel Beasts",
-            "description": "Hunts all available beasts in the intel screen, waiting the time returned by each kill, and reschedules based on the intel timer or 4 hours by default.",
+            "name": "Do Intel Missions",
+            "description": "Completes all missions in the intel tab (beasts, survivors and exploration), prioritizing the beast, and reschedules based on the intel timer or 4 hours by default.",
             "function": do_intel_missions,
             "priority": 11,
             "reschedule_seconds": 4 * 60 * 60,  # 4 hours

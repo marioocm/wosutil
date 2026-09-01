@@ -8,7 +8,23 @@ Python automation tool for **Whiteout Survival** that controls Android emulators
 
 - Multi-emulator support (MuMu, BlueStacks 5, LDPlayer) with per-instance ADB control
 - Per-instance task queues with auto-rescheduling (fixed delays, in-game timers via OCR, or considering the current UTC time)
-- Built-in tasks: idle income and alliance chests, alliance tech, island life essence, mail, triumph, free hero chest, storehouse stamina, intel hunts, nomadic/mystery shops, VIP rewards, tundra trek, pet adventure, pet skills, troop training and promotion
+- Built-in tasks:
+  - Play Bear Trap
+  - Intel Missions
+  - Troop Training and Promotion
+  - Nomadic and Mystery Shop
+  - Pet Chests
+  - Tundra Trek
+  - And many more daily features (island, hero chests, VIP, triumph...)
+- **Light on resources:** the emulators dont need to stay open. The program knows when each task is due and opens/closes the emulator instances in the background, so it doesn't disturb you and isn't wasting resources while idle
+
+## About the interface
+
+The UI is intentionally basic — it hasn't received much work yet and will keep improving over time. The current priority is adding more features, but a nicer interface is planned.
+
+## Feedback
+
+The project is open to any suggestion. Feel free to open an [issue](https://github.com/marioocm/WosUtil/issues) or a pull request with your ideas.
 
 ## Requirements
 
