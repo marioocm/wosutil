@@ -394,11 +394,16 @@ def setup_instances_tab(
                     else:
                         label.config(text="No programmed tasks")
             else:
-                # Instance is in queue
+                # Instance is not active: in the queue, paused, or waiting to
+                # be re-queued by the self-healing launcher.
                 task_name, next_time = get_next_task_info(pm, now)
                 queue_pos = get_queue_position(idx)
+                aborted = idx in getattr(controller, "_aborted_instances", set())
+                blocked_until = getattr(controller, "_retry_blocked_until", {}).get(idx, 0)
 
-                if queue_pos:
+                if aborted:
+                    label.config(text="Game not installed - install it and press Start")
+                elif queue_pos:
                     if task_name:
                         if next_time:  # The task is on cooldown
                             remaining = int(next_time - now)
@@ -408,14 +413,16 @@ def setup_instances_tab(
                     else:
                         label.config(text=f"In queue ({queue_pos})")
                 else:
-                    if task_name:
+                    if blocked_until > now:
+                        label.config(text=f"Retry paused - {format_time_remaining(int(blocked_until - now))}")
+                    elif task_name:
                         if next_time:  # The task is on cooldown
                             remaining = int(next_time - now)
-                            label.config(text=f"In queue - Next: {task_name} in {format_time_remaining(remaining)}")
+                            label.config(text=f"Standby - Next: {task_name} in {format_time_remaining(remaining)}")
                         else:  # The task is ready to run
-                            label.config(text=f"In queue - Waiting to execute: {task_name}")
+                            label.config(text=f"Standby - Waiting to execute: {task_name}")
                     else:
-                        label.config(text="In queue")
+                        label.config(text="Standby")
 
     def update_profile_comboboxes():
         """Refresh the profile options of every instance combobox.

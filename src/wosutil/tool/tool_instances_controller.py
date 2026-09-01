@@ -162,6 +162,10 @@ class MultiInstanceToolController:
         self._schedule_lock = threading.Lock()
         self._task_schedule = None
         self._selected_instances: set = set()
+        # Instances that must not be launched again in this session (e.g. the
+        # game is not installed): the self-healing queue must not resurrect
+        # them, or they would enter an endless start/abort loop.
+        self._aborted_instances: set = set()
 
     def _discard_active_instance(self, index):
         """Remove an instance from the active set while holding the state lock."""
@@ -173,6 +177,37 @@ class MultiInstanceToolController:
         with self._state_lock:
             if not any(queued_index == index for queued_index, _ in self.instance_queue):
                 self.instance_queue.append((index, profile_name))
+
+    def _profile_name_for(self, index):
+        """Return the profile selected for an instance ('' when unknown)."""
+        for inst in self.instance_widgets:
+            if inst["index"] == index:
+                return inst["profile_var"].get()
+        return ""
+
+    def _heal_queue(self):
+        """Re-queue selected instances that fell out of the queue.
+
+        A worker can leave the queue without re-queueing itself (startup
+        failure, crash, health-check abort, ...). Such an instance would stay
+        shown as "waiting to execute" forever while the launcher never starts
+        it again. Re-adding every selected instance that is not active, not
+        queued, not paused by the retry cooldown and still has scheduled
+        tasks makes the launcher self-healing: a lost instance is picked up
+        again on the next launch pass instead of needing a manual restart.
+        """
+        now = time.time()
+        for idx in self._selected_instances:
+            if idx in self.active_instances or idx in self._aborted_instances:
+                continue
+            if any(queued_index == idx for queued_index, _ in self.instance_queue):
+                continue
+            if now < self._retry_blocked_until.get(idx, 0):
+                continue
+            pm = self.instances_profile_managers.get(idx)
+            if pm is None or not getattr(pm, "running_tasks_state", None):
+                continue
+            self._enqueue_instance(idx, self._profile_name_for(idx))
 
     def _remove_thread_reference(self, index, thread):
         """Remove a worker reference only when it still belongs to that worker."""
@@ -237,6 +272,7 @@ class MultiInstanceToolController:
             self.active_instances.clear()
             self.instance_launch_attempts.clear()
             self._retry_blocked_until.clear()
+            self._aborted_instances.clear()
             self.instance_threads.clear()
 
         self.tool_should_stop.clear()
@@ -353,7 +389,13 @@ class MultiInstanceToolController:
 
         while not self.tool_should_stop.is_set():
             with self._state_lock:
-                if len(self.active_instances) >= max_simul or not self.instance_queue:
+                if len(self.active_instances) >= max_simul:
+                    return
+                # Re-queue selected instances that were lost (worker exited
+                # without re-queueing, crashed, ...) so they are retried
+                # instead of staying stranded in the GUI forever.
+                self._heal_queue()
+                if not self.instance_queue:
                     return
                 # Prioritize the instance whose next task is soonest, not the one
                 # that arrived first to the queue. Ties keep the arrival order.
@@ -471,8 +513,7 @@ class MultiInstanceToolController:
                         self.log_message(f"Emulator instance {index} closed due to startup failure.", "info")
                     except Exception as e:
                         self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                    self._discard_active_instance(index)
-                    self.launch_next_instances()
+                    self._requeue_with_limit(index, profile_name)
                     return
 
                 # Retry ADB connection with reduced attempts and better error handling
@@ -553,6 +594,8 @@ class MultiInstanceToolController:
                         "and press Start again. The instance will not be retried automatically.",
                         "error",
                     )
+                    with self._state_lock:
+                        self._aborted_instances.add(index)
                     if self.dialog_queue is not None:
                         self.dialog_queue.put(
                             (

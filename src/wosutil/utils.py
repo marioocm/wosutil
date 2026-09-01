@@ -43,6 +43,37 @@ def rotation_namer(default_name: str) -> str:
     return default_name
 
 
+class RecoverableRotatingFileHandler(RotatingFileHandler):
+    """Rotating file handler that survives a failed rollover.
+
+    The stock handler closes its stream before renaming the backups, so a
+    rename failure on Windows (e.g. the backup file is open elsewhere) leaves
+    the stream closed and every later record is silently dropped for the rest
+    of the session. This handler reopens the stream on the next emit, so file
+    logging keeps working after a failed rotation instead of dying silently.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Write the record, reopening the stream first when it is broken."""
+        try:
+            if self.stream is None or getattr(self.stream, "closed", False):
+                self.stream = self._open()
+            if self.shouldRollover(record):
+                self.doRollover()
+            logging.FileHandler.emit(self, record)
+        except Exception:
+            self.handleError(record)
+            self._repair_stream()
+
+    def _repair_stream(self) -> None:
+        """Reopen the file stream after a failed write or rollover."""
+        try:
+            if self.stream is None or getattr(self.stream, "closed", False):
+                self.stream = self._open()
+        except Exception:
+            self.stream = None
+
+
 def setup_logging(log_to_file: bool = True) -> None:
     """Configure console and optional file logging.
 
@@ -77,8 +108,9 @@ def setup_logging(log_to_file: bool = True) -> None:
         from wosutil.config import LOG_DIR, LOG_FILE
 
         ensure_directory_exists(LOG_DIR)
-        # Rotating file: 5 MB x 3 backups; flush every record for live tailing
-        file_handler = RotatingFileHandler(
+        # Rotating file: 5 MB x 3 backups; every record is flushed by
+        # StreamHandler so the file can be tailed live.
+        file_handler = RecoverableRotatingFileHandler(
             LOG_FILE,
             maxBytes=5 * 1024 * 1024,
             backupCount=3,
@@ -87,14 +119,6 @@ def setup_logging(log_to_file: bool = True) -> None:
         file_handler.namer = rotation_namer
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-
-        original_emit = file_handler.emit
-
-        def emit_and_flush(record: logging.LogRecord) -> None:
-            original_emit(record)
-            file_handler.flush()
-
-        file_handler.emit = emit_and_flush  # type: ignore[method-assign]
         root_logger.addHandler(file_handler)
 
     _logging_configured = True
