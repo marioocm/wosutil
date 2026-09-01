@@ -153,6 +153,7 @@ class TestKillBeast(unittest.TestCase):
                     KILL_BEAST_MARCH_SCROLL_END[1],
                     200,
                     0,
+                    delay=0.5,
                 )
                 calls = [c.args[:2] for c in self.click_on_coordinates.call_args_list]
                 self.assertIn(KILL_BEAST_MARCH_POSITIONS[march], calls)
@@ -241,9 +242,8 @@ class TestGoWorldMapSearch(unittest.TestCase):
             WORLD_MAP_SEARCH_SCROLL_END[1],
             WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
             0,
+            delay=1.0,
         )
-        # The scroll animation must settle before the caller OCRs or clicks.
-        self.sleep.assert_called_once_with(1.0)
 
     def test_opens_search_without_scroll_when_disabled(self):
         """The caller can open the search without changing the resource row."""

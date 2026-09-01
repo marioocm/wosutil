@@ -456,7 +456,7 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
         raise
 
 
-def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, hold_end_ms=0):
+def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, hold_end_ms=0, delay=0):
     """Performs a scroll gesture on the emulator screen.
 
     When ``hold_end_ms`` is greater than zero the finger is kept still at the
@@ -471,12 +471,16 @@ def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, h
         duration_ms (int): Duration of the scroll in milliseconds.
         instance_index (int): Emulator instance index.
         hold_end_ms (int): Extra milliseconds to hold the finger at the end point (0 to skip).
+        delay (float): Delay after scrolling in seconds (0 to skip).
     """
     log_message(f"Performing scroll from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration_ms}ms", level="info")
     if hold_end_ms > 0:
-        return _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index)
-    result = execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms)], instance_index)
-    _require_adb_success(result, "scroll swipe")
+        _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index)
+    else:
+        result = execute_adb_command(["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms)], instance_index)
+        _require_adb_success(result, "scroll swipe")
+    if delay > 0:
+        time.sleep(delay)
     return True
 
 
