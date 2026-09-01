@@ -6,6 +6,7 @@ Handles MuMu Player emulator control, ADB commands, and game launching.
 import contextlib
 import os
 import tempfile
+import threading
 import time
 
 from wosutil.config import (
@@ -21,6 +22,11 @@ from wosutil.utils import get_coordinates, log_message, run_process_robust
 # Successful ADB verifications per serial, cached for a short window
 # so per-screenshot checks don't re-run subprocesses or spam the log.
 _adb_verified_cache: dict = {}
+
+# Serializes ADB server restarts: every instance that fails to connect calls
+# restart_adb_server() concurrently, and overlapping kill-server/start-server
+# calls leave the server in a broken state that hangs later commands.
+_adb_restart_lock = threading.Lock()
 
 # The emulator backend selected at startup; all ADB calls below delegate to it.
 _active_backend = None
@@ -535,13 +541,19 @@ def launch_game_activity(instance_index):
 
 
 def restart_adb_server():
-    """Restarts the ADB server using the active emulator's binary."""
-    log_message("Restarting ADB server...", level="warning")
-    try:
-        get_active_backend().restart_server()
-        log_message("ADB server restarted successfully.", level="success")
-    except Exception as e:
-        log_message(f"Error restarting ADB server: {e}", level="error")
+    """Restarts the ADB server using the active emulator's binary.
+
+    Serialized with a lock: several instances can call this at the same time
+    (each one that fails to connect restarts the server) and overlapping
+    ``kill-server``/``start-server`` calls corrupt the server state.
+    """
+    with _adb_restart_lock:
+        log_message("Restarting ADB server...", level="warning")
+        try:
+            get_active_backend().restart_server()
+            log_message("ADB server restarted successfully.", level="success")
+        except Exception as e:
+            log_message(f"Error restarting ADB server: {e}", level="error")
 
 
 def check_emulator_health(instance_index):
