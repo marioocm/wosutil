@@ -27,12 +27,26 @@ from wosutil.tool.tasks.task_automation import (
     turn_on_autojoin,
 )
 
+RETRY_SECONDS = 2 * 60 * 60  # Default error retry for every task with a retry
+MINUTE = 60
+HOUR = 60 * MINUTE
+
 
 def get_task_definitions():
     """Get task definitions with optimized structure.
 
     User-defined priorities from the preferences are applied on top of the
     default ones, so tasks can be reordered without touching this file.
+
+    Timing keys per task (see SPEC-retry-flex.md):
+
+    - ``reschedule_seconds``: default wait after a successful run when no
+      exact timer/UTC time could be read.
+    - ``retry_seconds``: wait after a failed run (``None`` = no error retry,
+      the task only runs on its read schedule).
+    - ``early_seconds`` / ``late_seconds``: flex window to batch the task
+      with other tasks and avoid extra emulator open/close cycles. Only
+      applies to successful cycles, never to error retries.
 
     Returns:
         dict: Dictionary of task definitions with metadata and functions.
@@ -44,7 +58,10 @@ def get_task_definitions():
             "description": "Recalls every march to prepare the bear trap attack and then attacks the bear trap with all marches.",
             "function": lambda instance_index: play_bear_trap(instance_index),
             "priority": 0,
-            "reschedule_seconds": 2 * 24 * 60 * 60,  # 2 days
+            "reschedule_seconds": 6 * HOUR,  # fallback when no schedule is known
+            "retry_seconds": None,  # no error retry, only runs on its read schedule
+            "early_seconds": 0,
+            "late_seconds": 0,
             "category": "world",
         },
         "claim_idle": {
@@ -53,7 +70,10 @@ def get_task_definitions():
             "description": "Claims idle income from exploration area",
             "function": claim_idle_income,
             "priority": 4,
-            "reschedule_seconds": 7 * 60 * 60,  # 7 hours
+            "reschedule_seconds": 8 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 2 * HOUR,
+            "late_seconds": 1 * HOUR,
             "category": "exploration",
         },
         "donate_tech": {
@@ -62,7 +82,10 @@ def get_task_definitions():
             "description": "Donates resources to alliance technology",
             "function": donate_to_alliance_tech,
             "priority": 13,
-            "reschedule_seconds": 4 * 60 * 60,  # 4 hours
+            "reschedule_seconds": 4 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 1 * HOUR,
+            "late_seconds": 0,
             "category": "alliance",
         },
         "autojoin": {
@@ -71,7 +94,10 @@ def get_task_definitions():
             "description": "Turns on auto-join for alliance rallies",
             "function": turn_on_autojoin,
             "priority": 14,
-            "reschedule_seconds": 7 * 60 * 60,  # 7 hours
+            "reschedule_seconds": 7 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 2 * HOUR,
+            "late_seconds": 30 * MINUTE,
             "category": "alliance",
         },
         "claim_island": {
@@ -80,7 +106,10 @@ def get_task_definitions():
             "description": "Claims life essence from the island",
             "function": claim_island_idle,
             "priority": 5,
-            "reschedule_seconds": 7 * 60 * 60,  # 7 hours
+            "reschedule_seconds": 8 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 2 * HOUR,
+            "late_seconds": 1 * HOUR,
             "category": "island",
         },
         "claim_mail": {
@@ -89,7 +118,10 @@ def get_task_definitions():
             "description": "Claims rewards from mail inbox",
             "function": claim_mail,
             "priority": 15,
-            "reschedule_seconds": 8 * 60 * 60,  # 8 hours
+            "reschedule_seconds": 8 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 2 * HOUR,
+            "late_seconds": 1 * HOUR,
             "category": "mail",
         },
         "claim_alliance_chests": {
@@ -98,7 +130,10 @@ def get_task_definitions():
             "description": "Claims alliance chests from the alliance menu",
             "function": claim_alliance_chests,
             "priority": 16,
-            "reschedule_seconds": 10 * 60 * 60,  # 10 hours
+            "reschedule_seconds": 10 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 2 * HOUR,
+            "late_seconds": 2 * HOUR,
             "category": "alliance",
         },
         "claim_triumph": {
@@ -107,7 +142,10 @@ def get_task_definitions():
             "description": "Claims triumph rewards from the alliance menu",
             "function": claim_triumph,
             "priority": 17,
-            "reschedule_seconds": 12 * 60 * 60,  # 12 hours
+            "reschedule_seconds": 12 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 2 * HOUR,
+            "late_seconds": 0,
             "category": "alliance",
         },
         "claim_recruit_hero_free_chest": {
@@ -116,7 +154,10 @@ def get_task_definitions():
             "description": "Claims the free hero chests on the recruit hero chest screen.",
             "function": claim_recruit_hero_free_chest,
             "priority": 1,
-            "reschedule_seconds": 12 * 60 * 60,  # 12 hours
+            "reschedule_seconds": 5 * HOUR,  # success without a readable timer
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 0,
             "category": "heroes",
         },
         "claim_storehouse_stamina": {
@@ -125,16 +166,22 @@ def get_task_definitions():
             "description": "Claims stamina from the storehouse by opening the profile and searching for the stamina icon and timer.",
             "function": claim_storehouse_stamina,
             "priority": 6,
-            "reschedule_seconds": 4 * 60 * 60,  # 4 hours
+            "reschedule_seconds": 12 * HOUR,  # success without a readable timer
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 4 * HOUR,
             "category": "profile",
         },
         "do_intel_missions": {
             "id": "do_intel_missions",
             "name": "Do Intel Missions",
-            "description": "Completes all missions in the intel tab (beasts, survivors and exploration), prioritizing the beast, and reschedules based on the intel timer or 4 hours by default.",
+            "description": "Completes all missions in the intel tab (beasts, survivors and exploration), prioritizing the beast, and reschedules based on the intel timer or 6 hours by default.",
             "function": do_intel_missions,
             "priority": 11,
-            "reschedule_seconds": 4 * 60 * 60,  # 4 hours
+            "reschedule_seconds": 6 * HOUR,  # success without a readable timer
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 2 * HOUR,
             "category": "intel",
         },
         "claim_nomadic_shop_rss_and_vip": {
@@ -143,7 +190,10 @@ def get_task_definitions():
             "description": "Claims resources (iron, coal, wood, meat) and VIP from the nomadic shop, using free refresh when available, and reschedules to 00:00 UTC when everything is claimed.",
             "function": claim_nomadic_shop_rss_and_vip,
             "priority": 18,
-            "reschedule_seconds": 4 * 60 * 60,  # 4 hours
+            "reschedule_seconds": 12 * HOUR,  # success fallback without a UTC clock
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 4 * HOUR,
             "category": "shop",
         },
         "claim_mystery_shop": {
@@ -152,7 +202,10 @@ def get_task_definitions():
             "description": "Claims redeemable items from the mystery shop (free items always, widgets depending on the user preference), rescheduling to 00:00 UTC when everything is claimed.",
             "function": claim_mystery_shop,
             "priority": 19,
-            "reschedule_seconds": 4 * 60 * 60,  # 4 hours
+            "reschedule_seconds": 12 * HOUR,  # success fallback without a UTC clock
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 4 * HOUR,
             "category": "shop",
         },
         "claim_vip_daily_rewards": {
@@ -161,7 +214,10 @@ def get_task_definitions():
             "description": "Claims the daily rewards from the VIP menu, rescheduling to the next 00:00 UTC once claimed.",
             "function": claim_vip_daily_rewards,
             "priority": 8,
-            "reschedule_seconds": 12 * 60 * 60,  # 12 hours
+            "reschedule_seconds": 12 * HOUR,  # success fallback without a UTC clock
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 4 * HOUR,
             "category": "vip",
         },
         "claim_tundra_trek_supplies": {
@@ -170,7 +226,10 @@ def get_task_definitions():
             "description": "Claims the free supplies from the tundra trek, using the on-screen timer to reschedule or 6 hours by default.",
             "function": claim_tundra_trek_supplies,
             "priority": 2,
-            "reschedule_seconds": 6 * 60 * 60,  # 6 hours
+            "reschedule_seconds": 6 * HOUR,  # success without a readable timer
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 2 * HOUR,
             "category": "tundra_trek",
         },
         "start_tundra_trek_idle": {
@@ -179,7 +238,10 @@ def get_task_definitions():
             "description": "Clicks the idle button on the tundra trek screen to start idle hunting, always right after claim tundra trek supplies.",
             "function": start_tundra_trek_idle,
             "priority": 3,
-            "reschedule_seconds": 12 * 60 * 60,  # 12 hours fallback, normally pulled by claim_tundra_trek_supplies
+            "reschedule_seconds": 12 * HOUR,  # fallback, normally pulled by claim_tundra_trek_supplies
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 0,
             "category": "tundra_trek",
             "run_after": "claim_tundra_trek_supplies",
         },
@@ -189,7 +251,10 @@ def get_task_definitions():
             "description": "Claims the ally treasure from the pet adventure screen, rescheduling to the next 00:00 UTC once claimed.",
             "function": claim_pet_adventure_ally_treasure,
             "priority": 10,
-            "reschedule_seconds": 12 * 60 * 60,  # 12 hours
+            "reschedule_seconds": 12 * HOUR,  # success fallback without a UTC clock
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 3 * HOUR,
             "category": "pet_adventure",
         },
         "send_pet_adventure_chests": {
@@ -198,7 +263,10 @@ def get_task_definitions():
             "description": "Opens ready chests and starts available chests in pet adventure, prioritizing chest 3. When the daily attempts are exhausted it reschedules to the next 00:00 UTC.",
             "function": send_pet_adventure_chests,
             "priority": 9,
-            "reschedule_seconds": 5 * 60 * 60,  # 5 hours
+            "reschedule_seconds": 5 * HOUR,
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 0,
             "category": "pet_adventure",
         },
         "activate_daily_pet_skills": {
@@ -207,7 +275,10 @@ def get_task_definitions():
             "description": "Activates the daily pet skills (wolf, ox, tapir, elk), gathers a tile with the active ox skill, and reschedules with the shortest on-screen timer or 6 hours by default.",
             "function": activate_daily_pet_skills,
             "priority": 7,
-            "reschedule_seconds": 6 * 60 * 60,  # 6 hours
+            "reschedule_seconds": 6 * HOUR,  # success without a readable timer
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 10 * MINUTE,
             "category": "pet_adventure",
         },
         "train_troops": {
@@ -216,7 +287,10 @@ def get_task_definitions():
             "description": "Trains and promotes troops in the 3 camps, rescheduling with the shortest training timer or 6 hours by default.",
             "function": train_troops,
             "priority": 12,
-            "reschedule_seconds": 6 * 60 * 60,  # 6 hours
+            "reschedule_seconds": 6 * HOUR,  # success without a readable timer
+            "retry_seconds": RETRY_SECONDS,
+            "early_seconds": 0,
+            "late_seconds": 10 * MINUTE,
             "category": "troops",
         },
     }
