@@ -13,12 +13,13 @@ from wosutil.tool.tool_instances_controller import (
     MultiInstanceToolController,
     load_instance_selection,
     pick_scheduled_task,
+    plan_open_times,
     save_instance_selection,
 )
 
 
-def get_next_task_info(pm, now):
-    """Get the task that will actually run next, mirroring the worker.
+def get_next_task_info(pm, now, is_open=True):
+    """Get the task that will actually run next, mirroring worker+launcher.
 
     The controller executes the highest-priority task that is already due,
     waiting for a higher-priority task scheduled within the grouping window
@@ -28,11 +29,24 @@ def get_next_task_info(pm, now):
     re-picking, and a higher-priority in-window task (e.g. another 00:00 UTC
     event read a second later) can jump ahead. This helper walks that wait
     chain to find the task the worker will actually execute first.
+
+    Args:
+        pm: The profile manager of the instance (or None).
+        now: Current epoch time.
+        is_open: Whether the emulator is already open. A closed instance
+            only opens at its next batch-aware planned time, so the walk
+            starts there instead of treating early-runnable tasks as ready
+            (that would wrongly show "Waiting to execute" for a task whose
+            opening is still far away).
     """
     if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
         return None, None
 
     sim_now = now
+    if not is_open:
+        planned = plan_open_times(pm.running_tasks_state, now)
+        if planned:
+            sim_now = max(now, min(planned.values()))
     while True:
         task, wait_until = pick_scheduled_task(pm.running_tasks_state, sim_now)
         if task is None:
@@ -66,6 +80,10 @@ def get_all_tasks_info(pm, now):
     order in which the tasks will actually run; tasks in different windows
     keep their chronological order.
 
+    Times are batch-aware: a task postponed to a joint opening counts down
+    to the batch (when the game really opens for it), not to its nominal
+    due time.
+
     Args:
         pm: The profile manager of the instance (or None).
         now: Current epoch time.
@@ -77,13 +95,22 @@ def get_all_tasks_info(pm, now):
     if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
         return []
 
-    tasks = sorted(pm.running_tasks_state, key=lambda t: (t.get("next_run_time", 0), t.get("priority", 99)))
+    planned = plan_open_times(pm.running_tasks_state, now)
+
+    def _planned_time(task):
+        """Batch-aware time of a task, falling back to its due time."""
+        task_id = task.get("id")
+        if task_id is not None and task_id in planned:
+            return planned[task_id]
+        return task.get("next_run_time", 0)
+
+    tasks = sorted(pm.running_tasks_state, key=lambda t: (_planned_time(t), t.get("priority", 99)))
 
     clusters = []
     cluster = []
     anchor = None
     for task in tasks:
-        task_time = task.get("next_run_time", 0)
+        task_time = _planned_time(task)
         if cluster and task_time > anchor + TASK_GROUPING_WINDOW_SECONDS:
             clusters.append(cluster)
             cluster = []
@@ -96,9 +123,9 @@ def get_all_tasks_info(pm, now):
 
     infos = []
     for cluster in clusters:
-        cluster.sort(key=lambda t: (t.get("priority", 99), t.get("next_run_time", 0)))
+        cluster.sort(key=lambda t: (t.get("priority", 99), _planned_time(t)))
         for task in cluster:
-            remaining = max(0, int(task.get("next_run_time", 0) - now))
+            remaining = max(0, int(_planned_time(task) - now))
             infos.append((task.get("name", "?"), remaining))
     return infos
 
@@ -395,8 +422,9 @@ def setup_instances_tab(
                         label.config(text="No programmed tasks")
             else:
                 # Instance is not active: in the queue, paused, or waiting to
-                # be re-queued by the self-healing launcher.
-                task_name, next_time = get_next_task_info(pm, now)
+                # be re-queued by the self-healing launcher. Closed instances
+                # only open at their next planned (batch-aware) time.
+                task_name, next_time = get_next_task_info(pm, now, is_open=False)
                 queue_pos = get_queue_position(idx)
                 aborted = idx in getattr(controller, "_aborted_instances", set())
                 blocked_until = getattr(controller, "_retry_blocked_until", {}).get(idx, 0)

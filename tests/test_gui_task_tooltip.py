@@ -129,6 +129,41 @@ class TestGetAllTasksInfo(unittest.TestCase):
         )
 
 
+class TestBatchedTaskPreview(unittest.TestCase):
+    """The preview shows when tasks actually run (batch-aware)."""
+
+    def test_postponed_task_shows_batch_time(self):
+        """A task batched to a later opening counts down to the batch."""
+        pm = _FakePM(
+            [
+                {
+                    "id": "claim_idle",
+                    "name": "Claim Idle Income",
+                    "priority": 4,
+                    "next_run_time": 4600.0,
+                    "nominal_due": 4600.0,
+                    "early_seconds": 7200,
+                    "late_seconds": 3600,
+                    "last_result": "success",
+                },
+                {
+                    "id": "train_troops",
+                    "name": "Train Troops",
+                    "priority": 12,
+                    "next_run_time": 8200.0,
+                    "nominal_due": 8200.0,
+                    "early_seconds": 0,
+                    "late_seconds": 600,
+                    "last_result": "success",
+                },
+            ]
+        )
+        self.assertEqual(
+            get_all_tasks_info(pm, 1000.0),
+            [("Claim Idle Income", 7200), ("Train Troops", 7200)],
+        )
+
+
 class TestFormatTaskTooltip(unittest.TestCase):
     """Test cases for the hover tooltip text."""
 

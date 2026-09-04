@@ -179,6 +179,15 @@ Framework pytest en `tests/`, `testpaths=["tests"]`.
   necesidad; borrar tests que fallen sin aprobacion; reintentos sin tope
   dentro de bear trap (siempre acotado a fin de ventana).
 
+## UI (etiquetas y tooltip)
+
+- La etiqueta de estado distingue instancia abierta/cerrada: abierta usa el
+  walk de `pick` (una tarea adelantable se ejecuta de verdad ya); cerrada
+  salta al minimo de `plan_open_times` (muestra la apertura real, nunca
+  "Waiting to execute" para algo que abre en 40min).
+- El tooltip cuenta atras hasta el tiempo planificado (batch), no el due
+  nominal: lo que ve el usuario es cuando se abre el juego de verdad.
+
 ## Success Criteria
 
 - [ ] Fallar `claim_idle` reprograma ~2h, completarla ~8h (igual resto de

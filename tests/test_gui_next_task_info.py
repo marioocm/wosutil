@@ -112,6 +112,80 @@ class TestGetNextTaskInfo(unittest.TestCase):
         self.assertEqual(name, "Due urgent")
         self.assertIsNone(next_time)
 
+    def test_closed_instance_shows_due_time_not_ready(self):
+        """A closed instance with an early-runnable task shows its due time.
+
+        The worker would run it now if the instance were open, but the
+        launcher only opens at the due time: showing "ready" would be a lie.
+        """
+        pm = _FakePM(
+            [
+                {
+                    "id": "claim_mail",
+                    "name": "Claim Mail Rewards",
+                    "priority": 15,
+                    "next_run_time": 3400.0,
+                    "nominal_due": 3400.0,
+                    "early_seconds": 7200,
+                    "late_seconds": 3600,
+                    "last_result": "success",
+                },
+            ]
+        )
+        name, next_time = get_next_task_info(pm, 1000.0, is_open=False)
+        self.assertEqual(name, "Claim Mail Rewards")
+        self.assertEqual(next_time, 3400.0)
+
+    def test_open_instance_runs_early_task_now(self):
+        """An open instance really executes the early-runnable task at once."""
+        pm = _FakePM(
+            [
+                {
+                    "id": "claim_mail",
+                    "name": "Claim Mail Rewards",
+                    "priority": 15,
+                    "next_run_time": 3400.0,
+                    "nominal_due": 3400.0,
+                    "early_seconds": 7200,
+                    "late_seconds": 3600,
+                    "last_result": "success",
+                },
+            ]
+        )
+        name, next_time = get_next_task_info(pm, 1000.0, is_open=True)
+        self.assertEqual(name, "Claim Mail Rewards")
+        self.assertIsNone(next_time)
+
+    def test_closed_instance_shows_joint_batch_time(self):
+        """A closed instance shows when the batch opens, not each due time."""
+        pm = _FakePM(
+            [
+                {
+                    "id": "claim_idle",
+                    "name": "Claim Idle Income",
+                    "priority": 4,
+                    "next_run_time": 4600.0,
+                    "nominal_due": 4600.0,
+                    "early_seconds": 7200,
+                    "late_seconds": 3600,
+                    "last_result": "success",
+                },
+                {
+                    "id": "train_troops",
+                    "name": "Train Troops",
+                    "priority": 12,
+                    "next_run_time": 8200.0,
+                    "nominal_due": 8200.0,
+                    "early_seconds": 0,
+                    "late_seconds": 600,
+                    "last_result": "success",
+                },
+            ]
+        )
+        name, next_time = get_next_task_info(pm, 1000.0, is_open=False)
+        self.assertEqual(name, "Claim Idle Income")
+        self.assertEqual(next_time, 8200.0)
+
     def test_label_shows_first_executed_task_not_first_timer(self):
         """The label is the first task executed, not the first timer reading.
 
