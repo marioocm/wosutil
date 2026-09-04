@@ -341,11 +341,11 @@ class TestTasksRescheduleToUtcMidnight(unittest.TestCase):
             result = _finish_pet_adventure_starts(0, "no_attempts")
         self.assertEqual(result, (True, 7777.0))
 
-    def test_pet_adventure_failed_keeps_default_reschedule(self):
-        """A failed chest start keeps the default 5h reschedule."""
+    def test_pet_adventure_failed_retries_soon(self):
+        """A failed chest start retries in 2h instead of the 5h default."""
         with patch("wosutil.tool.tasks.task_automation.press_android_back_button"):
             result = _finish_pet_adventure_starts(0, "failed")
-        self.assertEqual(result, (False, 5 * 60 * 60))
+        self.assertEqual(result, (False, 2 * 60 * 60))
 
     def test_pet_adventure_done_keeps_default_reschedule(self):
         """A clean start keeps the default 5h reschedule (filling chests)."""

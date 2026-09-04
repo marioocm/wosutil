@@ -395,8 +395,8 @@ def claim_recruit_hero_free_chest(instance_index):
         log_message(f"Task will be rescheduled in {seconds} seconds according to on-screen timer.", level="info")
         reschedule = seconds
     else:
-        log_message("No timer detected on screen, using default value (2 hours).", level="warning")
-        reschedule = 2 * 60 * 60
+        log_message("No timer detected on screen, using default value (5 hours).", level="warning")
+        reschedule = 5 * 60 * 60
 
     # Return to main screen
     press_android_back_button(instance_index)
@@ -438,8 +438,8 @@ def claim_storehouse_stamina(instance_index):
         log_message(f"Task will be rescheduled in {seconds} seconds according to on-screen timer.", level="info")
         reschedule = seconds
     else:
-        log_message("No timer detected on screen, using default value (4 hours).", level="warning")
-        return False
+        log_message("No timer detected on screen, using default value (12 hours).", level="warning")
+        reschedule = 12 * 60 * 60
 
     press_android_back_button(instance_index)
     press_android_back_button(instance_index)
@@ -457,7 +457,7 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
     6. Searches for free refresh button.
     7. If refresh button is found, clicks it and restarts.
     8. If no refresh button is found, finishes the task.
-    9. Reschedules to the next 00:00 UTC on the game clock (10 hours as a
+    9. Reschedules to the next 00:00 UTC on the game clock (12 hours as a
        fallback when the UTC clock was not read yet).
 
     Args:
@@ -468,11 +468,11 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
     """
     log_message("Attempting to claim nomadic shop resources and VIP...", level="info")
     if not go_shop(instance_index):
-        return False, 10 * 60 * 60
+        return False, 2 * 60 * 60
 
     if not click_on_text("Nomadic", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
         log_message("Nomadic shop tab NOT found. Aborting.", level="warning")
-        return False, 10 * 60 * 60
+        return False, 2 * 60 * 60
 
     # Define the resources to search for
     resources = ["nomadic_shop_iron", "nomadic_shop_coal", "nomadic_shop_wood", "nomadic_shop_meat", "nomadic_shop_vip"]
@@ -486,7 +486,7 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
         screenshot_path = take_screenshot(instance_index)
         if not screenshot_path:
             log_message("Could not take screenshot for resource search.", level="error")
-            return False, 10 * 60 * 60
+            return False, 2 * 60 * 60
 
         try:
             clicked_resource = None
@@ -521,11 +521,11 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
         if not click_on_template("nomadic_shop_free_refresh", instance_index, roi=refresh_roi, delay=1.0):
             log_message("No free refresh button found, finishing task.", level="info")
 
-            reschedule = get_seconds_until_utc_midnight(instance_index, fallback=10 * 60 * 60)
+            reschedule = get_seconds_until_utc_midnight(instance_index, fallback=12 * 60 * 60)
             if reschedule is not None:
                 log_message(f"Task will be rescheduled in {reschedule:.0f} seconds (until 00:00 UTC).", level="info")
             else:
-                log_message("No UTC clock available, using default value (10 hours).", level="warning")
+                log_message("No UTC clock available, using default value (12 hours).", level="warning")
 
             press_android_back_button(instance_index)
             return True, reschedule
@@ -544,7 +544,7 @@ def claim_mystery_shop(instance_index):
     4. Continues searching until no more items are found.
     5. Searches for the free refresh button; if found, clicks it and restarts.
     6. If no refresh button is found, finishes the task and reschedules to the
-       next 00:00 UTC on the game clock (10 hours as a fallback when the UTC
+       next 00:00 UTC on the game clock (12 hours as a fallback when the UTC
        clock was not read yet).
 
     Args:
@@ -555,11 +555,11 @@ def claim_mystery_shop(instance_index):
     """
     log_message("Attempting to claim mystery shop items...", level="info")
     if not go_shop(instance_index):
-        return False, 10 * 60 * 60
+        return False, 2 * 60 * 60
 
     if not click_on_text("Mystery", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
         log_message("Mystery shop tab NOT found. Aborting.", level="warning")
-        return False, 10 * 60 * 60
+        return False, 2 * 60 * 60
 
     items_roi = (0, 375, 710, 817)
     refresh_roi = (403, 146, 317, 343)
@@ -583,7 +583,7 @@ def claim_mystery_shop(instance_index):
         screenshot_path = take_screenshot(instance_index)
         if not screenshot_path:
             log_message("Could not take screenshot for item search.", level="error")
-            return False, 10 * 60 * 60
+            return False, 2 * 60 * 60
 
         try:
             clicked_item = None
@@ -613,11 +613,11 @@ def claim_mystery_shop(instance_index):
         if not click_on_template("mystery_shop_free_refresh", instance_index, roi=refresh_roi, delay=1.0):
             log_message("No free refresh button found, finishing task.", level="info")
 
-            reschedule = get_seconds_until_utc_midnight(instance_index, fallback=10 * 60 * 60)
+            reschedule = get_seconds_until_utc_midnight(instance_index, fallback=12 * 60 * 60)
             if reschedule is not None:
                 log_message(f"Task will be rescheduled in {reschedule:.0f} seconds (until 00:00 UTC).", level="info")
             else:
-                log_message("No UTC clock available, using default value (10 hours).", level="warning")
+                log_message("No UTC clock available, using default value (12 hours).", level="warning")
 
             press_android_back_button(instance_index)
             return True, reschedule
@@ -640,7 +640,7 @@ def claim_vip_daily_rewards(instance_index):
     """
     log_message("Attempting to claim VIP daily rewards...", level="info")
     if not ensure_city_screen(instance_index):
-        return False, 12 * 60 * 60
+        return False, 2 * 60 * 60
 
     click_on("vip", instance_index, delay=0.7)
     click_on_coordinates(628, 282, instance_index, delay=2)
@@ -674,7 +674,7 @@ def claim_tundra_trek_supplies(instance_index):
     """
     log_message("Attempting to claim tundra trek supplies...", level="info")
     if not go_tundra_trek(instance_index):
-        return False, 6 * 60 * 60
+        return False, 2 * 60 * 60
 
     end_tundra_trek_idle_if_active(instance_index)
 
@@ -735,7 +735,7 @@ def claim_pet_adventure_ally_treasure(instance_index):
     """
     log_message("Attempting to claim pet adventure ally treasure...", level="info")
     if not go_pet_adventure(instance_index):
-        return False, 12 * 60 * 60
+        return False, 2 * 60 * 60
 
     click_on_coordinates(634, 1201, instance_index)
     click_on_coordinates(363, 1083, instance_index)
@@ -753,6 +753,7 @@ def claim_pet_adventure_ally_treasure(instance_index):
 
 PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS = 5 * 60 * 60  # Default reschedule (chest 3 takes 5h)
 PET_ADVENTURE_CHESTS_DAILY_LIMIT_RESCHEDULE_SECONDS = 6 * 60 * 60  # Reschedule when daily attempts are exhausted
+PET_ADVENTURE_CHESTS_RETRY_SECONDS = 2 * 60 * 60  # Retry when the run fails
 PET_ADVENTURE_CHESTS_MAX_LOOP_ITERATIONS = 15  # Safety guard against infinite loops
 PET_ADVENTURE_CHESTS_DETECT_RETRY_ATTEMPTS = 3  # Re-detect attempts after opening a chest
 PET_ADVENTURE_CHESTS_DETECT_RETRY_SECONDS = 3.0  # Wait between re-detection attempts
@@ -807,7 +808,7 @@ def _finish_pet_adventure_starts(instance_index, result):
         return True, reschedule
     if result == "failed":
         log_message("Failed to start the pet adventure chests. Aborting task.", level="warning")
-        return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
+        return False, PET_ADVENTURE_CHESTS_RETRY_SECONDS
     return True, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
 
 
@@ -852,7 +853,7 @@ def send_pet_adventure_chests(instance_index):
 
     if not is_game_on_pet_adventure_screen(instance_index):
         log_message("Not on the pet adventure screen after navigating. Aborting task.", level="warning")
-        return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
+        return False, PET_ADVENTURE_CHESTS_RETRY_SECONDS
 
     for _ in range(PET_ADVENTURE_CHESTS_MAX_LOOP_ITERATIONS):
         stop_signal.check()
@@ -862,7 +863,7 @@ def send_pet_adventure_chests(instance_index):
             log_message(f"Detected {len(chests) if chests else 0} pet adventure chests, expected 3. Aborting task.", level="warning")
             press_android_back_button(instance_index)
             press_android_back_button(instance_index)
-            return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
+            return False, PET_ADVENTURE_CHESTS_RETRY_SECONDS
 
         # Step 1: open a chest 3 that is ready, then re-detect (a new chest appeared)
         chest3_ready = next((c for c in chests if c["type"] == 3 and c["state"] == "ready"), None)
@@ -875,7 +876,7 @@ def send_pet_adventure_chests(instance_index):
                 log_message("Could not open the ready chest 3, aborting task.", level="warning")
                 press_android_back_button(instance_index)
                 press_android_back_button(instance_index)
-                return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
+                return False, PET_ADVENTURE_CHESTS_RETRY_SECONDS
             continue
 
         # Step 2: a chest 3 is on screen (starting or filling): start every startable chest
@@ -896,7 +897,7 @@ def send_pet_adventure_chests(instance_index):
                 log_message("Could not open the ready pet adventure chest, aborting task.", level="warning")
                 press_android_back_button(instance_index)
                 press_android_back_button(instance_index)
-                return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
+                return False, PET_ADVENTURE_CHESTS_RETRY_SECONDS
             continue  # a chest 3 may have appeared, re-detect it
 
         # Step 4: no chest 3 and nothing ready: start the remaining startable chests
@@ -917,6 +918,7 @@ def send_pet_adventure_chests(instance_index):
 
 
 PET_SKILL_RESCHEDULE_SECONDS = 6 * 60 * 60  # Default reschedule when no timer is detected
+PET_SKILL_RETRY_SECONDS = 2 * 60 * 60  # Retry when the run fails
 PET_SKILLS = [
     ("pet_skill_wolf", "pet_skill_wolf_timer"),
     ("pet_skill_ox", "pet_skill_ox_timer"),
@@ -943,7 +945,7 @@ def activate_daily_pet_skills(instance_index):
     """
     log_message("Attempting to activate daily pet skills...", level="info")
     if not go_pet_skill(instance_index):
-        return False, PET_SKILL_RESCHEDULE_SECONDS
+        return False, PET_SKILL_RETRY_SECONDS
 
     skills_roi = get_roi("pet_skill_buttons")
     use_roi = get_roi("pet_skill_use")
@@ -954,7 +956,7 @@ def activate_daily_pet_skills(instance_index):
 
         if not ensure_pet_skill_screen(instance_index):
             log_message("Not on the pet skill screen, aborting task.", level="warning")
-            return False, PET_SKILL_RESCHEDULE_SECONDS
+            return False, PET_SKILL_RETRY_SECONDS
 
         if not ox_gathered and is_game_on_screen(instance_index, "pet_skill_ox_active", "pet_skill_ox_timer"):
             press_android_back_button(instance_index)
@@ -969,7 +971,7 @@ def activate_daily_pet_skills(instance_index):
                 return True, march_walking_time
             if not go_pet_skill(instance_index):
                 log_message("Could not return to the pet skill screen after gathering.", level="warning")
-                return False, PET_SKILL_RESCHEDULE_SECONDS
+                return False, PET_SKILL_RETRY_SECONDS
             continue
 
         # Try to activate a pet skill
@@ -1014,6 +1016,9 @@ def activate_daily_pet_skills(instance_index):
         return True, reschedule
 
 
+TRAIN_TROOPS_RETRY_SECONDS = 2 * 60 * 60  # Retry when the run fails
+
+
 def train_troops(instance_index):
     """Trains and promotes troops in the 3 troop camps.
 
@@ -1029,11 +1034,11 @@ def train_troops(instance_index):
     """
     log_message("Attempting to promote or train troops...", level="info")
     if not go_sidemenu_city(instance_index):
-        return False, 6 * 60 * 60
+        return False, TRAIN_TROOPS_RETRY_SECONDS
 
     if not click_on_text("Infantry", instance_index, roi=get_roi("sidemenu"), delay=3):
         log_message("Infantry camp entry NOT found in side menu. Aborting.", level="warning")
-        return False, 6 * 60 * 60
+        return False, TRAIN_TROOPS_RETRY_SECONDS
 
     for _ in range(4):
         click_on_coordinates(359, 578, instance_index, delay=0.5)
@@ -1041,7 +1046,7 @@ def train_troops(instance_index):
     if not click_on_template("train_troop", instance_index, delay=1.0):
         log_message("Train troop button NOT found. Aborting.", level="warning")
         press_android_back_button(instance_index)
-        return False, 6 * 60 * 60
+        return False, TRAIN_TROOPS_RETRY_SECONDS
 
     # Infantry camp is shown by default after opening the screen.
     timers = [_train_troop_camp(instance_index)]
@@ -1075,8 +1080,11 @@ def do_intel_missions(instance_index):
         instance_index (int): Emulator instance index.
 
     Returns:
-        tuple: (True, reschedule_seconds)
+        tuple: (True, reschedule_seconds) on success, False when the intel
+            screen could not be reached at all (e.g. the game is blocked)
+            so the controller retries soon.
     """
+    did_work = False
     while True:
         # Highest priority: kill the beast whenever it is available
         seconds = kill_intel_beast(instance_index)
@@ -1090,8 +1098,10 @@ def do_intel_missions(instance_index):
             did_any = False
             if rescue_intel_survivor(instance_index):
                 did_any = True
+                did_work = True
             if do_intel_exploration(instance_index):
                 did_any = True
+                did_work = True
             if not did_any:
                 break
             continue
@@ -1099,6 +1109,7 @@ def do_intel_missions(instance_index):
         # A march is in flight: fill its round-trip time with the other intel
         # tasks. When there is nothing left to fill, reschedule for the remaining
         # time so the scheduler can run other tasks while the march returns.
+        did_work = True
         end = time.time() + seconds
         while time.time() < end:
             did_any = False
@@ -1124,12 +1135,18 @@ def do_intel_missions(instance_index):
         did_any = False
         if rescue_intel_survivor(instance_index):
             did_any = True
+            did_work = True
         if do_intel_exploration(instance_index):
             did_any = True
+            did_work = True
         if not did_any:
             break
+    on_intel_screen = is_game_on_intel_screen(instance_index)
+    if not did_work and not on_intel_screen:
+        log_message("No intel mission done and the intel screen is unreachable, failing so the task retries soon.", level="warning")
+        return False
     # Only trust the intel refresh timer when on the intel screen and the read is plausible
-    if is_game_on_intel_screen(instance_index):
+    if on_intel_screen:
         # Try both timer locations without saving debug captures yet: the timer can
         # legitimately live in the second location, so a miss on the first is expected.
         timer = read_screen_time(instance_index, roi=get_roi("intel_timer"))
@@ -1142,8 +1159,8 @@ def do_intel_missions(instance_index):
                 read_screen_time(instance_index, roi=get_roi(roi_name), debug_label=roi_name)
         if timer is not None and timer >= INTEL_TIMER_MIN_SECONDS:
             return True, timer
-    log_message("No reliable intel timer detected, using default value (4 hours).", level="warning")
-    return True, 4 * 60 * 60
+    log_message("No reliable intel timer detected, using default value (6 hours).", level="warning")
+    return True, 6 * 60 * 60
 
 
 # --- Bear trap ---

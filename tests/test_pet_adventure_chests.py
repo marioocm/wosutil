@@ -6,6 +6,7 @@ from unittest.mock import call, patch
 from wosutil.tool.tasks.task_automation import (
     PET_ADVENTURE_CHESTS_DAILY_LIMIT_RESCHEDULE_SECONDS,
     PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS,
+    PET_ADVENTURE_CHESTS_RETRY_SECONDS,
     send_pet_adventure_chests,
 )
 from wosutil.tool.tasks.task_helpers import (
@@ -444,13 +445,12 @@ class TestSendPetAdventureChestsReschedule(unittest.TestCase):
         result = send_pet_adventure_chests(0)
         self.assertEqual(result, (True, PET_ADVENTURE_CHESTS_DAILY_LIMIT_RESCHEDULE_SECONDS))
 
-    def test_keeps_five_hour_reschedule_when_side_menu_opens(self):
-        """The 5-hour reschedule is untouched when navigation succeeds."""
+    def test_retries_soon_when_not_on_screen(self):
+        """Missing the pet adventure screen after navigating retries in 2h."""
         self.go_pet_adventure.return_value = True
         self.is_on_screen.return_value = False
         result = send_pet_adventure_chests(0)
-        # Not on the pet adventure screen after navigating keeps the 5h schedule
-        self.assertEqual(result, (False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS))
+        self.assertEqual(result, (False, PET_ADVENTURE_CHESTS_RETRY_SECONDS))
 
 
 class TestSendPetAdventureChestsRetryDetection(unittest.TestCase):
@@ -504,7 +504,7 @@ class TestSendPetAdventureChestsRetryDetection(unittest.TestCase):
         """The task aborts when fewer than 3 chests never become visible."""
         self.detect.return_value = [self._chest(100, 200, 2, "start"), self._chest(300, 500, 1, "start")]
         result = send_pet_adventure_chests(0)
-        self.assertEqual(result, (False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS))
+        self.assertEqual(result, (False, PET_ADVENTURE_CHESTS_RETRY_SECONDS))
         self.start_chests.assert_not_called()
 
 

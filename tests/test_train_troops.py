@@ -7,6 +7,7 @@ from wosutil.tool.tasks.task_automation import train_troops
 from wosutil.tool.tasks.task_helpers import _train_troop_camp
 
 DEFAULT = 6 * 60 * 60
+RETRY = 2 * 60 * 60
 ROI_SPEED_UP = (306, 940, 412, 310)
 ROI_TIMER = (458, 920, 127, 38)
 ROI_PROMOTE_TEXT = (3, 768, 717, 28)
@@ -126,19 +127,19 @@ class TestTrainTroopsTask(unittest.TestCase):
     def test_fails_when_side_menu_not_opened(self):
         """The task fails when the City tab cannot be reached."""
         self.go_sidemenu_city.return_value = False
-        self.assertEqual(train_troops(0), (False, DEFAULT))
+        self.assertEqual(train_troops(0), (False, RETRY))
         self.click_text.assert_not_called()
 
     def test_fails_when_infantry_entry_missing(self):
         """The task fails when the Infantry entry is not found in the side menu."""
         self.click_text.return_value = False
-        self.assertEqual(train_troops(0), (False, DEFAULT))
+        self.assertEqual(train_troops(0), (False, RETRY))
         self.train_camp.assert_not_called()
 
     def test_fails_when_train_button_missing(self):
         """The task fails when the train troop button is not on the screen."""
         self.click_template.return_value = False
-        self.assertEqual(train_troops(0), (False, DEFAULT))
+        self.assertEqual(train_troops(0), (False, RETRY))
         self.back_press.assert_called_once()
 
 

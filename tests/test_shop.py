@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from wosutil.tool.tasks.task_automation import claim_mystery_shop, claim_nomadic_shop_rss_and_vip
 
-DEFAULT = 10 * 60 * 60
+SUCCESS_FALLBACK = 12 * 60 * 60
+RETRY = 2 * 60 * 60
 ROI_SHOP_TABS = (0, 1195, 719, 85)
 
 
@@ -56,12 +57,18 @@ class TestClaimNomadicShop(unittest.TestCase):
         self.assertEqual(claim_nomadic_shop_rss_and_vip(0), (True, 3600))
         self.go_shop.assert_called_once_with(0)
         self.click_text.assert_called_once_with("Nomadic", 0, roi=ROI_SHOP_TABS, delay=1.0)
+        self.utc_midnight.assert_called_once_with(0, fallback=SUCCESS_FALLBACK)
 
     def test_fails_when_nomadic_tab_missing(self):
         """The task fails when the Nomadic tab is not found."""
         self.click_text.return_value = False
-        self.assertEqual(claim_nomadic_shop_rss_and_vip(0), (False, DEFAULT))
+        self.assertEqual(claim_nomadic_shop_rss_and_vip(0), (False, RETRY))
         self.take_screenshot.assert_not_called()
+
+    def test_fails_when_shop_not_opened(self):
+        """The task retries soon when the shop cannot be opened."""
+        self.go_shop.return_value = False
+        self.assertEqual(claim_nomadic_shop_rss_and_vip(0), (False, RETRY))
 
 
 class TestClaimMysteryShop(unittest.TestCase):
@@ -114,12 +121,18 @@ class TestClaimMysteryShop(unittest.TestCase):
         self.assertEqual(claim_mystery_shop(0), (True, 3600))
         self.go_shop.assert_called_once_with(0)
         self.click_text.assert_called_once_with("Mystery", 0, roi=ROI_SHOP_TABS, delay=1.0)
+        self.utc_midnight.assert_called_once_with(0, fallback=SUCCESS_FALLBACK)
 
     def test_fails_when_mystery_tab_missing(self):
         """The task fails when the Mystery tab is not found."""
         self.click_text.return_value = False
-        self.assertEqual(claim_mystery_shop(0), (False, DEFAULT))
+        self.assertEqual(claim_mystery_shop(0), (False, RETRY))
         self.take_screenshot.assert_not_called()
+
+    def test_fails_when_shop_not_opened(self):
+        """The task retries soon when the shop cannot be opened."""
+        self.go_shop.return_value = False
+        self.assertEqual(claim_mystery_shop(0), (False, RETRY))
 
 
 if __name__ == "__main__":
