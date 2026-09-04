@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from wosutil.stop import stop_signal
-from wosutil.tool.tool_instances_controller import MultiInstanceToolController, compute_next_run_time, pick_scheduled_task
+from wosutil.tool.tool_instances_controller import MultiInstanceToolController, compute_next_run_time, pick_scheduled_task, plan_open_times
 
 
 class FakeManager:
@@ -759,6 +759,142 @@ class TestPickScheduledTaskFlex(unittest.TestCase):
         task, wait_until = pick_scheduled_task(state, 1000.0)
         self.assertEqual(task["id"], "a")
         self.assertEqual(wait_until, 4600.0)
+
+
+class TestPlanOpenTimes(unittest.TestCase):
+    """plan_open_times computes batch-aware opening wants without mutating."""
+
+    def _task(self, task_id, next_run_time, nominal_due=None, early_seconds=0, late_seconds=0, last_result="success", priority=5, run_after=None):
+        """Build a runtime task dict with scheduling metadata."""
+        task = {
+            "id": task_id,
+            "priority": priority,
+            "next_run_time": next_run_time,
+            "nominal_due": nominal_due if nominal_due is not None else next_run_time,
+            "early_seconds": early_seconds,
+            "late_seconds": late_seconds,
+            "last_result": last_result,
+        }
+        if run_after is not None:
+            task["run_after"] = run_after
+        return task
+
+    def test_batches_movable_task_with_inamovable(self):
+        """Idle (due 4600, late 1h) wants the train opening (8200)."""
+        state = [
+            self._task("idle", 4600.0, early_seconds=7200, late_seconds=3600, priority=4),
+            self._task("train", 8200.0, early_seconds=0, late_seconds=600, priority=12),
+        ]
+        planned = plan_open_times(state, 1000.0)
+        self.assertEqual(planned, {"idle": 8200.0, "train": 8200.0})
+        # Planning never mutates the running state
+        self.assertEqual([t["next_run_time"] for t in state], [4600.0, 8200.0])
+
+    def test_never_moves_past_nominal_plus_late(self):
+        """A task too far away keeps its own due time."""
+        state = [
+            self._task("idle", 4600.0, early_seconds=7200, late_seconds=3600, priority=4),
+            self._task("train", 9000.0, early_seconds=0, late_seconds=600, priority=12),
+        ]
+        self.assertEqual(plan_open_times(state, 1000.0)["idle"], 4600.0)
+
+    def test_error_task_never_moves(self):
+        """An error retry stays put even with a late window configured."""
+        state = [
+            self._task("idle", 4600.0, early_seconds=7200, late_seconds=3600, priority=4, last_result="error"),
+            self._task("train", 8200.0, priority=12),
+        ]
+        self.assertEqual(plan_open_times(state, 1000.0)["idle"], 4600.0)
+
+    def test_zero_late_task_never_moves(self):
+        """Inamovable tasks (bear trap style) anchor the batches."""
+        state = [
+            self._task("bear", 5000.0, priority=0),
+            self._task("idle", 4600.0, early_seconds=7200, late_seconds=0, priority=4),
+        ]
+        planned = plan_open_times(state, 1000.0)
+        self.assertEqual(planned, {"bear": 5000.0, "idle": 4600.0})
+
+    def test_run_after_follower_is_not_a_batch_target(self):
+        """Nobody postpones to a follower task with a stale due time."""
+        state = [
+            self._task("supplies", 4600.0, early_seconds=0, late_seconds=7200, priority=2),
+            self._task("idle_follow", 5000.0, priority=3, run_after="supplies"),
+        ]
+        self.assertEqual(plan_open_times(state, 1000.0)["supplies"], 4600.0)
+
+    def test_overdue_task_wants_to_open_now(self):
+        """An overdue task never waits for a later batch."""
+        state = [
+            self._task("idle", 900.0, early_seconds=7200, late_seconds=3600, priority=4),
+            self._task("train", 8200.0, priority=12),
+        ]
+        self.assertEqual(plan_open_times(state, 1000.0)["idle"], 900.0)
+
+    def test_chain_of_batches_converges(self):
+        """A postponed task can pull the next one along (A->B->C)."""
+        state = [
+            self._task("a", 1000.0, early_seconds=0, late_seconds=5000, priority=3),
+            self._task("b", 2000.0, early_seconds=0, late_seconds=5000, priority=4),
+            self._task("c", 3000.0, priority=5),
+        ]
+        self.assertEqual(plan_open_times(state, 0.0), {"a": 3000.0, "b": 3000.0, "c": 3000.0})
+
+
+class TestPickScheduledTaskBatching(unittest.TestCase):
+    """pick waits for a joint batch instead of running an early task alone."""
+
+    def _task(self, task_id, next_run_time, nominal_due=None, early_seconds=0, late_seconds=0, last_result="success", priority=5):
+        """Build a runtime task dict with scheduling metadata."""
+        return {
+            "id": task_id,
+            "priority": priority,
+            "next_run_time": next_run_time,
+            "nominal_due": nominal_due if nominal_due is not None else next_run_time,
+            "early_seconds": early_seconds,
+            "late_seconds": late_seconds,
+            "last_result": last_result,
+        }
+
+    def test_early_task_waits_for_joint_batch(self):
+        """Idle runs with train at 8200 instead of alone at 1000."""
+        state = [
+            self._task("idle", 4600.0, early_seconds=7200, late_seconds=3600, priority=4),
+            self._task("train", 8200.0, early_seconds=0, late_seconds=600, priority=12),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(wait_until, 8200.0)
+
+    def test_early_task_runs_now_without_batch(self):
+        """Without a reachable batch the early task runs immediately."""
+        state = [
+            self._task("idle", 4600.0, early_seconds=7200, late_seconds=3600, priority=4),
+            self._task("train", 9000.0, early_seconds=0, late_seconds=600, priority=12),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "idle")
+        self.assertIsNone(wait_until)
+
+    def test_due_task_is_never_postponed(self):
+        """A genuinely due task runs even when a batch is reachable."""
+        state = [
+            self._task("idle", 1000.0, early_seconds=7200, late_seconds=3600, priority=4),
+            self._task("train", 2000.0, early_seconds=0, late_seconds=600, priority=12),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "idle")
+        self.assertIsNone(wait_until)
+
+    def test_batch_skipped_when_a_runnable_task_cannot_wait(self):
+        """A due task without late window vetoes the joint wait."""
+        state = [
+            self._task("idle", 4600.0, early_seconds=7200, late_seconds=3600, priority=4),
+            self._task("urgent", 1000.0, priority=9),
+            self._task("train", 8200.0, early_seconds=0, late_seconds=600, priority=12),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "idle")
+        self.assertIsNone(wait_until)
 
 
 if __name__ == "__main__":

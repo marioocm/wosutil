@@ -110,6 +110,88 @@ def _earliest_run_time(task):
     return due - early
 
 
+def _wait_deadline(task):
+    """Return the latest time a task may wait for a joint batch.
+
+    Only successful cycles with a late window may wait; error retries,
+    zero-late tasks and tasks without a valid anchor cannot wait.
+
+    Args:
+        task (dict): Running task state dict.
+
+    Returns:
+        float or None: nominal due + late window, or None.
+    """
+    if task.get("last_result", "success") != "success":
+        return None
+    late = task.get("late_seconds", 0)
+    if not _is_valid_delay(late):
+        return None
+    nominal = task.get("nominal_due", task.get("next_run_time", 0))
+    if not _is_valid_timestamp(nominal):
+        nominal = task.get("next_run_time", 0)
+    if not _is_valid_timestamp(nominal):
+        return None
+    return nominal + late
+
+
+def plan_open_times(task_state, now):
+    """Compute batch-aware opening wants per task id (pure, no mutation).
+
+    A successful future task with a late window joins the soonest later
+    opening within nominal + late instead of opening the emulator on its
+    own (e.g. idle income due in 1h waits for train troops due in 2h).
+    Overdue tasks, error retries, zero-late tasks and run_after followers
+    never move; followers also never attract a batch since their own due
+    time is stale until their trigger forces them.
+
+    Args:
+        task_state (list): Running task state dicts.
+        now (float): Current timestamp.
+
+    Returns:
+        dict: Task id -> wanted opening time.
+    """
+    dues = {}
+    for task in task_state:
+        task_id = task.get("id")
+        if isinstance(task_id, str) and task_id:
+            dues[task_id] = task.get("next_run_time", now)
+    planned = dict(dues)
+    followers = {task.get("id") for task in task_state if "run_after" in task}
+    for _ in range(len(dues) + 1):
+        moved = False
+        for task in task_state:
+            task_id = task.get("id")
+            if task_id not in planned or task_id in followers:
+                continue
+            if task.get("last_result", "success") != "success":
+                continue
+            if dues[task_id] <= now:
+                continue
+            deadline = _wait_deadline(task)
+            if deadline is None:
+                continue
+            candidates = [wanted for other_id, wanted in planned.items() if other_id != task_id and other_id not in followers and wanted > planned[task_id] and wanted <= deadline]
+            if not candidates:
+                continue
+            target = min(candidates)
+            if target != planned[task_id]:
+                planned[task_id] = target
+                moved = True
+        if not moved:
+            break
+    return planned
+
+
+def _min_planned_time(task_state, now):
+    """Return the soonest batch-aware opening time over a task state list."""
+    planned = plan_open_times(task_state, now)
+    if not planned:
+        return now
+    return min(planned.values())
+
+
 def pick_scheduled_task(task_state, now):
     """Choose the task to run or wait for, grouping close run times.
 
@@ -148,10 +230,20 @@ def pick_scheduled_task(task_state, now):
         return earliest, earliest["next_run_time"]
     best = min(due, key=lambda t: t.get("priority", 99))
     higher_future = [t for t in task_state if _earliest_run_time(t) > now and _earliest_run_time(t) <= now + TASK_GROUPING_WINDOW_SECONDS and t.get("priority", 99) < best.get("priority", 99)]
-    if not higher_future:
-        return best, None
-    target = min(higher_future, key=lambda t: (t.get("priority", 99), t["next_run_time"]))
-    return target, _earliest_run_time(target)
+    if higher_future:
+        target = min(higher_future, key=lambda t: (t.get("priority", 99), t["next_run_time"]))
+        return target, _earliest_run_time(target)
+    if best.get("next_run_time", 0) > now:
+        # Best is only runnable via its early window: wait for the joint
+        # batch instead of running it alone, unless a runnable task cannot
+        # wait that long (a due task without late window vetoes the wait).
+        planned = plan_open_times(task_state, now)
+        want = planned.get(best.get("id"))
+        if want is not None and want > best.get("next_run_time", 0):
+            deadlines = [_wait_deadline(t) for t in due]
+            if all(deadline is not None and want <= deadline for deadline in deadlines):
+                return best, want
+    return best, None
 
 
 def load_instance_selection():
@@ -462,7 +554,7 @@ class MultiInstanceToolController:
         pm = self.instances_profile_managers.get(idx)
         now = time.time()
         if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
-            return min(t.get("next_run_time", now) for t in pm.running_tasks_state)
+            return _min_planned_time(pm.running_tasks_state, now)
         return now
 
     def launch_next_instances(self):
@@ -496,7 +588,9 @@ class MultiInstanceToolController:
                     pm = self.instances_profile_managers.get(idx)
                     next_run_time = None
                     if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
-                        next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
+                        # Batch-aware: a task that will join a later batch
+                        # does not open the instance on its own.
+                        next_run_time = _min_planned_time(pm.running_tasks_state, now)
                     if next_run_time is not None and next_run_time - now > 120:
                         # The queue is sorted by task time, so every remaining
                         # instance has an even later task: nothing to launch.

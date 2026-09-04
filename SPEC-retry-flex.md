@@ -119,26 +119,35 @@ Cambios respecto a hoy: `claim_idle` 7h->8h, `claim_island` 7h->8h,
    persistida como antes); el default base de `task_definitions.py` se usa
    en el exito simple (`True` sin tupla) y como fallback.
 2. Exito con timer/UTC: `due = now + segundos_exactos`.
-3. Exito sin timer: `due = max(nominal_due, now) + success`. Ancla al `due`
-   nominal para no encadenar derivas (adelanto no adelanta el siguiente,
-   retraso puntual no se acumula).
+3. Exito sin timer: `due = max(nominal_due, now) + success` y el ancla
+   avanza (`nominal_due += success` hasta superar `now`, saltando periodos
+   perdidos sin rafagas). El batching mueve solo el tiempo planificado,
+   nunca el ancla: un retraso no se mide dos veces.
 4. Error: `due = now + retry_seconds`, `last_result=error`, sin flex en ese
    ciclo (`early=late=0` efectivos). Bear trap no tiene `retry_seconds`.
-5. Flex solo si `last_result != error`:
-   - Ejecutable-ahora si `now >= due - early`.
-   - Si instancia abierta: correr todo lo ejecutable en orden de prioridad
-     (early-batching).
-   - Si instancia cerrada: antes de abrir por R, mirar F futura con
-     `due_F` en `(now, due_R + late_R]` no adelantable
-     (`due_F - now > early_F`). Si existe, quedarse cerrado hasta `due_F`
-     y hacer R+F juntas (delayed-open). Nunca pasar de `due_R + late_R`.
-   - Umbral 120s actual para cerrar vs esperar abierto se mantiene: si el
-     batch conjunto es mas lejos, cerrar y reabrir una vez.
+5. Flex solo si `last_result != error` (`early_seconds` en exito,
+   nunca en error):
+   - Ejecutable-ahora si `now >= due - early` (errores solo si `now >= due`).
+   - Tarea genuinamente vencida (`now >= due`) siempre corre al abrir: el
+     batching nunca retrasa lo vencido.
+   - Tarea solo-adelantable (`earliest <= now < due`): espera al batch
+     conjunto en vez de correr sola, salvo que una tarea ejecutable no
+     pueda esperar (su `nominal + late` no alcanza: la espera se veta y
+     corre ahora).
+   - `plan_open_times` (puro, sin mutar): cada tarea futura de exito con
+     `late > 0` quiere la apertura conjunta mas proxima dentro de
+     `nominal_due + late` (punto fijo, convergente). Vencidas, errores,
+     `late = 0` y seguidores `run_after` nunca se mueven (los seguidores
+     tampoco atraen batches: su due esta obsoleto hasta que el trigger
+     los fuerza).
+   - Launcher abre/ordena por el minimo de esos tiempos (una sola apertura
+     para `idle` + `train`); umbral 120s cerrar vs esperar abierto intacto.
 6. `run_after` (`start_tundra_trek_idle` tras `claim_tundra_trek_supplies`)
    se mantiene y fuerza `now`.
-7. Persistencia (`task_schedule.json`): guardar `next_run_time` (= due
-   nominal), `reschedule_seconds` base y `last_result`. Un retry a 2h no
-   debe volverse ejecutable al instante por el early de otra tarea.
+7. Persistencia (`task_schedule.json`): guardar `next_run_time`
+   (planificado), `nominal_due` (ancla, solo la toca el reschedule),
+   `reschedule_seconds` base y `last_result`. Un retry a 2h no debe
+   volverse ejecutable al instante por el early de otra tarea.
 8. Bear trap dentro de ventana: cualquier fallo de pantalla/juego intenta
    `ensure_world_screen` / relanzar y continua mientras `now < fin`.
    Solo al acabar la ventana se re-lee el task-list. Prioridad maxima,
