@@ -35,6 +35,51 @@ TASK_GROUPING_WINDOW_SECONDS = 5.0
 RETRY_COOLDOWN_SECONDS = 600
 
 
+def _is_valid_delay(value):
+    """Return whether a value is a usable positive delay in seconds."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _is_valid_timestamp(value):
+    """Return whether a value is a usable run timestamp (NaN excluded)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
+
+
+def compute_next_run_time(task, succeeded, exact_seconds, nominal_due, now):
+    """Compute the next run time of a task after one cycle.
+
+    Success and failure follow different clocks: a completed task waits its
+    base success delay anchored to its nominal due time (an early run does
+    not pull the following run earlier), an exact timer/UTC delay always
+    counts from now, and a failed task retries soon via ``retry_seconds``.
+
+    Args:
+        task (dict): Running task state with 'reschedule_seconds' and
+            optional 'retry_seconds' keys.
+        succeeded (bool): Whether the cycle completed.
+        exact_seconds (float or None): Validated exact delay returned by the
+            task (timer/UTC), or None.
+        nominal_due (float): The due time the cycle ran for (anchor).
+        now (float): Current timestamp.
+
+    Returns:
+        tuple: (next_run_time, last_result) with last_result "success" or
+            "error" (error cycles never get a flex window).
+    """
+    if succeeded and _is_valid_delay(exact_seconds):
+        return now + exact_seconds, "success"
+    base = task.get("reschedule_seconds", 60)
+    if not _is_valid_delay(base):
+        base = 60
+    if succeeded:
+        anchor = nominal_due if _is_valid_timestamp(nominal_due) else now
+        return max(anchor, now) + base, "success"
+    retry = task.get("retry_seconds")
+    if _is_valid_delay(retry):
+        return now + retry, "error"
+    return now + base, "error"
+
+
 def pick_scheduled_task(task_state, now):
     """Choose the task to run or wait for, grouping close run times.
 
@@ -730,24 +775,29 @@ class MultiInstanceToolController:
                     task = next_task
                     pm.current_task_name = task.get("name", "?")
                     self.log_message(f"Executing task '{pm.current_task_name}' on instance {index}...", "info")
+                    # Anchor for the success clock: an early run must not pull
+                    # the following run earlier (no drift).
+                    nominal_due = task.get("next_run_time", time.time())
                     try:
                         # If stop was pressed, do not run more tasks
                         if self.tool_should_stop.is_set():
                             break
                         result = task["function"](instance_index=index)
                         # Support for functions returning (result, reschedule_seconds)
+                        exact_seconds = None
                         if isinstance(result, tuple) and len(result) == 2:
                             result, new_reschedule = result
-                            if isinstance(new_reschedule, (int, float)) and new_reschedule > 0:
+                            if _is_valid_delay(new_reschedule):
+                                exact_seconds = new_reschedule
                                 task["reschedule_seconds"] = new_reschedule
                         if result:
                             self.log_message(f"Task '{pm.current_task_name}' completed successfully on instance {index}.", "success")
                         else:
                             self.log_message(f"Task '{pm.current_task_name}' failed on instance {index}.", "warning")
+                        task["next_run_time"], task["last_result"] = compute_next_run_time(task, bool(result), exact_seconds, nominal_due, time.time())
                     except Exception as e:
                         self.log_message(f"Exception while running task '{pm.current_task_name}' on instance {index}: {e}", "error")
-                    # Reschedule the task
-                    task["next_run_time"] = time.time() + task.get("reschedule_seconds", 60)
+                        task["next_run_time"], task["last_result"] = compute_next_run_time(task, False, None, nominal_due, time.time())
                     # Reschedule tasks that must run right after this one (the loop is serial per instance)
                     for other in pm.running_tasks_state:
                         if other.get("run_after") == task.get("id"):

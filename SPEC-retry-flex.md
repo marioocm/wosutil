@@ -114,8 +114,10 @@ Cambios respecto a hoy: `claim_idle` 7h->8h, `claim_island` 7h->8h,
 
 ## Reglas de scheduling
 
-1. Retorno: `True/False` o `(bool, segundos>0)`. Tupla valida sobrescribe
-   solo ese ciclo, no el default base.
+1. Retorno: `True/False` o `(bool, segundos>0)`. Tupla valida fija este
+   ciclo a `now + segundos` y actualiza `reschedule_seconds` (ultima medida,
+   persistida como antes); el default base de `task_definitions.py` se usa
+   en el exito simple (`True` sin tupla) y como fallback.
 2. Exito con timer/UTC: `due = now + segundos_exactos`.
 3. Exito sin timer: `due = max(nominal_due, now) + success`. Ancla al `due`
    nominal para no encadenar derivas (adelanto no adelanta el siguiente,
