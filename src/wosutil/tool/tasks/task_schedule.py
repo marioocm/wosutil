@@ -15,10 +15,19 @@ import time
 from wosutil.config import TASK_SCHEDULE_FILE
 from wosutil.utils import load_json_file, save_json_file
 
+#: Valid ``last_result`` values: the flex window only applies to ``success``
+#: cycles, never to error retries.
+LAST_RESULTS = ("success", "error")
+
 
 def _is_finite_number(value):
     """Return whether a value is a real, finite schedule number."""
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _sanitize_last_result(value):
+    """Return a valid last result, defaulting to ``success``."""
+    return value if value in LAST_RESULTS else "success"
 
 
 def load_task_schedule():
@@ -56,7 +65,8 @@ def load_saved_tasks(schedule, instance_index):
         instance_index (int): Emulator instance index.
 
     Returns:
-        dict: Mapping of task id -> {"next_run_time", "reschedule_seconds"}.
+        dict: Mapping of task id -> {"next_run_time", "reschedule_seconds",
+            "last_result"}.
     """
     instance_entry = schedule.get(str(instance_index))
     if not isinstance(instance_entry, dict):
@@ -94,8 +104,10 @@ def build_task_state(sorted_task_defs, saved_tasks, now=None):
             saved_reschedule = saved.get("reschedule_seconds")
             if _is_finite_number(saved_reschedule) and saved_reschedule > 0:
                 task["reschedule_seconds"] = float(saved_reschedule)
+            task["last_result"] = _sanitize_last_result(saved.get("last_result"))
         else:
             task["next_run_time"] = now
+            task["last_result"] = "success"
         tasks.append(task)
     return tasks
 
@@ -107,7 +119,8 @@ def snapshot_instance_schedule(tasks):
         tasks (list): Running task state dicts.
 
     Returns:
-        dict: Mapping of task id -> {"next_run_time", "reschedule_seconds"}.
+        dict: Mapping of task id -> {"next_run_time", "reschedule_seconds",
+            "last_result"}.
     """
     snapshot = {}
     for task in tasks:
@@ -123,5 +136,6 @@ def snapshot_instance_schedule(tasks):
         snapshot[task_id] = {
             "next_run_time": next_run_time,
             "reschedule_seconds": reschedule_seconds,
+            "last_result": _sanitize_last_result(task.get("last_result")),
         }
     return snapshot

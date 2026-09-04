@@ -117,14 +117,31 @@ class TestBuildTaskState(unittest.TestCase):
         self.assertEqual(state[0]["priority"], 3)
         self.assertEqual(state[0]["name"], "a")
 
+    def test_restores_saved_last_result(self):
+        """A saved error result is restored with the task."""
+        saved = {"a": {"next_run_time": 5000.0, "last_result": "error"}}
+        state = build_task_state([_task("a")], saved, now=1000.0)
+        self.assertEqual(state[0]["last_result"], "error")
+
+    def test_defaults_missing_last_result_to_success(self):
+        """Tasks without a saved result behave as successful cycles."""
+        state = build_task_state([_task("a")], {}, now=1000.0)
+        self.assertEqual(state[0]["last_result"], "success")
+        saved = {"a": {"next_run_time": 5000.0, "last_result": "bogus"}}
+        state = build_task_state([_task("a")], saved, now=1000.0)
+        self.assertEqual(state[0]["last_result"], "success")
+
 
 class TestSnapshotInstanceSchedule(unittest.TestCase):
     """snapshot_instance_schedule serializes the running task state."""
 
     def test_serializes_next_run_time_and_reschedule(self):
         """Both scheduled fields are persisted per task."""
-        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0}]
-        self.assertEqual(snapshot_instance_schedule(tasks), {"a": {"next_run_time": 100.0, "reschedule_seconds": 400.0}})
+        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "success"}]
+        self.assertEqual(
+            snapshot_instance_schedule(tasks),
+            {"a": {"next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "success"}},
+        )
 
     def test_handles_missing_fields(self):
         """Missing fields fall back to safe defaults."""
@@ -134,9 +151,24 @@ class TestSnapshotInstanceSchedule(unittest.TestCase):
 
     def test_only_keeps_scheduled_fields(self):
         """Runtime-only fields (functions, names) are not persisted."""
-        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "function": lambda: None}]
+        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "error", "function": lambda: None}]
         snapshot = snapshot_instance_schedule(tasks)
-        self.assertEqual(set(snapshot["a"].keys()), {"next_run_time", "reschedule_seconds"})
+        self.assertEqual(set(snapshot["a"].keys()), {"next_run_time", "reschedule_seconds", "last_result"})
+
+    def test_persists_error_result(self):
+        """An error cycle is remembered so flex never applies to its retry."""
+        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "error"}]
+        self.assertEqual(snapshot_instance_schedule(tasks)["a"]["last_result"], "error")
+
+    def test_defaults_missing_result_to_success(self):
+        """Entries without a result (old saves) behave as successful cycles."""
+        snapshot = snapshot_instance_schedule([{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0}])
+        self.assertEqual(snapshot["a"]["last_result"], "success")
+
+    def test_normalizes_invalid_result(self):
+        """Unexpected result values never reach JSON storage."""
+        snapshot = snapshot_instance_schedule([{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "x"}])
+        self.assertEqual(snapshot["a"]["last_result"], "success")
 
     def test_replaces_invalid_values_with_safe_defaults(self):
         """Runtime corruption is normalized before it reaches JSON storage."""
