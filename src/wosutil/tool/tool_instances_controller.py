@@ -87,6 +87,29 @@ def compute_next_run_time(task, succeeded, exact_seconds, nominal_due, now):
     return now + base, "error", anchor
 
 
+def _earliest_run_time(task):
+    """Return the earliest time a task may run (flex early window).
+
+    Successful cycles may run ``early_seconds`` before their due time so an
+    already open instance batches them instead of reopening later. Error
+    retries never run early: without this, a retry due in 2h would look
+    runnable the instant another task's early window covers it.
+
+    Args:
+        task (dict): Running task state dict.
+
+    Returns:
+        float: ``next_run_time`` minus the early window (or the due time).
+    """
+    due = task.get("next_run_time", 0)
+    if task.get("last_result", "success") != "success":
+        return due
+    early = task.get("early_seconds", 0)
+    if not _is_valid_delay(early):
+        return due
+    return due - early
+
+
 def pick_scheduled_task(task_state, now):
     """Choose the task to run or wait for, grouping close run times.
 
@@ -95,10 +118,15 @@ def pick_scheduled_task(task_state, now):
     reading noise. Without grouping, the task whose time was read earlier
     runs first even when another, higher-priority task belongs to the same
     window. This helper prefers the higher-priority task: when a task is
-    already due, the highest-priority task due within
+    already runnable, the highest-priority task becoming runnable within
     TASK_GROUPING_WINDOW_SECONDS ahead is returned instead, and the caller
     waits (at most the window) for it. Ties on priority keep the earliest
     time order.
+
+    A task counts as runnable from its flex early time (successful cycles
+    only). An idle instance still waits for the due time (it is not opened
+    early); an already open instance waits at most the grouping window for
+    a higher-priority task to become runnable.
 
     Args:
         task_state (list): Running task state dicts with 'priority' and
@@ -111,7 +139,7 @@ def pick_scheduled_task(task_state, now):
             is the timestamp the returned task becomes due. (None, None) when
             no task is scheduled.
     """
-    due = [t for t in task_state if t.get("next_run_time", 0) <= now]
+    due = [t for t in task_state if _earliest_run_time(t) <= now]
     if not due:
         future = [t for t in task_state if t.get("next_run_time", 0) > now]
         if not future:
@@ -119,11 +147,11 @@ def pick_scheduled_task(task_state, now):
         earliest = min(future, key=lambda t: t["next_run_time"])
         return earliest, earliest["next_run_time"]
     best = min(due, key=lambda t: t.get("priority", 99))
-    higher_future = [t for t in task_state if t.get("next_run_time", 0) > now and t.get("next_run_time", 0) <= now + TASK_GROUPING_WINDOW_SECONDS and t.get("priority", 99) < best.get("priority", 99)]
+    higher_future = [t for t in task_state if _earliest_run_time(t) > now and _earliest_run_time(t) <= now + TASK_GROUPING_WINDOW_SECONDS and t.get("priority", 99) < best.get("priority", 99)]
     if not higher_future:
         return best, None
     target = min(higher_future, key=lambda t: (t.get("priority", 99), t["next_run_time"]))
-    return target, target["next_run_time"]
+    return target, _earliest_run_time(target)
 
 
 def load_instance_selection():

@@ -709,5 +709,57 @@ class TestComputeNextRunTime(unittest.TestCase):
         self.assertEqual(nominal_due, 900.0)
 
 
+class TestPickScheduledTaskFlex(unittest.TestCase):
+    """pick_scheduled_task applies the early window to success cycles only."""
+
+    def _task(self, task_id, priority, next_run_time, early_seconds=0, last_result="success"):
+        """Build a runtime task dict with flex metadata."""
+        return {
+            "id": task_id,
+            "priority": priority,
+            "next_run_time": next_run_time,
+            "early_seconds": early_seconds,
+            "last_result": last_result,
+        }
+
+    def test_success_task_within_early_window_runs_now(self):
+        """A task due in 1h with a 2h early window is runnable now."""
+        state = [self._task("a", 5, 4600.0, early_seconds=7200)]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "a")
+        self.assertIsNone(wait_until)
+
+    def test_error_task_within_early_window_waits_for_due(self):
+        """An error retry is never run early, even with an early window."""
+        state = [self._task("a", 5, 4600.0, early_seconds=7200, last_result="error")]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "a")
+        self.assertEqual(wait_until, 4600.0)
+
+    def test_overdue_error_task_runs_now(self):
+        """An overdue error retry runs immediately."""
+        state = [self._task("a", 5, 900.0, last_result="error")]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "a")
+        self.assertIsNone(wait_until)
+
+    def test_priority_wins_among_flex_runnable_tasks(self):
+        """A high-priority early task beats a due low-priority one."""
+        state = [
+            self._task("a", 6, 1000.0),
+            self._task("b", 1, 5000.0, early_seconds=10800),
+        ]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "b")
+        self.assertIsNone(wait_until)
+
+    def test_task_without_flex_metadata_behaves_as_before(self):
+        """Tasks without the new keys keep the legacy due semantics."""
+        state = [{"id": "a", "priority": 5, "next_run_time": 4600.0}]
+        task, wait_until = pick_scheduled_task(state, 1000.0)
+        self.assertEqual(task["id"], "a")
+        self.assertEqual(wait_until, 4600.0)
+
+
 if __name__ == "__main__":
     unittest.main()
