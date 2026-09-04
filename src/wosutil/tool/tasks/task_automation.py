@@ -1168,6 +1168,7 @@ BEAR_TRAP_DURATION_SECONDS = 30 * 60  # Duration of the bear trap attack window
 BEAR_TRAP_PREP_SECONDS = 5 * 60  # Preparation lead time before the bear hunt starts
 BEAR_TRAP_SCHEDULE_RETRY_SECONDS = 6 * 60 * 60  # Retry when no bear hunt schedule is known
 BEAR_TRAP_SCHEDULE_REFRESH_MARGIN_SECONDS = 2 * 60 * 60  # Re-read the schedule when the cached next hunt is farther than this
+BEAR_TRAP_RECOVERY_WAIT_SECONDS = 30  # Wait between recovery attempts inside the window
 
 
 def play_bear_trap(instance_index):
@@ -1203,10 +1204,11 @@ def play_bear_trap(instance_index):
         instance_index (int): Emulator instance index.
 
     Returns:
-        bool or tuple: True (or (True, seconds)) when the task ran or was
-            scheduled for an upcoming bear hunt, False otherwise. The tuple
-            form reschedules the task so it runs exactly BEAR_TRAP_PREP_SECONDS
-            before the hunt starts.
+        tuple: (True, seconds) when the task ran or was scheduled for an
+            upcoming bear hunt. The task only runs on its read schedule and
+            has no error retry: when no hunt is known it re-reads the
+            schedule later, and when the window elapsed (even recovering
+            from errors) it re-reads it right away.
     """
     now = time.time()
     bear_hunts = get_cached_bear_hunt_times(instance_index)
@@ -1221,30 +1223,26 @@ def play_bear_trap(instance_index):
         bear_hunts = get_cached_bear_hunt_times(instance_index)
         hunt_start = _next_bear_hunt_start(bear_hunts, now)
     if hunt_start is None:
-        if not bear_hunts:
-            log_message("Bear Hunt schedule not available, running the bear trap right away.", level="warning")
-            played = _bear_trap_prepare_and_join(instance_index, end=now + BEAR_TRAP_DURATION_SECONDS)
-        else:
-            log_message("No upcoming Bear Hunt in the schedule, retrying later.", level="warning")
-            return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
-    else:
-        prep_at = hunt_start - BEAR_TRAP_PREP_SECONDS
-        if now < prep_at:
-            wait = prep_at - now
-            log_message(
-                f"Bear Hunt starts at {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(hunt_start))}, preparing in {wait:.0f} seconds.",
-                level="info",
-            )
-            return True, wait
+        log_message("No upcoming Bear Hunt in the schedule, retrying later.", level="warning")
+        return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
 
+    prep_at = hunt_start - BEAR_TRAP_PREP_SECONDS
+    if now < prep_at:
+        wait = prep_at - now
         log_message(
-            f"Bear Hunt window ({BEAR_TRAP_DURATION_SECONDS // 60} min) starting at {time.strftime('%H:%M:%S UTC', time.gmtime(hunt_start))}, preparing...",
+            f"Bear Hunt starts at {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(hunt_start))}, preparing in {wait:.0f} seconds.",
             level="info",
         )
-        played = _bear_trap_prepare_and_join(instance_index, end=hunt_start + BEAR_TRAP_DURATION_SECONDS)
+        return True, wait
+
+    log_message(
+        f"Bear Hunt window ({BEAR_TRAP_DURATION_SECONDS // 60} min) starting at {time.strftime('%H:%M:%S UTC', time.gmtime(hunt_start))}, preparing...",
+        level="info",
+    )
+    played = _bear_trap_prepare_and_join(instance_index, end=hunt_start + BEAR_TRAP_DURATION_SECONDS)
 
     if not played:
-        return False
+        log_message("Bear Hunt window elapsed while recovering from errors, re-reading the schedule...", level="warning")
     return _reschedule_after_bear_hunt(instance_index)
 
 
@@ -1300,26 +1298,67 @@ def _next_bear_hunt_start(bear_hunt_times, now):
     return min(window_starts) if window_starts else None
 
 
+def _bear_trap_ensure_world_screen(instance_index, end, stage):
+    """Ensure the world screen, retrying while the bear window lasts.
+
+    A transient failure (the game closed mid-hunt, a stuck screen, ...) must
+    not abandon the whole attack window: ensure_world_screen already
+    relaunches the game when needed, so the attempt is simply retried until
+    the window ends.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        end (float): Epoch time at which the bear rally window ends.
+        stage (str): Where the check happens, for the log message.
+
+    Returns:
+        bool: True when the world screen was reached, False only when the
+            window elapsed or the tool stops.
+    """
+    if ensure_world_screen(instance_index):
+        return True
+    log_message(f"World screen not reached {stage}, retrying while the bear window lasts...", level="warning")
+    while time.time() < end:
+        stop_signal.check()
+        if ensure_world_screen(instance_index):
+            return True
+        log_message(f"World screen not reached {stage}, retrying while the bear window lasts...", level="warning")
+        remaining = end - time.time()
+        if remaining <= 0:
+            break
+        if stop_signal.wait(timeout=min(BEAR_TRAP_RECOVERY_WAIT_SECONDS, remaining)):
+            return False
+    return False
+
+
 def _bear_trap_prepare_and_join(instance_index, end):
     """Recall every march, activate the battle pet skills and join ally bear rallies.
 
     Prepares right away (recall + battle pet skills) and then keeps the
     marches joining ally rallies until ``end`` (epoch seconds); when the task
     fires before the attack window starts the function waits inside so the
-    joining begins at the exact bear hunt start.
+    joining begins at the exact bear hunt start. Screen or game failures are
+    recovered while time remains instead of aborting the window.
 
     Args:
         instance_index (int): Emulator instance index.
         end (float): Epoch time at which the bear rally window ends.
 
     Returns:
-        bool: True when the task ran, False otherwise.
+        bool: True when the window was played, False only when it elapsed
+            while recovering from errors.
     """
     log_message("Preparing the bear trap attack by recalling all marches...", level="info")
-    if not ensure_world_screen(instance_index):
+    if not _bear_trap_ensure_world_screen(instance_index, end, "while preparing the attack"):
         return False
 
     screenshot_path = take_screenshot(instance_index)
+    while screenshot_path is None and time.time() < end:
+        stop_signal.check()
+        log_message("Could not take a screenshot for the bear trap, retrying while the window lasts...", level="warning")
+        if stop_signal.wait(timeout=min(BEAR_TRAP_RECOVERY_WAIT_SECONDS, max(1.0, end - time.time()))):
+            return False
+        screenshot_path = take_screenshot(instance_index)
     if not screenshot_path:
         return False
     roi = get_roi("worldmap_marching")
@@ -1345,7 +1384,7 @@ def _bear_trap_prepare_and_join(instance_index, end):
 
     activate_battle_pet_skills(instance_index)
 
-    if not ensure_world_screen(instance_index):
+    if not _bear_trap_ensure_world_screen(instance_index, end, "after activating the pet skills"):
         return False
 
     # Wait inside until the attack window starts when firing during preparation.
