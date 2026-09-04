@@ -50,8 +50,11 @@ def compute_next_run_time(task, succeeded, exact_seconds, nominal_due, now):
 
     Success and failure follow different clocks: a completed task waits its
     base success delay anchored to its nominal due time (an early run does
-    not pull the following run earlier), an exact timer/UTC delay always
+    not pull the following run earlier, and long-missed periods are skipped
+    instead of bursting catch-up runs), an exact timer/UTC delay always
     counts from now, and a failed task retries soon via ``retry_seconds``.
+    The nominal anchor survives postponement: batching moves only the
+    planned ``next_run_time``, so a delay is never measured twice.
 
     Args:
         task (dict): Running task state with 'reschedule_seconds' and
@@ -59,25 +62,29 @@ def compute_next_run_time(task, succeeded, exact_seconds, nominal_due, now):
         succeeded (bool): Whether the cycle completed.
         exact_seconds (float or None): Validated exact delay returned by the
             task (timer/UTC), or None.
-        nominal_due (float): The due time the cycle ran for (anchor).
+        nominal_due (float): The anchor due time the cycle ran for.
         now (float): Current timestamp.
 
     Returns:
-        tuple: (next_run_time, last_result) with last_result "success" or
-            "error" (error cycles never get a flex window).
+        tuple: (next_run_time, last_result, nominal_due) with last_result
+            "success" or "error" (error cycles never get a flex window).
     """
     if succeeded and _is_valid_delay(exact_seconds):
-        return now + exact_seconds, "success"
+        planned = now + exact_seconds
+        return planned, "success", planned
     base = task.get("reschedule_seconds", 60)
     if not _is_valid_delay(base):
         base = 60
+    anchor = nominal_due if _is_valid_timestamp(nominal_due) else now
     if succeeded:
-        anchor = nominal_due if _is_valid_timestamp(nominal_due) else now
-        return max(anchor, now) + base, "success"
+        advanced = anchor + base
+        while advanced <= now:
+            advanced += base
+        return max(anchor, now) + base, "success", advanced
     retry = task.get("retry_seconds")
     if _is_valid_delay(retry):
-        return now + retry, "error"
-    return now + base, "error"
+        return now + retry, "error", anchor
+    return now + base, "error", anchor
 
 
 def pick_scheduled_task(task_state, now):
@@ -372,6 +379,8 @@ class MultiInstanceToolController:
                             t["next_run_time"] = now
                         else:
                             t["next_run_time"] = now + t["reschedule_seconds"]
+                        t["nominal_due"] = t["next_run_time"]
+                        t["last_result"] = "success"
                         running_tasks_state.append(t)
 
                 self.instances_profile_managers[idx] = pm
@@ -794,10 +803,10 @@ class MultiInstanceToolController:
                             self.log_message(f"Task '{pm.current_task_name}' completed successfully on instance {index}.", "success")
                         else:
                             self.log_message(f"Task '{pm.current_task_name}' failed on instance {index}.", "warning")
-                        task["next_run_time"], task["last_result"] = compute_next_run_time(task, bool(result), exact_seconds, nominal_due, time.time())
+                        task["next_run_time"], task["last_result"], task["nominal_due"] = compute_next_run_time(task, bool(result), exact_seconds, task.get("nominal_due", nominal_due), time.time())
                     except Exception as e:
                         self.log_message(f"Exception while running task '{pm.current_task_name}' on instance {index}: {e}", "error")
-                        task["next_run_time"], task["last_result"] = compute_next_run_time(task, False, None, nominal_due, time.time())
+                        task["next_run_time"], task["last_result"], task["nominal_due"] = compute_next_run_time(task, False, None, task.get("nominal_due", nominal_due), time.time())
                     # Reschedule tasks that must run right after this one (the loop is serial per instance)
                     for other in pm.running_tasks_state:
                         if other.get("run_after") == task.get("id"):

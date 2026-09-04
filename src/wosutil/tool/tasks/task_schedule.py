@@ -66,7 +66,7 @@ def load_saved_tasks(schedule, instance_index):
 
     Returns:
         dict: Mapping of task id -> {"next_run_time", "reschedule_seconds",
-            "last_result"}.
+            "last_result", "nominal_due"}.
     """
     instance_entry = schedule.get(str(instance_index))
     if not isinstance(instance_entry, dict):
@@ -105,9 +105,15 @@ def build_task_state(sorted_task_defs, saved_tasks, now=None):
             if _is_finite_number(saved_reschedule) and saved_reschedule > 0:
                 task["reschedule_seconds"] = float(saved_reschedule)
             task["last_result"] = _sanitize_last_result(saved.get("last_result"))
+            saved_nominal = saved.get("nominal_due")
+            if _is_finite_number(saved_nominal):
+                task["nominal_due"] = float(saved_nominal)
+            else:
+                task["nominal_due"] = task["next_run_time"]
         else:
             task["next_run_time"] = now
             task["last_result"] = "success"
+            task["nominal_due"] = now
         tasks.append(task)
     return tasks
 
@@ -120,7 +126,7 @@ def snapshot_instance_schedule(tasks):
 
     Returns:
         dict: Mapping of task id -> {"next_run_time", "reschedule_seconds",
-            "last_result"}.
+            "last_result", "nominal_due"}.
     """
     snapshot = {}
     for task in tasks:
@@ -133,9 +139,13 @@ def snapshot_instance_schedule(tasks):
         reschedule_seconds = task.get("reschedule_seconds")
         if not _is_finite_number(reschedule_seconds) or reschedule_seconds <= 0:
             reschedule_seconds = 3600
+        nominal_due = task.get("nominal_due")
+        if not _is_finite_number(nominal_due):
+            nominal_due = next_run_time
         snapshot[task_id] = {
             "next_run_time": next_run_time,
             "reschedule_seconds": reschedule_seconds,
             "last_result": _sanitize_last_result(task.get("last_result")),
+            "nominal_due": nominal_due,
         }
     return snapshot

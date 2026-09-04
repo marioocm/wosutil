@@ -661,39 +661,52 @@ class TestComputeNextRunTime(unittest.TestCase):
 
     def test_success_without_exact_uses_base_from_now_when_due(self):
         """A due task completed without a timer waits its base success delay."""
-        next_run_time, last_result = compute_next_run_time(self._task(), True, None, nominal_due=900.0, now=1000.0)
+        next_run_time, last_result, nominal_due = compute_next_run_time(self._task(), True, None, nominal_due=900.0, now=1000.0)
         self.assertEqual(next_run_time, 2000.0)
         self.assertEqual(last_result, "success")
+        self.assertEqual(nominal_due, 1900.0)
 
     def test_success_without_exact_anchors_to_nominal_when_early(self):
         """An early run does not pull the following run earlier (no drift)."""
-        next_run_time, last_result = compute_next_run_time(self._task(), True, None, nominal_due=1500.0, now=1000.0)
+        next_run_time, last_result, nominal_due = compute_next_run_time(self._task(), True, None, nominal_due=1500.0, now=1000.0)
         self.assertEqual(next_run_time, 2500.0)
         self.assertEqual(last_result, "success")
+        self.assertEqual(nominal_due, 2500.0)
+
+    def test_success_advances_anchor_past_missed_periods(self):
+        """Long-missed periods are skipped instead of bursting catch-up runs."""
+        next_run_time, last_result, nominal_due = compute_next_run_time(self._task(), True, None, nominal_due=100.0, now=5000.0)
+        self.assertEqual(next_run_time, 6000.0)
+        self.assertEqual(last_result, "success")
+        self.assertEqual(nominal_due, 5100.0)
 
     def test_success_with_exact_uses_the_timer(self):
         """An exact timer/UTC delay always counts from now."""
-        next_run_time, last_result = compute_next_run_time(self._task(), True, 500, nominal_due=1500.0, now=1000.0)
+        next_run_time, last_result, nominal_due = compute_next_run_time(self._task(), True, 500, nominal_due=1500.0, now=1000.0)
         self.assertEqual(next_run_time, 1500.0)
         self.assertEqual(last_result, "success")
+        self.assertEqual(nominal_due, 1500.0)
 
     def test_error_uses_retry(self):
         """A failed task retries soon, ignoring the base success delay."""
-        next_run_time, last_result = compute_next_run_time(self._task(), False, None, nominal_due=900.0, now=1000.0)
+        next_run_time, last_result, nominal_due = compute_next_run_time(self._task(), False, None, nominal_due=900.0, now=1000.0)
         self.assertEqual(next_run_time, 1120.0)
         self.assertEqual(last_result, "error")
+        self.assertEqual(nominal_due, 900.0)
 
     def test_error_ignores_exact_value(self):
         """An exact value returned alongside a failure never applies."""
-        next_run_time, last_result = compute_next_run_time(self._task(), False, 500, nominal_due=900.0, now=1000.0)
+        next_run_time, last_result, nominal_due = compute_next_run_time(self._task(), False, 500, nominal_due=900.0, now=1000.0)
         self.assertEqual(next_run_time, 1120.0)
         self.assertEqual(last_result, "error")
+        self.assertEqual(nominal_due, 900.0)
 
     def test_error_without_retry_falls_back_to_base(self):
         """Tasks without a retry (bear trap) fall back to the base delay."""
-        next_run_time, last_result = compute_next_run_time(self._task(retry_seconds=None), False, None, nominal_due=900.0, now=1000.0)
+        next_run_time, last_result, nominal_due = compute_next_run_time(self._task(retry_seconds=None), False, None, nominal_due=900.0, now=1000.0)
         self.assertEqual(next_run_time, 2000.0)
         self.assertEqual(last_result, "error")
+        self.assertEqual(nominal_due, 900.0)
 
 
 if __name__ == "__main__":

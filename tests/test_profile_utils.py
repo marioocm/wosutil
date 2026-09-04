@@ -14,6 +14,13 @@ class TestBuildRunningTasksState(unittest.TestCase):
         state = build_running_tasks_state("All", {"All": ["a"]}, definitions, now=0.0)
         self.assertEqual(state[0]["next_run_time"], 0.0)
 
+    def test_initializes_scheduling_metadata(self):
+        """Fresh tasks start as successful cycles anchored to now."""
+        definitions = {"a": {"id": "a", "reschedule_seconds": 60}}
+        state = build_running_tasks_state("All", {"All": ["a"]}, definitions, now=100.0)
+        self.assertEqual(state[0]["last_result"], "success")
+        self.assertEqual(state[0]["nominal_due"], 100.0)
+
     def test_ignores_non_string_task_ids(self):
         """Malformed task IDs cannot cause an unhashable-key error."""
         definitions = {"a": {"id": "a", "reschedule_seconds": 60}}
