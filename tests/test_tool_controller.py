@@ -897,5 +897,93 @@ class TestPickScheduledTaskBatching(unittest.TestCase):
         self.assertIsNone(wait_until)
 
 
+class TestWorkerExclusivity(unittest.TestCase):
+    """A single instance is never driven by two workers at once."""
+
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        stop_signal.clear()
+
+    def tearDown(self):
+        """Do not leak the stop signal into other tests."""
+        stop_signal.clear()
+
+    def _make_controller(self, manager, task_defs=None):
+        """Build a controller with mock dependencies and a log capture."""
+        self.logs = []
+        return MultiInstanceToolController(
+            log_message=lambda msg, level="info": self.logs.append((msg, level)),
+            TASK_DEFINITIONS=task_defs or {"a": TASK_A},
+            multi_instance_manager=manager,
+            profile_manager=MagicMock(),
+            instances_profile_managers={},
+            instance_queue=[],
+            active_instances=set(),
+            instance_widgets=[],
+            save_instance_selection=lambda selection: None,
+            load_instance_selection=lambda: {},
+            dialog_queue=None,
+        )
+
+    def test_completion_log_keeps_task_name(self):
+        """The completion line names the task even if the shared field changed."""
+        controller = self._make_controller(FakeManagerRunning())
+        controller._task_schedule = {}
+        pm = MagicMock()
+        pm.running_tasks_state = [dict(TASK_A)]
+        pm.current_task_name = None
+        controller.instances_profile_managers[0] = pm
+        controller._selected_instances = {0}
+
+        def fake_task(instance_index):
+            pm.current_task_name = None
+            stop_signal.set()
+            return True
+
+        pm.running_tasks_state[0]["function"] = fake_task
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen", return_value=True
+        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"), patch("wosutil.tool.tool_instances_controller.save_task_schedule"):
+            controller.run_profile_on_instance_with_slot(0, "All")
+        self.assertTrue(any("Task 'Task A' completed" in msg for msg, _level in self.logs))
+        self.assertFalse(any("Task 'None'" in msg for msg, _level in self.logs))
+
+    def test_launch_skips_instance_with_live_worker(self):
+        """The launcher never starts a second worker on a driven instance."""
+        controller = self._make_controller(FakeManagerRunning())
+        pm = MagicMock()
+        pm.running_tasks_state = [dict(TASK_A, next_run_time=0.0)]
+        controller.instances_profile_managers[0] = pm
+        controller._selected_instances = {0}
+        owner = MagicMock()
+        owner.is_alive.return_value = True
+        controller.instance_threads[0] = owner
+        controller.instance_queue.append((0, "All"))
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
+            controller.launch_next_instances()
+        mock_thread.assert_not_called()
+        self.assertEqual(controller.instance_queue, [(0, "All")])
+
+    def test_superseded_worker_exits_before_touching_the_emulator(self):
+        """A worker that lost its slot never drives the emulator."""
+        controller = self._make_controller(FakeManagerRunning())
+        pm = MagicMock()
+        pm.running_tasks_state = [dict(TASK_A)]
+        pm.current_task_name = None
+        controller.instances_profile_managers[0] = pm
+        controller._selected_instances = {0}
+        owner = MagicMock()
+        owner.is_alive.return_value = True
+        controller.instance_threads[0] = owner
+        manager = FakeManagerRunning()
+        controller.multi_instance_manager = manager
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen"
+        ) as launch_game, patch("wosutil.tool.tool_instances_controller.sync_utc_time"):
+            controller.run_profile_on_instance_with_slot(0, "All")
+        launch_game.assert_not_called()
+        self.assertEqual(manager.start_calls, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

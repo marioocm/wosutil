@@ -560,6 +560,9 @@ class MultiInstanceToolController:
     def launch_next_instances(self):
         """Launches the next set of emulator instances up to the maximum allowed."""
         max_simul = safe_int(self.max_instances_var.get() if self.max_instances_var else 2, 2)
+        # Instances skipped in this pass (a live worker already drives them):
+        # without this the re-queued entry would be picked again forever.
+        skipped_dupes = set()
 
         while not self.tool_should_stop.is_set():
             with self._state_lock:
@@ -583,7 +586,7 @@ class MultiInstanceToolController:
                 for pos, (idx, _profile_name) in enumerate(self.instance_queue):
                     # Skip instances paused by the retry cooldown; they are
                     # picked up again once the cooldown expires.
-                    if now < self._retry_blocked_until.get(idx, 0):
+                    if idx in skipped_dupes or now < self._retry_blocked_until.get(idx, 0):
                         continue
                     pm = self.instances_profile_managers.get(idx)
                     next_run_time = None
@@ -600,6 +603,19 @@ class MultiInstanceToolController:
                 if candidate is None:
                     return
                 idx, profile_name = self.instance_queue.pop(candidate)
+                owner = self.instance_threads.get(idx)
+                if owner is not None and owner is not threading.current_thread() and owner.is_alive():
+                    # Another worker already drives this instance (e.g. a slow
+                    # shutdown overlap): never run two drivers on one emulator,
+                    # they would fight over the same screens. Re-queue and wait
+                    # for the owner to finish.
+                    self.log_message(
+                        f"Instance {idx} is already driven by a live worker (thread {owner.ident}); skipping duplicate launch.",
+                        level="debug",
+                    )
+                    self._enqueue_instance(idx, profile_name)
+                    skipped_dupes.add(idx)
+                    continue
                 self.active_instances.add(idx)
                 thread = threading.Thread(
                     target=self.run_profile_on_instance_with_slot,
@@ -660,6 +676,15 @@ class MultiInstanceToolController:
         from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen
 
         def instance_worker():
+            owner = self.instance_threads.get(index)
+            if owner is not None and owner is not threading.current_thread() and owner.is_alive():
+                # A live worker already drives this instance: stand down
+                # before touching the emulator or the shared task state.
+                self.log_message(
+                    f"Stale worker for instance {index} exits; a live worker (thread {owner.ident}) already drives it.",
+                    level="warning",
+                )
+                return
             try:
                 pm = self.instances_profile_managers.get(index)
                 if pm is None:
@@ -904,8 +929,11 @@ class MultiInstanceToolController:
                         continue
                     # Run the pending task with the highest priority
                     task = next_task
-                    pm.current_task_name = task.get("name", "?")
-                    self.log_message(f"Executing task '{pm.current_task_name}' on instance {index}...", "info")
+                    # Local copy: pm.current_task_name is shared display state
+                    # and must never decide what the logs report.
+                    task_name = task.get("name", "?")
+                    pm.current_task_name = task_name
+                    self.log_message(f"Executing task '{task_name}' on instance {index}...", "info")
                     # Anchor for the success clock: an early run must not pull
                     # the following run earlier (no drift).
                     nominal_due = task.get("next_run_time", time.time())
@@ -922,12 +950,12 @@ class MultiInstanceToolController:
                                 exact_seconds = new_reschedule
                                 task["reschedule_seconds"] = new_reschedule
                         if result:
-                            self.log_message(f"Task '{pm.current_task_name}' completed successfully on instance {index}.", "success")
+                            self.log_message(f"Task '{task_name}' completed successfully on instance {index}.", "success")
                         else:
-                            self.log_message(f"Task '{pm.current_task_name}' failed on instance {index}.", "warning")
+                            self.log_message(f"Task '{task_name}' failed on instance {index}.", "warning")
                         task["next_run_time"], task["last_result"], task["nominal_due"] = compute_next_run_time(task, bool(result), exact_seconds, task.get("nominal_due", nominal_due), time.time())
                     except Exception as e:
-                        self.log_message(f"Exception while running task '{pm.current_task_name}' on instance {index}: {e}", "error")
+                        self.log_message(f"Exception while running task '{task_name}' on instance {index}: {e}", "error")
                         task["next_run_time"], task["last_result"], task["nominal_due"] = compute_next_run_time(task, False, None, task.get("nominal_due", nominal_due), time.time())
                     # Reschedule tasks that must run right after this one (the loop is serial per instance)
                     for other in pm.running_tasks_state:
