@@ -342,6 +342,9 @@ class MultiInstanceToolController:
         # Timestamps until which an instance must not be relaunched after
         # exhausting its consecutive launch attempts (retry cooldown).
         self._retry_blocked_until: Dict[int, float] = {}
+        # Thread idents already warned about per instance, so the duplicate
+        # launch skip does not spam the log every second.
+        self._dup_warned_for: Dict[int, int] = {}
 
         # Memory management
         self._state_lock = threading.RLock()
@@ -629,13 +632,16 @@ class MultiInstanceToolController:
                     # shutdown overlap): never run two drivers on one emulator,
                     # they would fight over the same screens. Re-queue and wait
                     # for the owner to finish.
-                    self.log_message(
-                        f"Instance {idx} is already driven by a live worker (thread {owner.ident}); skipping duplicate launch.",
-                        level="debug",
-                    )
+                    if self._dup_warned_for.get(idx) != owner.ident:
+                        self._dup_warned_for[idx] = owner.ident
+                        self.log_message(
+                            f"Instance {idx} is already driven by a live worker (thread {owner.ident}); skipping duplicate launch.",
+                            level="debug",
+                        )
                     self._enqueue_instance(idx, profile_name)
                     skipped_dupes.add(idx)
                     continue
+                self._dup_warned_for.pop(idx, None)
                 self.active_instances.add(idx)
                 thread = threading.Thread(
                     target=self.run_profile_on_instance_with_slot,
@@ -690,6 +696,7 @@ class MultiInstanceToolController:
         """
         from wosutil.emulator.emulator_manager import (
             is_wos_installed,
+            is_wos_running,
             verify_adb_connected,
         )
         from wosutil.tool.profiles.profile_manager import ProfileManager
@@ -718,6 +725,15 @@ class MultiInstanceToolController:
                 def start_emulator():
                     running = self.multi_instance_manager._is_instance_running(index)
                     if not running:
+                        if recovery_cooling_down(index) and not is_wos_running(index):
+                            # Restarting the emulator just to skip the game
+                            # launch again is pure churn: fail fast so the
+                            # instance backs off instead.
+                            self.log_message(
+                                f"Skipping emulator start on instance {index}: recovery cooling down and game not running.",
+                                level="debug",
+                            )
+                            return False
                         self.multi_instance_manager.start_instance(index)
                     else:
                         self.log_message(f"Emulator on instance {index} is already running.", "info")

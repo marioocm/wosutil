@@ -962,6 +962,50 @@ class TestGameLaunchCooldown(unittest.TestCase):
         self.assertIn((0, "All"), controller.instance_queue)
 
 
+class TestEmulatorStartCooldownGate(unittest.TestCase):
+    """A cooling instance does not restart its emulator in a loop."""
+
+    def setUp(self):
+        """Ensure the global stop signal is clear between tests."""
+        stop_signal.clear()
+
+    def tearDown(self):
+        """Do not leak the stop signal into other tests."""
+        stop_signal.clear()
+
+    def test_emulator_start_skipped_while_cooling_down(self):
+        """Cooling down + game not running fails fast without a restart."""
+        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen
+
+        logs = []
+        manager = FakeManagerRunning()
+        controller = MultiInstanceToolController(
+            log_message=lambda msg, level="info": logs.append((msg, level)),
+            TASK_DEFINITIONS={"a": TASK_A},
+            multi_instance_manager=manager,
+            profile_manager=MagicMock(),
+            instances_profile_managers={},
+            instance_queue=[],
+            active_instances=set(),
+            instance_widgets=[],
+            save_instance_selection=lambda selection: None,
+            load_instance_selection=lambda: {},
+            dialog_queue=None,
+        )
+        controller.instances_profile_managers[0] = MagicMock()
+        controller._selected_instances = {0}
+        with patch("wosutil.tool.tasks.task_helpers.force_stop_game"), patch("wosutil.tool.tasks.task_helpers.launch_game_activity"), patch(
+            "wosutil.tool.tasks.task_helpers.stop_signal.wait", return_value=False
+        ), patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=False):
+            self.assertFalse(launch_and_reach_city_screen(0))
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch.object(
+            manager, "_is_instance_running", return_value=False
+        ), patch("wosutil.emulator.emulator_manager.is_wos_running", return_value=False), patch.object(controller, "launch_next_instances"):
+            controller.run_profile_on_instance_with_slot(0, "All")
+        self.assertEqual(manager.start_calls, 0)
+        self.assertIn((0, "All"), controller.instance_queue)
+
+
 class TestWorkerExclusivity(unittest.TestCase):
     """A single instance is never driven by two workers at once."""
 
@@ -1028,6 +1072,29 @@ class TestWorkerExclusivity(unittest.TestCase):
             controller.launch_next_instances()
         mock_thread.assert_not_called()
         self.assertEqual(controller.instance_queue, [(0, "All")])
+
+    def test_duplicate_skip_warning_fires_once_per_owner(self):
+        """The skip warning is logged on owner change, not every second."""
+        controller = self._make_controller(FakeManagerRunning())
+        pm = MagicMock()
+        pm.running_tasks_state = [dict(TASK_A, next_run_time=0.0)]
+        controller.instances_profile_managers[0] = pm
+        controller._selected_instances = {0}
+        owner = MagicMock()
+        owner.is_alive.return_value = True
+        owner.ident = 111
+        controller.instance_threads[0] = owner
+        controller.instance_queue.append((0, "All"))
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread"):
+            controller.launch_next_instances()
+            controller.launch_next_instances()
+        skips = [msg for msg, _level in self.logs if "skipping duplicate launch" in msg]
+        self.assertEqual(len(skips), 1)
+        owner.ident = 222
+        with patch("wosutil.tool.tool_instances_controller.threading.Thread"):
+            controller.launch_next_instances()
+        skips = [msg for msg, _level in self.logs if "skipping duplicate launch" in msg]
+        self.assertEqual(len(skips), 2)
 
     def test_superseded_worker_exits_before_touching_the_emulator(self):
         """A worker that lost its slot never drives the emulator."""
