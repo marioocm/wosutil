@@ -1096,6 +1096,44 @@ class TestWorkerExclusivity(unittest.TestCase):
         skips = [msg for msg, _level in self.logs if "skipping duplicate launch" in msg]
         self.assertEqual(len(skips), 2)
 
+    def test_live_worker_reasserts_its_slot(self):
+        """A running worker keeps its slot so the healer never duplicates it."""
+        controller = self._make_controller(FakeManagerRunning())
+        controller._task_schedule = {}
+        controller.active_instances.add(0)
+        pm = MagicMock()
+        first = dict(TASK_A)
+        second = dict(TASK_A)
+        pm.running_tasks_state = [first, second]
+        pm.current_task_name = None
+        controller.instances_profile_managers[0] = pm
+        controller._selected_instances = {0}
+        seen = {}
+        order = []
+        first["next_run_time"] = 0.0
+        second["next_run_time"] = 0.0
+        second["priority"] = 2
+
+        def fake_first(instance_index):
+            order.append("first")
+            controller._discard_active_instance(0)
+            return True
+
+        def fake_second(instance_index):
+            order.append("second")
+            seen["slot_held"] = 0 in controller.active_instances
+            stop_signal.set()
+            return True
+
+        first["function"] = fake_first
+        second["function"] = fake_second
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen", return_value=True
+        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"), patch("wosutil.tool.tool_instances_controller.save_task_schedule"):
+            controller.run_profile_on_instance_with_slot(0, "All")
+        self.assertEqual(order, ["first", "second"])
+        self.assertTrue(seen.get("slot_held"))
+
     def test_superseded_worker_exits_before_touching_the_emulator(self):
         """A worker that lost its slot never drives the emulator."""
         controller = self._make_controller(FakeManagerRunning())

@@ -922,6 +922,12 @@ class MultiInstanceToolController:
                 health_check_interval = 60  # Check emulator health every 60 seconds
 
                 while not self.tool_should_stop.is_set():
+                    # A live worker always holds its slot: re-assert it so the
+                    # self-healing launcher never queues (and duplicates) this
+                    # instance while it is being driven. Terminal paths below
+                    # release the slot explicitly before exiting the loop.
+                    with self._state_lock:
+                        self.active_instances.add(index)
                     now = time.time()
 
                     # Periodic health check
@@ -1003,7 +1009,7 @@ class MultiInstanceToolController:
                     for other in pm.running_tasks_state:
                         if other.get("run_after") == task.get("id"):
                             other["next_run_time"] = time.time()
-                    pm.next_run_time = min(t["next_run_time"] for t in pm.running_tasks_state)
+                    pm.next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
                     pm.current_task_name = None
                     self._persist_schedules()
                     # Short wait before the next iteration, reactive to stop
