@@ -762,6 +762,60 @@ class TestTextOcr(unittest.TestCase):
                 save_debug.assert_not_called()
 
 
+class TestDebugImageRetention(unittest.TestCase):
+    """The debug folder keeps only the newest captures per label and instance."""
+
+    def _capture(self, directory, label, instance_index, stamp, kind):
+        """Write an empty capture file with a production-like name."""
+        name = f"{label}_inst{instance_index}_{stamp}_{kind}.png"
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+            handle.write("x")
+        return name
+
+    def test_prunes_oldest_beyond_keep(self):
+        """Only the newest captures survive the retention cap."""
+        from wosutil.emulator.image_utils import _prune_ocr_debug_images
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch("wosutil.emulator.image_utils.DEBUG_DIR", temp_dir):
+            for seq in range(6):
+                self._capture(temp_dir, "walking_march_time", 2, f"20260905_020000_{seq:03d}", "original")
+            _prune_ocr_debug_images("walking_march_time", 2, keep=4)
+            remaining = sorted(os.listdir(temp_dir))
+            self.assertEqual(len(remaining), 4)
+            self.assertTrue(remaining[0].endswith("_002_original.png"))
+            self.assertTrue(remaining[-1].endswith("_005_original.png"))
+
+    def test_keeps_other_labels_and_instances(self):
+        """Pruning never touches other labels, instances or files."""
+        from wosutil.emulator.image_utils import _prune_ocr_debug_images
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch("wosutil.emulator.image_utils.DEBUG_DIR", temp_dir):
+            for seq in range(3):
+                self._capture(temp_dir, "walking_march_time", 2, f"20260905_020000_{seq:03d}", "original")
+            other = self._capture(temp_dir, "click_text_Deploy", 2, "20260905_020000_000", "original")
+            foreign = self._capture(temp_dir, "walking_march_time", 1, "20260905_020000_000", "original")
+            with open(os.path.join(temp_dir, "notes.txt"), "w", encoding="utf-8") as handle:
+                handle.write("x")
+            _prune_ocr_debug_images("walking_march_time", 2, keep=1)
+            remaining = set(os.listdir(temp_dir))
+            self.assertIn(other, remaining)
+            self.assertIn(foreign, remaining)
+            self.assertIn("notes.txt", remaining)
+            self.assertEqual(len([name for name in remaining if name.startswith("walking_march_time_inst2_")]), 1)
+
+    def test_save_triggers_prune(self):
+        """Every saved capture enforces the retention cap afterwards."""
+        from wosutil.emulator.image_utils import _save_ocr_debug_images
+
+        image = Image.new("RGB", (4, 4))
+        with tempfile.TemporaryDirectory() as temp_dir, patch("wosutil.emulator.image_utils.DEBUG_DIR", temp_dir), patch("wosutil.preferences.get_debug_mode", return_value=True), patch(
+            "wosutil.emulator.image_utils._prune_ocr_debug_images"
+        ) as prune:
+            _save_ocr_debug_images("walking_march_time", 2, image, image)
+            self.assertEqual(len(os.listdir(temp_dir)), 2)
+        prune.assert_called_once_with("walking_march_time", 2)
+
+
 class TestFuzzyTextMask(unittest.TestCase):
     """Test the fuzzy-search preprocessing color properties (no Tesseract needed)."""
 

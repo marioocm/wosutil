@@ -4,6 +4,7 @@ Provides functions for finding templates on screen, reading text from screenshot
 and managing template caching.
 """
 
+import contextlib
 import os
 import re
 import sys
@@ -265,6 +266,33 @@ def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: 
     return [tuple(boxes_np[i]) for i in pick]
 
 
+#: Newest debug captures kept per label and instance, so a failing night
+#: cannot fill the disk with thousands of images.
+DEBUG_KEEP_PER_LABEL_AND_INSTANCE = 20
+
+
+def _prune_ocr_debug_images(label: str, instance_index: int, keep: int = DEBUG_KEEP_PER_LABEL_AND_INSTANCE) -> None:
+    """Delete debug captures beyond the newest ``keep`` for a label/instance.
+
+    File names embed a sortable timestamp, so pruning is a name sort; other
+    labels, instances and unrelated files are never touched. Failures are
+    ignored: pruning must never break a task run.
+
+    Args:
+        label (str): Label used to name the files.
+        instance_index (int): Emulator instance index, included in the file name.
+        keep (int): Newest captures to keep.
+    """
+    prefix = f"{label}_inst{instance_index}_"
+    try:
+        names = sorted(name for name in os.listdir(DEBUG_DIR) if name.startswith(prefix) and name.endswith(".png"))
+    except OSError:
+        return
+    for stale in names[: max(0, len(names) - keep)]:
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(DEBUG_DIR, stale))
+
+
 def _save_ocr_debug_images(
     label: str,
     instance_index: int,
@@ -274,7 +302,7 @@ def _save_ocr_debug_images(
     """Save the original and processed ROI images to the debug folder for OCR troubleshooting.
 
     Only runs when debug (verbose) mode is enabled; normal sessions skip the
-    captures entirely.
+    captures entirely. Retention is capped per label and instance.
 
     Args:
         label (str): Label used to name the files.
@@ -292,6 +320,7 @@ def _save_ocr_debug_images(
         original_img.save(os.path.join(DEBUG_DIR, f"{label}_inst{instance_index}_{timestamp}_original.png"))
     if processed_img is not None:
         processed_img.save(os.path.join(DEBUG_DIR, f"{label}_inst{instance_index}_{timestamp}_processed.png"))
+    _prune_ocr_debug_images(label, instance_index)
     log_message(
         f"Saved OCR debug captures to {DEBUG_DIR} for label '{label}' (instance {instance_index}) at {timestamp}.",
         level="warning",
