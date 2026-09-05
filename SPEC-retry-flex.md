@@ -188,6 +188,20 @@ Framework pytest en `tests/`, `testpaths=["tests"]`.
 - El tooltip cuenta atras hasta el tiempo planificado (batch), no el due
   nominal: lo que ve el usuario es cuando se abre el juego de verdad.
 
+## Robustez ante averias (tormenta 2026-09-05)
+
+- Un solo driver por instancia: el launcher no duplica workers con hilo
+  vivo (`skipped_dupes`), el worker saliente cede si perdio el slot, y los
+  logs usan el nombre local de la tarea (nunca `None`).
+- Cooldown de recovery 15min (`RECOVERY_COOLDOWN_SECONDS`): tras un
+  recovery completo futil, `ensure_city_screen` falla rapido con un check
+  barato; la ciudad visible lo levanta al instante. Bear (`force_recovery`)
+  siempre intenta el recovery completo dentro de su ventana.
+- Backoff de errores consecutivos (`consecutive_errors` persistido):
+  1x, 2x, 4x, tope 4x del retry (2h -> 4h -> 8h -> 8h...); reset en exito.
+- Debug acotado (`DEBUG_KEEP_PER_LABEL_AND_INSTANCE = 20`): solo las
+  newest por etiqueta e instancia.
+
 ## Success Criteria
 
 - [ ] Fallar `claim_idle` reprograma ~2h, completarla ~8h (igual resto de
