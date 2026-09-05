@@ -1164,6 +1164,11 @@ def play_bear_trap(instance_index):
     every march joining ally rallies for the whole BEAR_TRAP_DURATION_SECONDS
     window.
 
+    The bear trap is only ever attacked when a hunt time was actually seen in
+    the task list. When no upcoming hunt is known (empty schedule, only ended
+    hunts, or a failed task-list read) the task does nothing and reschedules
+    itself for a later retry: it must never start an attack "just in case".
+
     The cached schedule is refreshed from the task list when it does not point
     to an imminent hunt (empty, only ended hunts, or the next hunt is farther
     than BEAR_TRAP_SCHEDULE_REFRESH_MARGIN_SECONDS away): a partial read or a
@@ -1189,7 +1194,8 @@ def play_bear_trap(instance_index):
         bool or tuple: True (or (True, seconds)) when the task ran or was
             scheduled for an upcoming bear hunt, False otherwise. The tuple
             form reschedules the task so it runs exactly BEAR_TRAP_PREP_SECONDS
-            before the hunt starts.
+            before the hunt starts, or in BEAR_TRAP_SCHEDULE_RETRY_SECONDS
+            when no hunt time was seen.
     """
     now = time.time()
     bear_hunts = get_cached_bear_hunt_times(instance_index)
@@ -1205,11 +1211,10 @@ def play_bear_trap(instance_index):
         hunt_start = _next_bear_hunt_start(bear_hunts, now)
     if hunt_start is None:
         if not bear_hunts:
-            log_message("Bear Hunt schedule not available, running the bear trap right away.", level="warning")
-            played = _bear_trap_prepare_and_join(instance_index, end=now + BEAR_TRAP_DURATION_SECONDS)
+            log_message("Bear Hunt schedule not available, skipping the bear trap until its time is seen in the task list.", level="warning")
         else:
             log_message("No upcoming Bear Hunt in the schedule, retrying later.", level="warning")
-            return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
+        return True, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
     else:
         prep_at = hunt_start - BEAR_TRAP_PREP_SECONDS
         if now < prep_at:
@@ -1227,7 +1232,7 @@ def play_bear_trap(instance_index):
         played = _bear_trap_prepare_and_join(instance_index, end=hunt_start + BEAR_TRAP_DURATION_SECONDS)
 
     if not played:
-        return False
+        return False, BEAR_TRAP_SCHEDULE_RETRY_SECONDS
     return _reschedule_after_bear_hunt(instance_index)
 
 
