@@ -46,6 +46,50 @@ from wosutil.preferences import GATHER_RESOURCES, get_bear_rally_call_march, get
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.utils import get_roi, get_template_path, log_message, retry_operation
 
+#: Cooldown after a full recovery (back-press marathon + game relaunch)
+#: proved futile: further attempts fail fast on a cheap screen check
+#: instead of force-stopping the game in a loop.
+RECOVERY_COOLDOWN_SECONDS = 15 * 60
+
+# Per-instance timestamp until which expensive recovery is skipped.
+_RECOVERY_COOLDOWN_UNTIL = {}
+
+
+def clear_recovery_cooldowns():
+    """Clear all recovery cooldowns (used by tests)."""
+    _RECOVERY_COOLDOWN_UNTIL.clear()
+
+
+def recovery_cooling_down(instance_index, now=None):
+    """Return whether recovery is cooling down for an instance.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        now (float, optional): Current timestamp. If None, uses time.time().
+
+    Returns:
+        bool: True while expensive recovery must be skipped.
+    """
+    until = _RECOVERY_COOLDOWN_UNTIL.get(instance_index)
+    if until is None:
+        return False
+    if now is None:
+        now = time.time()
+    if now >= until:
+        _RECOVERY_COOLDOWN_UNTIL.pop(instance_index, None)
+        return False
+    return True
+
+
+def _note_recovery_succeeded(instance_index):
+    """Clear a recovery cooldown after reaching the city screen."""
+    _RECOVERY_COOLDOWN_UNTIL.pop(instance_index, None)
+
+
+def _note_recovery_failed(instance_index):
+    """Start a recovery cooldown after a full recovery proved futile."""
+    _RECOVERY_COOLDOWN_UNTIL[instance_index] = time.time() + RECOVERY_COOLDOWN_SECONDS
+
 
 def is_game_on_city_screen(instance_index):
     """Checks if the main city screen icon is present.
@@ -91,9 +135,11 @@ def launch_and_reach_city_screen(instance_index):
             raise ToolStopped()
         if not is_wos_running(instance_index, verbose=False):
             log_message(f"Game process not detected during check {check}/10 on instance {instance_index}.", "warning")
+            _note_recovery_failed(instance_index)
             return False
         if is_game_on_city_screen(instance_index):
             log_message(f"Game main screen reached on instance {instance_index}.", "success")
+            _note_recovery_succeeded(instance_index)
             return True
         if is_game_on_world_screen(instance_index):
             log_message("Game is on world screen.", "info")
@@ -103,6 +149,7 @@ def launch_and_reach_city_screen(instance_index):
             press_android_back_button(instance_index)
 
     log_message(f"Could not reach the main city screen on instance {instance_index}.", "error")
+    _note_recovery_failed(instance_index)
     return False
 
 
@@ -131,11 +178,18 @@ def _reach_city_screen(instance_index, attempt_label):
     return False
 
 
-def ensure_city_screen(instance_index):
+def ensure_city_screen(instance_index, force_recovery=False):
     """Ensures the game is on the main city screen. If the game is not open, it launches it.
+
+    When a previous full recovery proved futile, the instance cools down:
+    only a cheap city-screen check runs, so tasks fail fast instead of
+    force-stopping the game in a loop. A visible city screen ends the
+    cooldown at once. The bear window always forces the full recovery.
 
     Args:
         instance_index (int): Emulator instance index.
+        force_recovery (bool): Skip the cooldown and always attempt the full
+            recovery (backs marathon + game relaunch).
 
     Returns:
         bool: True if city screen is reached, False otherwise.
@@ -176,7 +230,16 @@ def ensure_city_screen(instance_index):
             log_message(f"Game successfully launched on instance {instance_index}.", "success")
     else:
         log_message(f"Game already running on instance {instance_index}.", "info")
+        if not force_recovery and recovery_cooling_down(instance_index):
+            # A recent full recovery proved futile: only a cheap check runs.
+            if is_game_on_city_screen(instance_index):
+                log_message("City screen visible again, recovery cooldown over.", level="success")
+                _note_recovery_succeeded(instance_index)
+                return True
+            log_message(f"Recovery cooling down on instance {instance_index}, failing fast without restarting the game.", level="debug")
+            return False
         if _reach_city_screen(instance_index, "Attempt"):
+            _note_recovery_succeeded(instance_index)
             return True
         # The game is running but its screen is stuck: restart it once.
         log_message("Could not reach city screen after all attempts. Restarting game and retrying...", level="warning")
@@ -488,11 +551,13 @@ def ensure_screen_with_navigation(instance_index, is_on_screen_fn, navigate_fn, 
     return False
 
 
-def ensure_world_screen(instance_index):
+def ensure_world_screen(instance_index, force_recovery=False):
     """Ensures the game is on the world screen.
 
     Args:
         instance_index (int): Emulator instance index.
+        force_recovery (bool): Forwarded to ensure_city_screen: skip the
+            recovery cooldown and always attempt the full recovery.
 
     Returns:
         bool: True if on world screen, False otherwise.
@@ -500,7 +565,7 @@ def ensure_world_screen(instance_index):
     if is_game_on_world_screen(instance_index):
         log_message("Already on world screen.", level="info")
         return True
-    if not ensure_city_screen(instance_index):
+    if not ensure_city_screen(instance_index, force_recovery=force_recovery):
         log_message("Failed to reach city screen before going to world screen.", level="error")
         return False
     go_cityworld(instance_index)
@@ -1640,7 +1705,7 @@ def _pick_valid_rally(countdowns, join_buttons):
     return None
 
 
-def join_bear_rally(instance_index, march):
+def join_bear_rally(instance_index, march, force_recovery=False):
     """Joins an ally rally against the bear with the given march.
 
     Ensures the world map, opens the rallies panel and joins the first rally
@@ -1655,6 +1720,8 @@ def join_bear_rally(instance_index, march):
     Args:
         instance_index (int): Emulator instance index.
         march (int): March number to send, between 1 and 12.
+        force_recovery (bool): Forwarded to ensure_world_screen: the bear
+            window always attempts the full recovery.
 
     Returns:
         int or None: Seconds until the march can be launched again (the read
@@ -1664,7 +1731,7 @@ def join_bear_rally(instance_index, march):
     """
     while True:
         stop_signal.check()
-        if not ensure_world_screen(instance_index):
+        if not ensure_world_screen(instance_index, force_recovery=force_recovery):
             return None
 
         if not click_on_template("worldmap_rallies", instance_index, roi=get_roi("worldmap_rallies"), delay=0.8):

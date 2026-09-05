@@ -1315,12 +1315,13 @@ def _bear_trap_ensure_world_screen(instance_index, end, stage):
         bool: True when the world screen was reached, False only when the
             window elapsed or the tool stops.
     """
-    if ensure_world_screen(instance_index):
+    # A hunt window is worth the full recovery even while cooling down.
+    if ensure_world_screen(instance_index, force_recovery=True):
         return True
     log_message(f"World screen not reached {stage}, retrying while the bear window lasts...", level="warning")
     while time.time() < end:
         stop_signal.check()
-        if ensure_world_screen(instance_index):
+        if ensure_world_screen(instance_index, force_recovery=True):
             return True
         log_message(f"World screen not reached {stage}, retrying while the bear window lasts...", level="warning")
         remaining = end - time.time()
@@ -1408,7 +1409,7 @@ def _bear_trap_prepare_and_join(instance_index, end):
             continue
         for march in marches:
             if march["next_available"] <= now:
-                wait = join_bear_rally(instance_index, march["number"])
+                wait = join_bear_rally(instance_index, march["number"], force_recovery=True)
                 march["next_available"] = time.time() + (wait if wait is not None else 25)
                 break
         else:

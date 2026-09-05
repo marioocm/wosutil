@@ -1226,5 +1226,68 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
         self.assertEqual(press_android_back_button.call_count, 10)
 
 
+class TestRecoveryCooldown(unittest.TestCase):
+    """A futile recovery cools down instead of hammering the game."""
+
+    def test_failed_launch_cools_down(self):
+        """A failed full recovery marks the instance as cooling down."""
+        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen, recovery_cooling_down
+
+        with patch("wosutil.tool.tasks.task_helpers.force_stop_game"), patch("wosutil.tool.tasks.task_helpers.launch_game_activity"), patch(
+            "wosutil.tool.tasks.task_helpers.stop_signal.wait", return_value=False
+        ), patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=False):
+            self.assertFalse(launch_and_reach_city_screen(0))
+        self.assertTrue(recovery_cooling_down(0))
+        self.assertFalse(recovery_cooling_down(1))
+
+    def test_cooling_down_fails_fast_without_restart(self):
+        """While cooling down, ensure fails fast without force-stopping."""
+        from wosutil.tool.tasks.task_helpers import ensure_city_screen, launch_and_reach_city_screen
+
+        with patch("wosutil.tool.tasks.task_helpers.force_stop_game"), patch("wosutil.tool.tasks.task_helpers.launch_game_activity"), patch(
+            "wosutil.tool.tasks.task_helpers.stop_signal.wait", return_value=False
+        ), patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=False):
+            self.assertFalse(launch_and_reach_city_screen(0))
+        with patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=True), patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch(
+            "wosutil.tool.tasks.task_helpers.force_stop_game"
+        ) as force_stop:
+            self.assertFalse(ensure_city_screen(0))
+        force_stop.assert_not_called()
+
+    def test_cheap_check_recovers_from_cooldown(self):
+        """A visible city screen ends the cooldown immediately."""
+        from wosutil.tool.tasks.task_helpers import ensure_city_screen, recovery_cooling_down
+
+        with patch("wosutil.tool.tasks.task_helpers.force_stop_game"), patch("wosutil.tool.tasks.task_helpers.launch_game_activity"), patch(
+            "wosutil.tool.tasks.task_helpers.stop_signal.wait", return_value=False
+        ), patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=False):
+            from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen
+
+            self.assertFalse(launch_and_reach_city_screen(0))
+        self.assertTrue(recovery_cooling_down(0))
+        with patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=True), patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=True), patch(
+            "wosutil.tool.tasks.task_helpers.get_multi_instance_manager"
+        ):
+            self.assertTrue(ensure_city_screen(0))
+        self.assertFalse(recovery_cooling_down(0))
+
+    def test_force_recovery_bypasses_cooldown(self):
+        """The bear window always attempts the full recovery."""
+        from wosutil.tool.tasks.task_helpers import ensure_city_screen, launch_and_reach_city_screen, recovery_cooling_down
+
+        with patch("wosutil.tool.tasks.task_helpers.force_stop_game"), patch("wosutil.tool.tasks.task_helpers.launch_game_activity"), patch(
+            "wosutil.tool.tasks.task_helpers.stop_signal.wait", return_value=False
+        ), patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=False):
+            self.assertFalse(launch_and_reach_city_screen(0))
+        self.assertTrue(recovery_cooling_down(0))
+        with patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=True), patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch(
+            "wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=False
+        ), patch("wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen", return_value=True) as mock_launch, patch("wosutil.tool.tasks.task_helpers.press_android_back_button"), patch(
+            "wosutil.tool.tasks.task_helpers.get_multi_instance_manager"
+        ):
+            self.assertTrue(ensure_city_screen(0, force_recovery=True))
+        mock_launch.assert_called_once_with(0)
+
+
 if __name__ == "__main__":
     unittest.main()

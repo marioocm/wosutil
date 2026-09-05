@@ -673,7 +673,7 @@ class MultiInstanceToolController:
             verify_adb_connected,
         )
         from wosutil.tool.profiles.profile_manager import ProfileManager
-        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen
+        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen, recovery_cooling_down
 
         def instance_worker():
             owner = self.instance_threads.get(index)
@@ -816,6 +816,12 @@ class MultiInstanceToolController:
 
                 # Retry game launch usando retry_operation
                 def try_launch_game():
+                    if recovery_cooling_down(index):
+                        self.log_message(
+                            f"Skipping game launch on instance {index}: recovery cooling down after futile attempts.",
+                            level="debug",
+                        )
+                        return False
                     return launch_and_reach_city_screen(instance_index=index)
 
                 # Add timeout protection for game launch phase

@@ -222,7 +222,7 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
         self.assertTrue(result)
         activate.assert_called_once_with(0)
         call_rally.assert_called_once_with(0)
-        join.assert_called_once_with(0, 1)
+        join.assert_called_once_with(0, 1, force_recovery=True)
         stop_wait.assert_called()
 
     def test_joins_immediately_after_window_start(self):
@@ -240,7 +240,7 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
 
         self.assertTrue(result)
         call_rally.assert_called_once_with(0)
-        join.assert_called_once_with(0, 1)
+        join.assert_called_once_with(0, 1, force_recovery=True)
 
     def test_own_rally_has_priority_and_sets_cooldown(self):
         """A successful own rally blocks further rallies until its cooldown."""
@@ -257,7 +257,7 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
 
         self.assertTrue(result)
         call_rally.assert_called_once_with(0)
-        join.assert_called_once_with(0, 1)
+        join.assert_called_once_with(0, 1, force_recovery=True)
 
     def test_own_rally_retried_after_failure(self):
         """A failed own rally is retried after a short wait."""
@@ -274,7 +274,7 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(call_rally.call_count, 2)
-        join.assert_called_once_with(0, 1)
+        join.assert_called_once_with(0, 1, force_recovery=True)
 
     def test_own_rally_skipped_when_window_almost_over(self):
         """An own rally is not called when the hunt would end before it prepares."""
@@ -292,7 +292,7 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
 
         self.assertTrue(result)
         call_rally.assert_not_called()
-        join.assert_called_once_with(0, 1)
+        join.assert_called_once_with(0, 1, force_recovery=True)
 
     def test_recovers_when_world_screen_fails_first(self):
         """A failed first screen check is retried while the window lasts."""
