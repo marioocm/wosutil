@@ -30,6 +30,13 @@ def _sanitize_last_result(value):
     return value if value in LAST_RESULTS else "success"
 
 
+def _sanitize_consecutive_errors(value):
+    """Return a valid error streak, defaulting to zero."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def load_task_schedule():
     """Load the persisted per-instance task schedule.
 
@@ -66,7 +73,7 @@ def load_saved_tasks(schedule, instance_index):
 
     Returns:
         dict: Mapping of task id -> {"next_run_time", "reschedule_seconds",
-            "last_result", "nominal_due"}.
+            "last_result", "nominal_due", "consecutive_errors"}.
     """
     instance_entry = schedule.get(str(instance_index))
     if not isinstance(instance_entry, dict):
@@ -110,10 +117,12 @@ def build_task_state(sorted_task_defs, saved_tasks, now=None):
                 task["nominal_due"] = float(saved_nominal)
             else:
                 task["nominal_due"] = task["next_run_time"]
+            task["consecutive_errors"] = _sanitize_consecutive_errors(saved.get("consecutive_errors"))
         else:
             task["next_run_time"] = now
             task["last_result"] = "success"
             task["nominal_due"] = now
+            task["consecutive_errors"] = 0
         tasks.append(task)
     return tasks
 
@@ -126,7 +135,7 @@ def snapshot_instance_schedule(tasks):
 
     Returns:
         dict: Mapping of task id -> {"next_run_time", "reschedule_seconds",
-            "last_result", "nominal_due"}.
+            "last_result", "nominal_due", "consecutive_errors"}.
     """
     snapshot = {}
     for task in tasks:
@@ -147,5 +156,6 @@ def snapshot_instance_schedule(tasks):
             "reschedule_seconds": reschedule_seconds,
             "last_result": _sanitize_last_result(task.get("last_result")),
             "nominal_due": nominal_due,
+            "consecutive_errors": _sanitize_consecutive_errors(task.get("consecutive_errors")),
         }
     return snapshot

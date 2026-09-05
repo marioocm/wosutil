@@ -146,16 +146,30 @@ class TestBuildTaskState(unittest.TestCase):
         state = build_task_state([_task("a")], saved, now=1000.0)
         self.assertEqual(state[0]["last_result"], "success")
 
+    def test_restores_consecutive_errors(self):
+        """A saved error streak is restored with the task."""
+        saved = {"a": {"next_run_time": 5000.0, "consecutive_errors": 3}}
+        state = build_task_state([_task("a")], saved, now=1000.0)
+        self.assertEqual(state[0]["consecutive_errors"], 3)
+
+    def test_defaults_consecutive_errors_to_zero(self):
+        """Tasks without a saved streak start clean."""
+        state = build_task_state([_task("a")], {}, now=1000.0)
+        self.assertEqual(state[0]["consecutive_errors"], 0)
+        saved = {"a": {"next_run_time": 5000.0, "consecutive_errors": -2}}
+        state = build_task_state([_task("a")], saved, now=1000.0)
+        self.assertEqual(state[0]["consecutive_errors"], 0)
+
 
 class TestSnapshotInstanceSchedule(unittest.TestCase):
     """snapshot_instance_schedule serializes the running task state."""
 
     def test_serializes_next_run_time_and_reschedule(self):
         """Both scheduled fields are persisted per task."""
-        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "success", "nominal_due": 50.0}]
+        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "success", "nominal_due": 50.0, "consecutive_errors": 2}]
         self.assertEqual(
             snapshot_instance_schedule(tasks),
-            {"a": {"next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "success", "nominal_due": 50.0}},
+            {"a": {"next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "success", "nominal_due": 50.0, "consecutive_errors": 2}},
         )
 
     def test_handles_missing_fields(self):
@@ -166,9 +180,14 @@ class TestSnapshotInstanceSchedule(unittest.TestCase):
 
     def test_only_keeps_scheduled_fields(self):
         """Runtime-only fields (functions, names) are not persisted."""
-        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "error", "nominal_due": 50.0, "function": lambda: None}]
+        tasks = [{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0, "last_result": "error", "nominal_due": 50.0, "consecutive_errors": 1, "function": lambda: None}]
         snapshot = snapshot_instance_schedule(tasks)
-        self.assertEqual(set(snapshot["a"].keys()), {"next_run_time", "reschedule_seconds", "last_result", "nominal_due"})
+        self.assertEqual(set(snapshot["a"].keys()), {"next_run_time", "reschedule_seconds", "last_result", "nominal_due", "consecutive_errors"})
+
+    def test_defaults_missing_streak_to_zero(self):
+        """Entries without a streak persist zero errors."""
+        snapshot = snapshot_instance_schedule([{"id": "a", "next_run_time": 100.0, "reschedule_seconds": 400.0}])
+        self.assertEqual(snapshot["a"]["consecutive_errors"], 0)
 
     def test_defaults_missing_anchor_to_next_run_time(self):
         """Entries without an anchor persist their due time as the anchor."""

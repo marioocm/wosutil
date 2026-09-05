@@ -24,4 +24,4 @@ def build_running_tasks_state(profile_name, profiles, task_definitions, now=None
     task_names = profiles.get(profile_name, [])
     if not isinstance(task_names, list):
         return []
-    return [{**task_definitions[t], "next_run_time": now, "last_result": "success", "nominal_due": now} for t in task_names if isinstance(t, str) and t in task_definitions]
+    return [{**task_definitions[t], "next_run_time": now, "last_result": "success", "nominal_due": now, "consecutive_errors": 0} for t in task_names if isinstance(t, str) and t in task_definitions]

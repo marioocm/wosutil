@@ -708,6 +708,27 @@ class TestComputeNextRunTime(unittest.TestCase):
         self.assertEqual(last_result, "error")
         self.assertEqual(nominal_due, 900.0)
 
+    def test_error_backs_off_with_consecutive_failures(self):
+        """Each consecutive failure doubles the retry, up to four times."""
+        task = self._task()
+        next_run_time, _last_result, _nominal = compute_next_run_time(task, False, None, nominal_due=900.0, now=1000.0)
+        self.assertEqual(next_run_time, 1120.0)
+        self.assertEqual(task["consecutive_errors"], 1)
+        next_run_time, _last_result, _nominal = compute_next_run_time(task, False, None, nominal_due=900.0, now=1000.0)
+        self.assertEqual(next_run_time, 1240.0)
+        self.assertEqual(task["consecutive_errors"], 2)
+        task["consecutive_errors"] = 9
+        next_run_time, _last_result, _nominal = compute_next_run_time(task, False, None, nominal_due=900.0, now=1000.0)
+        self.assertEqual(next_run_time, 1480.0)
+        self.assertEqual(task["consecutive_errors"], 10)
+
+    def test_success_resets_consecutive_errors(self):
+        """A completed run clears the error streak."""
+        task = self._task()
+        task["consecutive_errors"] = 3
+        compute_next_run_time(task, True, None, nominal_due=900.0, now=1000.0)
+        self.assertEqual(task["consecutive_errors"], 0)
+
 
 class TestPickScheduledTaskFlex(unittest.TestCase):
     """pick_scheduled_task applies the early window to success cycles only."""

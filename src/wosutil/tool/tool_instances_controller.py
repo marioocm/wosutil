@@ -34,6 +34,10 @@ TASK_GROUPING_WINDOW_SECONDS = 5.0
 # service) recover without a full tool restart.
 RETRY_COOLDOWN_SECONDS = 600
 
+# Cap for the consecutive-error backoff, as a multiple of the task retry:
+# 1x, 2x, 4x, then capped (2h -> 4h -> 8h -> 8h... by default).
+ERROR_BACKOFF_MAX_MULTIPLIER = 4
+
 
 def _is_valid_delay(value):
     """Return whether a value is a usable positive delay in seconds."""
@@ -68,22 +72,37 @@ def compute_next_run_time(task, succeeded, exact_seconds, nominal_due, now):
     Returns:
         tuple: (next_run_time, last_result, nominal_due) with last_result
             "success" or "error" (error cycles never get a flex window).
+
+    The error streak lives on the task dict itself: it resets on success
+    and grows on error, doubling the retry up to
+    ERROR_BACKOFF_MAX_MULTIPLIER, so a permanently failing task backs off
+    instead of hammering a broken game every retry.
     """
-    if succeeded and _is_valid_delay(exact_seconds):
-        planned = now + exact_seconds
-        return planned, "success", planned
-    base = task.get("reschedule_seconds", 60)
-    if not _is_valid_delay(base):
-        base = 60
-    anchor = nominal_due if _is_valid_timestamp(nominal_due) else now
     if succeeded:
+        task["consecutive_errors"] = 0
+        if _is_valid_delay(exact_seconds):
+            planned = now + exact_seconds
+            return planned, "success", planned
+        base = task.get("reschedule_seconds", 60)
+        if not _is_valid_delay(base):
+            base = 60
+        anchor = nominal_due if _is_valid_timestamp(nominal_due) else now
         advanced = anchor + base
         while advanced <= now:
             advanced += base
         return max(anchor, now) + base, "success", advanced
+    streak = task.get("consecutive_errors", 0)
+    if isinstance(streak, bool) or not isinstance(streak, int) or streak < 0:
+        streak = 0
+    streak = min(streak + 1, 10)
+    task["consecutive_errors"] = streak
+    base = task.get("reschedule_seconds", 60)
+    if not _is_valid_delay(base):
+        base = 60
+    anchor = nominal_due if _is_valid_timestamp(nominal_due) else now
     retry = task.get("retry_seconds")
     if _is_valid_delay(retry):
-        return now + retry, "error", anchor
+        return now + min(retry * (2 ** (streak - 1)), retry * ERROR_BACKOFF_MAX_MULTIPLIER), "error", anchor
     return now + base, "error", anchor
 
 
@@ -501,6 +520,7 @@ class MultiInstanceToolController:
                             t["next_run_time"] = now + t["reschedule_seconds"]
                         t["nominal_due"] = t["next_run_time"]
                         t["last_result"] = "success"
+                        t["consecutive_errors"] = 0
                         running_tasks_state.append(t)
 
                 self.instances_profile_managers[idx] = pm
