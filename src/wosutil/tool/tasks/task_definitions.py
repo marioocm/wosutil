@@ -5,6 +5,7 @@ Provides metadata and configuration for all available automation tasks.
 
 from wosutil.preferences import get_task_priorities
 from wosutil.tool.tasks.task_automation import (
+    BEAR_TRAP_SCHEDULE_RETRY_SECONDS,
     activate_daily_pet_skills,
     claim_alliance_chests,
     claim_idle_income,
@@ -44,7 +45,7 @@ def get_task_definitions():
             "description": "Recalls every march to prepare the bear trap attack and then attacks the bear trap with all marches.",
             "function": lambda instance_index: play_bear_trap(instance_index),
             "priority": 0,
-            "reschedule_seconds": 2 * 24 * 60 * 60,  # 2 days
+            "reschedule_seconds": BEAR_TRAP_SCHEDULE_RETRY_SECONDS,  # poll the task list; only runs when a hunt time was seen
             "category": "world",
         },
         "claim_idle": {
