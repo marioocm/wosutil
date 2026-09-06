@@ -1200,6 +1200,17 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(is_game_on_city_screen.call_count, 2)
+        press_android_back_button.assert_not_called()
+
+    def test_presses_back_only_after_confirmed_negative(self):
+        """A back press needs two consecutive negative checks, never one."""
+        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, launch_and_reach_city_screen, press_android_back_button
+
+        is_game_on_city_screen.side_effect = [False, False, True]
+        result = launch_and_reach_city_screen(0)
+
+        self.assertTrue(result)
+        self.assertEqual(is_game_on_city_screen.call_count, 3)
         press_android_back_button.assert_called_once_with(0)
 
     def test_aborts_when_process_disappears(self):
@@ -1213,7 +1224,7 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
         """A world screen is switched back to the city instead of pressing back."""
         from wosutil.tool.tasks.task_helpers import go_cityworld, is_game_on_world_screen, launch_and_reach_city_screen, press_android_back_button
 
-        is_game_on_world_screen.side_effect = [True] + [False] * 9
+        is_game_on_world_screen.side_effect = [True] + [False] * 19
         self.assertFalse(launch_and_reach_city_screen(0))
         go_cityworld.assert_called_once_with(0)
         self.assertEqual(press_android_back_button.call_count, 9)

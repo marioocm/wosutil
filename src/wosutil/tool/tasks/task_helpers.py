@@ -99,8 +99,19 @@ def launch_and_reach_city_screen(instance_index):
             log_message("Game is on world screen.", "info")
             go_cityworld(instance_index)
         else:
-            log_message(f"Not on main screen. Pressing back (check {check}/10).", "info")
-            press_android_back_button(instance_index)
+            # Confirm with a second check before pressing back: a single
+            # false negative (screenshot taken mid-animation) must not cost
+            # a press, or consecutive blind presses overshoot into the
+            # "Quit game?" dialog and reopen it on the next press.
+            if is_game_on_city_screen(instance_index):
+                log_message(f"Game main screen reached on instance {instance_index}.", "success")
+                return True
+            if is_game_on_world_screen(instance_index):
+                log_message("Game is on world screen.", "info")
+                go_cityworld(instance_index)
+            else:
+                log_message(f"Not on main screen. Pressing back (check {check}/10).", "info")
+                press_android_back_button(instance_index)
 
     log_message(f"Could not reach the main city screen on instance {instance_index}.", "error")
     return False
