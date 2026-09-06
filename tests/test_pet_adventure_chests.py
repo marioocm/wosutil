@@ -260,7 +260,7 @@ class TestStartPetAdventureChest(unittest.TestCase):
         self.click_template.side_effect = [True, False]
         result = start_pet_adventure_chest(0, 150, 250)
         self.assertEqual(result, "no_attempts")
-        self.assertEqual(self.press_back.call_count, 2)
+        self.press_back.assert_called_once()
 
 
 class TestStartPetAdventureChests(unittest.TestCase):
@@ -405,7 +405,7 @@ class TestOpenPetAdventureChest(unittest.TestCase):
         calls = [c.args[:3] for c in self.click_on_coordinates.call_args_list]
         self.assertIn((150, 250, 0), calls)
         self.assertIn((371, 810, 0), calls)
-        self.assertEqual(self.press_back.call_count, 2)
+        self.press_back.assert_called_once()
 
     def test_returns_false_when_not_on_pet_adventure_screen(self):
         """Opening is aborted if we are not on the pet adventure screen."""

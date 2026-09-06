@@ -90,7 +90,6 @@ def claim_idle_income(instance_index):
     click_on_coordinates(360, 925, instance_index, delay=0.6)
 
     press_android_back_button(instance_index)
-    press_android_back_button(instance_index)
     return True
 
 
@@ -119,7 +118,6 @@ def donate_to_alliance_tech(instance_index):
     if not template_path or not roi:
         delete_temp_screenshot(captured_screenshot_path)
         press_android_back_button(instance_index)
-        press_android_back_button(instance_index)
         return False
 
     found, center = find_template_center_on_screen(template_path, captured_screenshot_path, roi=roi)
@@ -127,15 +125,12 @@ def donate_to_alliance_tech(instance_index):
     if not found or center is None:
         log_message("Tech thumbnail NOT found. Aborting task.", level="warning")
         press_android_back_button(instance_index)
-        press_android_back_button(instance_index)
         return False
     cx, cy = center
 
     click_on_coordinates(cx + 50, cy + 50, instance_index)
     long_press_on_coordinates(513, 1032, 5000, instance_index)  # 5 seconds
 
-    press_android_back_button(instance_index)
-    press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return True
 
@@ -159,8 +154,6 @@ def turn_on_autojoin(instance_index):
     click_on_coordinates(434, 600, instance_index)
     click_on_coordinates(500, 1095, instance_index)
 
-    press_android_back_button(instance_index)
-    press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return True
 
@@ -301,7 +294,6 @@ def claim_alliance_chests(instance_index):
         click_on_coordinates(360, 1208, instance_index)
     # Android back button 2 times
     press_android_back_button(instance_index)
-    press_android_back_button(instance_index)
     return True
 
 
@@ -325,7 +317,6 @@ def claim_triumph(instance_index):
     click_on_coordinates(360, 870, instance_index)
     for _ in range(3):
         click_on_coordinates(360, 38, instance_index)
-    press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return True
 
@@ -356,7 +347,6 @@ def claim_recruit_hero_free_chest(instance_index):
     if not ensure_hero_recruit_screen(instance_index):
         log_message("Could not reach the recruit hero chest screen, aborting task.", level="warning")
         press_android_back_button(instance_index)
-        press_android_back_button(instance_index)
         return False, 2 * 60 * 60
 
     # Take screenshot and search for free chests
@@ -366,7 +356,6 @@ def claim_recruit_hero_free_chest(instance_index):
     if not screenshot_path or not template_path or not roi:
         delete_temp_screenshot(screenshot_path)
         log_message("Could not get screenshot, template, or ROI for free hero chests.", level="error")
-        press_android_back_button(instance_index)
         press_android_back_button(instance_index)
         return False, 2 * 60 * 60
 
@@ -386,7 +375,6 @@ def claim_recruit_hero_free_chest(instance_index):
     if not ensure_hero_recruit_screen(instance_index):
         log_message("Could not return to the recruit hero chest screen to read the timer, using default value (2 hours).", level="warning")
         press_android_back_button(instance_index)
-        press_android_back_button(instance_index)
         return False, 2 * 60 * 60
 
     # Read the countdown timer on screen
@@ -399,7 +387,6 @@ def claim_recruit_hero_free_chest(instance_index):
         reschedule = 2 * 60 * 60
 
     # Return to main screen
-    press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return True, reschedule
 
@@ -441,7 +428,6 @@ def claim_storehouse_stamina(instance_index):
         log_message("No timer detected on screen, using default value (4 hours).", level="warning")
         return False
 
-    press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return True, reschedule
 
@@ -692,7 +678,6 @@ def claim_tundra_trek_supplies(instance_index):
         reschedule = 6 * 60 * 60
 
     press_android_back_button(instance_index)
-    press_android_back_button(instance_index)
     return True, reschedule
 
 
@@ -797,7 +782,6 @@ def _finish_pet_adventure_starts(instance_index, result):
         tuple: (bool, reschedule_seconds).
     """
     press_android_back_button(instance_index)
-    press_android_back_button(instance_index)
     if result == "no_attempts":
         reschedule = get_seconds_until_utc_midnight(instance_index, fallback=PET_ADVENTURE_CHESTS_DAILY_LIMIT_RESCHEDULE_SECONDS)
         if reschedule is not None:
@@ -861,7 +845,6 @@ def send_pet_adventure_chests(instance_index):
         if not chests or len(chests) < 3:
             log_message(f"Detected {len(chests) if chests else 0} pet adventure chests, expected 3. Aborting task.", level="warning")
             press_android_back_button(instance_index)
-            press_android_back_button(instance_index)
             return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
 
         # Step 1: open a chest 3 that is ready, then re-detect (a new chest appeared)
@@ -873,7 +856,6 @@ def send_pet_adventure_chests(instance_index):
                 chest3_ready["y"] + chest3_ready["h"] // 2,
             ):
                 log_message("Could not open the ready chest 3, aborting task.", level="warning")
-                press_android_back_button(instance_index)
                 press_android_back_button(instance_index)
                 return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
             continue
@@ -895,7 +877,6 @@ def send_pet_adventure_chests(instance_index):
             ):
                 log_message("Could not open the ready pet adventure chest, aborting task.", level="warning")
                 press_android_back_button(instance_index)
-                press_android_back_button(instance_index)
                 return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
             continue  # a chest 3 may have appeared, re-detect it
 
@@ -907,11 +888,9 @@ def send_pet_adventure_chests(instance_index):
         # Step 5: nothing to do, reschedule in 5 hours
         log_message("Nothing to do with the pet adventure chests, rescheduling in 5 hours.", level="info")
         press_android_back_button(instance_index)
-        press_android_back_button(instance_index)
         return True, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
 
     log_message("Pet adventure chests task exceeded its safety bound and aborted.", level="warning")
-    press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return False, PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS
 
