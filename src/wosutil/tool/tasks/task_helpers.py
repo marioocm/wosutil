@@ -984,6 +984,7 @@ def start_pet_adventure_chest(instance_index, x, y):
     if not click_on_template("pet_adventure_start_button", instance_index, delay=1.5):
         log_message("Start button NOT found, daily chest attempts are probably exhausted.", level="warning")
         press_android_back_button(instance_index, delay=1.0)
+        press_android_back_button(instance_index, delay=1.0)
         return "no_attempts"
 
     # The start button opens a confirmation panel; press back to return to the
@@ -1289,6 +1290,7 @@ def open_pet_adventure_chest(instance_index, x, y):
     click_on_coordinates(x, y, instance_index, delay=1.0)
     click_on_coordinates(371, 810, instance_index)
     time.sleep(2.0)
+    press_android_back_button(instance_index, delay=1.0)
     press_android_back_button(instance_index, delay=1.0)
     return True
 
