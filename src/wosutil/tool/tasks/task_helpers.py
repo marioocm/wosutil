@@ -10,6 +10,8 @@ import time
 from wosutil.config import (
     CLICK_DELAY,
     COORDINATES,
+    GAME_BOOT_GRACE_SECONDS,
+    GAME_PROCESS_RECHECK_SECONDS,
     INTEL_BEAST_MARCH_SENT_WAIT_SECONDS,
     INTEL_BEAST_MAX_RETRIES,
     INTEL_BEAST_MAX_WAIT_SECONDS,
@@ -59,10 +61,12 @@ def is_game_on_city_screen(instance_index):
 def launch_and_reach_city_screen(instance_index):
     """Launch the game and wait until the main city screen is reached.
 
-    Instead of verifying the process for its full duration first and only
-    then navigating, each iteration checks the process, then navigates
-    (back to dismiss startup popups, world-to-city switch) until the city
-    screen is detected, so fast devices finish as soon as the game opens.
+    After relaunching, the game process is polled (without screenshots or
+    navigation) until it appears, so loading screens are never hammered with
+    back presses while the game is still cold-booting. Each navigation check
+    then re-verifies a missing process once before giving up, since a single
+    empty pidof is often a transient ADB hiccup (e.g. right after an ADB
+    server restart) rather than a dead game.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -82,21 +86,38 @@ def launch_and_reach_city_screen(instance_index):
     # Relaunch the game
     launch_game_activity(instance_index)
 
+    # Let the game cold-boot: poll the process without screenshots or back
+    # presses, so navigation only starts once the game is actually up.
+    boot_polls = max(1, int(GAME_BOOT_GRACE_SECONDS / 3))
+    for _ in range(boot_polls):
+        if is_wos_running(instance_index, verbose=False):
+            break
+        if stop_signal.wait(timeout=3):
+            raise ToolStopped()
+    else:
+        log_message(f"Game process not detected during boot on instance {instance_index}.", "warning")
+        return False
+
     # Verify the process stays active and navigate to the main screen
     for check in range(1, 11):
         if stop_signal.wait(timeout=3):
             raise ToolStopped()
         if not is_wos_running(instance_index, verbose=False):
-            log_message(f"Game process not detected during check {check}/10 on instance {instance_index}.", "warning")
-            return False
+            # A single missing process reading can be a transient ADB hiccup
+            # rather than a dead game: re-check once before failing.
+            if stop_signal.wait(timeout=GAME_PROCESS_RECHECK_SECONDS):
+                raise ToolStopped()
+            if not is_wos_running(instance_index, verbose=False):
+                log_message(f"Game process not detected during check {check}/10 on instance {instance_index}.", "warning")
+                return False
         if is_game_on_city_screen(instance_index):
             log_message(f"Game main screen reached on instance {instance_index}.", "success")
             return True
         if is_game_on_world_screen(instance_index):
-            log_message("Game is on world screen.", "info")
+            log_message(f"Game is on world screen on instance {instance_index}.", "info")
             go_cityworld(instance_index)
         else:
-            log_message(f"Not on main screen. Pressing back (check {check}/10).", "info")
+            log_message(f"Not on main screen on instance {instance_index}. Pressing back (check {check}/10).", "info")
             press_android_back_button(instance_index)
 
     log_message(f"Could not reach the main city screen on instance {instance_index}.", "error")
@@ -117,13 +138,13 @@ def _reach_city_screen(instance_index, attempt_label):
     for attempt in range(1, MAIN_SCREEN_MAX_ATTEMPTS + 1):
         stop_signal.check()
         if is_game_on_city_screen(instance_index):
-            log_message("Successfully on main screen ('city')!", level="success")
+            log_message(f"Successfully on main screen ('city') on instance {instance_index}!", level="success")
             return True
         if is_game_on_world_screen(instance_index):
-            log_message("Game is on world screen.", level="info")
+            log_message(f"Game is on world screen on instance {instance_index}.", level="info")
             go_cityworld(instance_index)
         else:
-            log_message(f"Not on main screen. Pressing back ({attempt_label} {attempt}/{MAIN_SCREEN_MAX_ATTEMPTS}).", level="info")
+            log_message(f"Not on main screen on instance {instance_index}. Pressing back ({attempt_label} {attempt}/{MAIN_SCREEN_MAX_ATTEMPTS}).", level="info")
             press_android_back_button(instance_index)
     return False
 
@@ -176,10 +197,10 @@ def ensure_city_screen(instance_index):
         if _reach_city_screen(instance_index, "Attempt"):
             return True
         # The game is running but its screen is stuck: restart it once.
-        log_message("Could not reach city screen after all attempts. Restarting game and retrying...", level="warning")
+        log_message(f"Could not reach city screen after all attempts on instance {instance_index}. Restarting game and retrying...", level="warning")
         stop_signal.check()
         if not launch_and_reach_city_screen(instance_index):
-            log_message("Game restart failed. Cannot reach city screen.", level="error")
+            log_message(f"Game restart failed on instance {instance_index}. Cannot reach city screen.", level="error")
             return False
     return True
 
@@ -454,7 +475,7 @@ def is_game_on_screen(instance_index, template_name, roi_name=None, screenshot_p
     Returns:
         bool: True if on the screen, False otherwise.
     """
-    log_message(f"Checking if on '{template_name}' screen...", level="info")
+    log_message(f"Checking if on '{template_name}' screen on instance {instance_index}...", level="info")
     owned_screenshot = screenshot_path is None
     captured_screenshot_path = take_screenshot(instance_index) if screenshot_path is None else screenshot_path
     if not captured_screenshot_path:
