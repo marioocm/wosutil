@@ -12,7 +12,6 @@ from wosutil.emulator.emulator_manager import (
     delete_temp_screenshot,
     long_press_on_coordinates,
     press_android_back_button,
-    scroll_screen,
     take_screenshot,
 )
 from wosutil.emulator.image_utils import (
@@ -50,12 +49,12 @@ from wosutil.tool.tasks.task_helpers import (
     go_alliance_tab,
     go_cityworld,
     go_exploration_tab,
+    go_island,
     go_pet_adventure,
     go_pet_skill,
     go_rally_tab,
     go_shop,
     go_sidemenu_city,
-    go_sidemenu_daily,
     go_tundra_trek,
     is_game_on_intel_screen,
     is_game_on_pet_adventure_screen,
@@ -157,17 +156,8 @@ def claim_island_idle(instance_index):
         bool: True if successful, False otherwise.
     """
     log_message("Attempting to claim island idle income...", level="info")
-    if not go_sidemenu_daily(instance_index):
+    if not go_island(instance_index):
         return False
-
-    scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=500, delay=1.0)
-
-    if not click_on_text("Tree", instance_index, roi="sidemenu", delay=4):
-        log_message("Tree entry NOT found in side menu. Aborting.", level="warning")
-        return False
-
-    click_on_coordinates(100, 70, instance_index)
-    click_on_coordinates(100, 70, instance_index, delay=0.8)
 
     # Search for life essence
     found_any = False

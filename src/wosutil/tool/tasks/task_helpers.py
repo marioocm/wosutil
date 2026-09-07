@@ -753,6 +753,33 @@ def go_pet_adventure(instance_index):
     return True
 
 
+def go_island(instance_index):
+    """Navigates to the island screen by opening the side menu on the Daily tab and clicking the Tree entry by text.
+
+    Scrolls the side menu to reveal the Tree entry, then dismisses the hand
+    tutorial overlay once the island is open.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True if the island was reached, False otherwise.
+    """
+    if not go_sidemenu_daily(instance_index):
+        return False
+
+    scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=500, delay=1.0)
+
+    if not click_on_text("Tree", instance_index, roi="sidemenu", delay=4):
+        log_message("Tree entry NOT found in side menu. Aborting.", level="warning")
+        return False
+
+    # Removing hand tutorial from screen
+    click_on_coordinates(100, 70, instance_index)
+    click_on_coordinates(100, 70, instance_index, delay=0.8)
+    return True
+
+
 def go_hero_recruit_screen(instance_index):
     """Navigates to the hero recruit screen by clicking on the heroes button and the recruit tab.
 
