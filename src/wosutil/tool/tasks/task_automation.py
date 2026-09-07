@@ -52,6 +52,7 @@ from wosutil.tool.tasks.task_helpers import (
     go_exploration_tab,
     go_pet_adventure,
     go_pet_skill,
+    go_rally_tab,
     go_shop,
     go_sidemenu_city,
     go_sidemenu_daily,
@@ -150,11 +151,9 @@ def turn_on_autojoin(instance_index):
         bool: True if successful, False otherwise.
     """
     log_message("Attempting to turn on auto-join for alliance...", level="info")
-    if not go_alliance_tab(instance_index):
+    if not go_rally_tab(instance_index):
         return False
 
-    click_on_coordinates(196, 665, instance_index, delay=1.5)
-    click_on_coordinates(130, 130, instance_index)
     click_on_coordinates(360, 1225, instance_index)
     click_on_coordinates(434, 600, instance_index)
     click_on_coordinates(500, 1095, instance_index)

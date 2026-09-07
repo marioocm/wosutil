@@ -541,7 +541,11 @@ def go_worldmap_search(instance_index, scroll=True):
 
 
 def go_alliance_tab(instance_index):
-    """Navigates to the alliance tab, ensuring the city screen first.
+    """Navigates to the alliance tab from the city or world screen.
+
+    The alliance button is reachable with the same click from both the
+    city and the world screen, so only when on neither screen it ensures
+    the city screen first.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -549,9 +553,28 @@ def go_alliance_tab(instance_index):
     Returns:
         bool: True if the alliance tab was reached, False otherwise.
     """
-    if not ensure_city_screen(instance_index):
+    if not is_game_on_city_screen(instance_index) and not is_game_on_world_screen(instance_index) and not ensure_city_screen(instance_index):
         return False
     click_on("alliance", instance_index, delay=1.5)
+    return True
+
+
+def go_rally_tab(instance_index):
+    """Navigates to the alliance rally tab.
+
+    Opens the alliance tab and then the rally tab with the two fixed
+    clicks used e.g. by the autojoin flow.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True if the rally tab was reached, False otherwise.
+    """
+    if not go_alliance_tab(instance_index):
+        return False
+    click_on_coordinates(196, 665, instance_index)
+    click_on_coordinates(130, 130, instance_index)
     return True
 
 
@@ -1639,11 +1662,11 @@ def _pick_valid_rally(countdowns, join_buttons):
 def join_bear_rally(instance_index, march):
     """Joins an ally rally against the bear with the given march.
 
-    Ensures the world map, opens the rallies panel and joins the first rally
-    whose 'Rallying: HH:MM:SS' countdown still has enough time, clicking the
+    Opens the alliance rally tab and joins the first rally whose
+    'Rallying: HH:MM:SS' countdown still has enough time, clicking the
     join button right below that countdown and deploying the march with
     :func:`send_march`, closing the screens with an Android back press so the
-    next attempt starts from a clean world map. When no valid rally is on
+    next attempt starts clean. When no valid rally is on
     screen it closes the panel the same way and retries after
     BEAR_RALLY_RETRY_SECONDS, looping until a rally is joined or the tool is
     stopped.
@@ -1660,14 +1683,8 @@ def join_bear_rally(instance_index, march):
     """
     while True:
         stop_signal.check()
-        if not ensure_world_screen(instance_index):
+        if not go_rally_tab(instance_index):
             return None
-
-        if not click_on_template("worldmap_rallies", instance_index, roi=get_roi("worldmap_rallies"), delay=0.8):
-            # An overlay is still open (e.g. the rallies panel or a leftover
-            # march screen): close it and retry from a clean world map.
-            press_android_back_button(instance_index)
-            continue
 
         read_at = time.time()
         screenshot_path = take_screenshot(instance_index)
@@ -1683,7 +1700,7 @@ def join_bear_rally(instance_index, march):
 
         rally = _pick_valid_rally(countdowns, join_buttons)
         if rally is None:
-            # Close the rallies panel back to the world map before retrying.
+            # Close the rallies panel before retrying.
             press_android_back_button(instance_index)
             time.sleep(BEAR_RALLY_RETRY_SECONDS)
             continue
@@ -1705,7 +1722,7 @@ def join_bear_rally(instance_index, march):
             press_android_back_button(instance_index)
             time.sleep(BEAR_RALLY_RETRY_SECONDS)
             continue
-        # Back to the world map so the next rally attempt starts clean.
+        # Back so the next rally attempt starts clean.
         press_android_back_button(instance_index)
         elapsed = time.time() - read_at
         return max(0, timer_seconds + BEAR_RALLY_MARGIN_SECONDS - elapsed)

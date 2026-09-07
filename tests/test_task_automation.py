@@ -13,6 +13,7 @@ from wosutil.tool.tasks.task_automation import (
     _next_bear_hunt_start,
     activate_daily_pet_skills,
     play_bear_trap,
+    turn_on_autojoin,
 )
 
 NEXT_HUNT = (2026, 8, 26, 12, 0)  # 2026-08-26 12:00 UTC
@@ -291,6 +292,33 @@ class TestBearTrapPrepareAndJoin(unittest.TestCase):
         self.assertTrue(result)
         call_rally.assert_not_called()
         join.assert_called_once_with(0, 1)
+
+
+class TestTurnOnAutojoin(unittest.TestCase):
+    """Test the turn_on_autojoin flow through the rally tab."""
+
+    def test_goes_through_rally_tab(self):
+        """It reaches the rally tab via go_rally_tab before enabling auto-join."""
+        with patch("wosutil.tool.tasks.task_automation.go_rally_tab", return_value=True) as go_rally, patch("wosutil.tool.tasks.task_automation.click_on_coordinates") as click_coords, patch(
+            "wosutil.tool.tasks.task_automation.press_android_back_button"
+        ) as back_button:
+            result = turn_on_autojoin(0)
+
+        self.assertTrue(result)
+        go_rally.assert_called_once_with(0)
+        self.assertEqual(click_coords.call_count, 3)
+        self.assertEqual(back_button.call_count, 3)
+
+    def test_returns_false_when_rally_tab_unreachable(self):
+        """When the rally tab cannot be reached it returns False without clicking."""
+        with patch("wosutil.tool.tasks.task_automation.go_rally_tab", return_value=False), patch("wosutil.tool.tasks.task_automation.click_on_coordinates") as click_coords, patch(
+            "wosutil.tool.tasks.task_automation.press_android_back_button"
+        ) as back_button:
+            result = turn_on_autojoin(0)
+
+        self.assertFalse(result)
+        click_coords.assert_not_called()
+        back_button.assert_not_called()
 
 
 if __name__ == "__main__":
