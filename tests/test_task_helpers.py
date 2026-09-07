@@ -323,15 +323,15 @@ class TestGatherTile(unittest.TestCase):
 
         self.assertEqual(result, 60)
         self.go_search.assert_called_once_with(0)
-        self.click_text.assert_any_call("Wood", 0, roi=(0, 843, 718, 435), fuzzy=True)
-        self.click_text.assert_any_call("Search", 0, roi=(0, 843, 718, 435), delay=3.0, last=True, fuzzy=True)
-        self.click_text.assert_any_call("Gather", 0, roi=(117, 200, 488, 563), last=True, fuzzy=True)
+        self.click_text.assert_any_call("Wood", 0, roi="worldmap_search", fuzzy=True)
+        self.click_text.assert_any_call("Search", 0, roi="worldmap_search", delay=3.0, last=True, fuzzy=True)
+        self.click_text.assert_any_call("Gather", 0, roi="gathering_tile_info", last=True, fuzzy=True)
         self.send_march.assert_called_once_with(0)
         self.click_template_repeatedly.assert_called_once_with(
             "gather_tile_increase_level",
             0,
             clicks=10,
-            roi=(0, 843, 718, 435),
+            roi="worldmap_search",
             gray=False,
             threshold=0.92,
         )
@@ -349,7 +349,7 @@ class TestGatherTile(unittest.TestCase):
         result = gather_tile(0, "meat")
 
         self.assertEqual(result, 60)
-        self.click_text.assert_any_call("Meat", 0, roi=(0, 843, 718, 435), fuzzy=True)
+        self.click_text.assert_any_call("Meat", 0, roi="worldmap_search", fuzzy=True)
 
     def test_invalid_resource_is_rejected_before_navigation(self):
         """An unsupported resource does not interact with the emulator."""
@@ -514,14 +514,14 @@ class TestGoSidemenuTab(unittest.TestCase):
         """The City tab selector opens the side menu and clicks 'City'."""
         self.assertTrue(go_sidemenu_city(0))
         self.go_sidemenu.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("City", 0, roi=(0, 173, 484, 759), delay=1.0)
+        self.click_text.assert_called_once_with("City", 0, roi="sidemenu", delay=1.0)
 
     def test_go_sidemenu_daily_clicks_daily_tab(self):
         """The Daily tab selector opens the side menu, clicks 'Daily', and unchecks the hide-completed-mission box."""
         self.assertTrue(go_sidemenu_daily(0))
         self.go_sidemenu.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Daily", 0, roi=(0, 173, 484, 759), delay=1.0)
-        self.click_template.assert_called_once_with("sidemenu_daily_hide_completed_mission", 0, roi=(0, 173, 484, 759))
+        self.click_text.assert_called_once_with("Daily", 0, roi="sidemenu", delay=1.0)
+        self.click_template.assert_called_once_with("sidemenu_daily_hide_completed_mission", 0, roi="sidemenu")
 
     def test_returns_false_when_side_menu_not_opened(self):
         """The selectors fail when the side menu cannot be opened."""
@@ -560,7 +560,7 @@ class TestGoTundraTrek(unittest.TestCase):
         """The Daily tab is opened and the Tundra Trek entry is clicked by text."""
         self.assertTrue(go_tundra_trek(0))
         self.go_sidemenu_daily.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Tundra Trek", 0, roi=(0, 173, 484, 759), delay=1.0)
+        self.click_text.assert_called_once_with("Tundra Trek", 0, roi="sidemenu", delay=1.0)
 
     def test_returns_false_when_daily_tab_not_reached(self):
         """Navigation fails when the Daily tab cannot be reached."""
@@ -595,7 +595,7 @@ class TestGoPetAdventure(unittest.TestCase):
         """The Daily tab is opened and the lowest Pet Adventure entry is clicked by text."""
         self.assertTrue(go_pet_adventure(0))
         self.go_sidemenu_daily.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Pet Adventure", 0, roi=(0, 173, 484, 759), delay=1.0, last=True)
+        self.click_text.assert_called_once_with("Pet Adventure", 0, roi="sidemenu", delay=1.0, last=True)
 
     def test_returns_false_when_daily_tab_not_reached(self):
         """Navigation fails when the Daily tab cannot be reached."""
@@ -663,6 +663,25 @@ class TestClickOnTemplate(unittest.TestCase):
         _args, kwargs = self.find_center.call_args
         self.assertTrue(kwargs.get("grayscale"))
 
+    def test_resolves_roi_name(self):
+        """An ROI name is resolved via get_roi before searching."""
+        self.find_center.return_value = (True, (10, 20))
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+            self.assertTrue(click_on_template("my_template", 0, roi="my_roi"))
+        get_roi.assert_called_once_with("my_roi")
+        self.find_center.assert_called_once()
+        _args, kwargs = self.find_center.call_args
+        self.assertEqual(kwargs.get("roi"), (1, 2, 3, 4))
+        self.click_coords.assert_called_once_with(10, 20, 0, delay=CLICK_DELAY)
+
+    def test_returns_false_when_roi_name_missing(self):
+        """A missing ROI name fails without taking a screenshot."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+            self.assertFalse(click_on_template("my_template", 0, roi="missing_roi"))
+        self.take_screenshot.assert_not_called()
+        self.find_center.assert_not_called()
+        self.click_coords.assert_not_called()
+
 
 class TestClickTemplateRepeatedly(unittest.TestCase):
     """Test the single-search repeated-click template helper."""
@@ -705,6 +724,28 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
         self.assertEqual(self.click_coords.call_count, 10)
         self.assertTrue(all(call_args == call(50, 60, 0, delay=0.1) for call_args in self.click_coords.call_args_list))
         self.delete_screenshot.assert_called_once_with("/tmp/shot.png")
+
+    def test_resolves_roi_name(self):
+        """An ROI name is resolved via get_roi before searching."""
+        self.find_center.return_value = (True, (50, 60))
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+            self.assertTrue(_click_template_repeatedly("my_template", 0, clicks=2, roi="my_roi"))
+        get_roi.assert_called_once_with("my_roi")
+        self.find_center.assert_called_once_with(
+            "/tmp/template.png",
+            "/tmp/shot.png",
+            threshold=SCREEN_CHECK_THRESHOLD,
+            roi=(1, 2, 3, 4),
+            grayscale=False,
+        )
+
+    def test_returns_false_when_roi_name_missing(self):
+        """A missing ROI name fails without taking a screenshot."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+            self.assertFalse(_click_template_repeatedly("my_template", 0, clicks=2, roi="missing_roi"))
+        self.take_screenshot.assert_not_called()
+        self.find_center.assert_not_called()
+        self.click_coords.assert_not_called()
 
 
 class TestClickFirstFoundTemplate(unittest.TestCase):
@@ -749,6 +790,22 @@ class TestClickFirstFoundTemplate(unittest.TestCase):
         """None is returned when the screenshot cannot be captured."""
         self.take_screenshot.return_value = None
         self.assertIsNone(click_first_found_template(0, ["a", "b"]))
+        self.click_template.assert_not_called()
+
+    def test_resolves_roi_name(self):
+        """An ROI name is resolved once and the tuple is forwarded."""
+        self.click_template.side_effect = [True]
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+            result = click_first_found_template(0, ["a"], roi="my_roi")
+        self.assertEqual(result, "a")
+        get_roi.assert_called_once_with("my_roi")
+        self.click_template.assert_called_once_with("a", 0, roi=(1, 2, 3, 4), delay=CLICK_DELAY, gray=False, screenshot_path="/tmp/shot.png")
+
+    def test_returns_none_when_roi_name_missing(self):
+        """A missing ROI name fails without taking a screenshot."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+            self.assertIsNone(click_first_found_template(0, ["a"], roi="missing_roi"))
+        self.take_screenshot.assert_not_called()
         self.click_template.assert_not_called()
 
 
@@ -807,6 +864,23 @@ class TestClickOnText(unittest.TestCase):
         self.find_center.return_value = (True, (10, 20))
         self.assertTrue(click_on_text("City", 0))
         self.delete_temp_screenshot.assert_called_once_with("/tmp/shot.png")
+
+    def test_resolves_roi_name(self):
+        """An ROI name is resolved via get_roi before searching."""
+        self.find_center.return_value = (True, (10, 20))
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+            self.assertTrue(click_on_text("City", 0, roi="my_roi"))
+        get_roi.assert_called_once_with("my_roi")
+        self.find_center.assert_called_once_with("/tmp/shot.png", "City", roi=(1, 2, 3, 4), instance_index=0, debug_label="click_text_City", last=False)
+        self.click_coords.assert_called_once_with(10, 20, 0, delay=CLICK_DELAY)
+
+    def test_returns_false_when_roi_name_missing(self):
+        """A missing ROI name fails without taking a screenshot."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+            self.assertFalse(click_on_text("City", 0, roi="missing_roi"))
+        self.take_screenshot.assert_not_called()
+        self.find_center.assert_not_called()
+        self.click_coords.assert_not_called()
 
 
 class TestIsGameOnScreen(unittest.TestCase):

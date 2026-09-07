@@ -110,29 +110,12 @@ def donate_to_alliance_tech(instance_index):
 
     click_on_coordinates(535, 935, instance_index)
 
-    captured_screenshot_path = take_screenshot(instance_index)
-    if not captured_screenshot_path:
-        return False
-
-    template_path = get_template_path("tech_thumb")
-    roi = get_roi("tech_thumb")
-
-    if not template_path or not roi:
-        delete_temp_screenshot(captured_screenshot_path)
-        press_android_back_button(instance_index)
-        press_android_back_button(instance_index)
-        return False
-
-    found, center = find_template_center_on_screen(template_path, captured_screenshot_path, roi=roi)
-    delete_temp_screenshot(captured_screenshot_path)
-    if not found or center is None:
+    if not click_on_template("tech_thumb", instance_index, roi="tech_thumb"):
         log_message("Tech thumbnail NOT found. Aborting task.", level="warning")
         press_android_back_button(instance_index)
         press_android_back_button(instance_index)
         return False
-    cx, cy = center
 
-    click_on_coordinates(cx + 50, cy + 50, instance_index)
     long_press_on_coordinates(513, 1032, 5000, instance_index)  # 5 seconds
 
     press_android_back_button(instance_index)
@@ -179,7 +162,7 @@ def claim_island_idle(instance_index):
 
     scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=500, delay=1.0)
 
-    if not click_on_text("Tree", instance_index, roi=get_roi("sidemenu"), delay=4):
+    if not click_on_text("Tree", instance_index, roi="sidemenu", delay=4):
         log_message("Tree entry NOT found in side menu. Aborting.", level="warning")
         return False
 
@@ -421,13 +404,7 @@ def claim_storehouse_stamina(instance_index):
     click_on("profile", instance_index, delay=0.7)
     click_on_coordinates(235, 1112, instance_index, delay=0.7)
 
-    roi = get_roi("storehouse_claim_stamina")
-    if not roi:
-        log_message("Could not get ROI for storehouse_claim_stamina.", level="error")
-        press_android_back_button(instance_index)
-        return False
-
-    if not click_on_template("storehouse_claim_stamina", instance_index, roi=roi, delay=0.7):
+    if not click_on_template("storehouse_claim_stamina", instance_index, roi="storehouse_claim_stamina", delay=0.7):
         log_message("Stamina was already claimed, reescheduling task.", level="info")
 
     # Search for timer in the same ROI
@@ -469,7 +446,7 @@ def claim_nomadic_shop_rss_and_vip(instance_index):
     if not go_shop(instance_index):
         return False, 10 * 60 * 60
 
-    if not click_on_text("Nomadic", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
+    if not click_on_text("Nomadic", instance_index, roi="shop_tabs", delay=1.0):
         log_message("Nomadic shop tab NOT found. Aborting.", level="warning")
         return False, 10 * 60 * 60
 
@@ -556,7 +533,7 @@ def claim_mystery_shop(instance_index):
     if not go_shop(instance_index):
         return False, 10 * 60 * 60
 
-    if not click_on_text("Mystery", instance_index, roi=get_roi("shop_tabs"), delay=1.0):
+    if not click_on_text("Mystery", instance_index, roi="shop_tabs", delay=1.0):
         log_message("Mystery shop tab NOT found. Aborting.", level="warning")
         return False, 10 * 60 * 60
 
@@ -711,7 +688,7 @@ def start_tundra_trek_idle(instance_index):
 
     end_tundra_trek_idle_if_active(instance_index)
 
-    if not click_on_text("Idle", instance_index, roi=get_roi("tundra_trek_idle")):
+    if not click_on_text("Idle", instance_index, roi="tundra_trek_idle"):
         log_message("Tundra trek idle button NOT found.", level="warning")
         return False
 
@@ -944,8 +921,6 @@ def activate_daily_pet_skills(instance_index):
     if not go_pet_skill(instance_index):
         return False, PET_SKILL_RESCHEDULE_SECONDS
 
-    skills_roi = get_roi("pet_skill_buttons")
-    use_roi = get_roi("pet_skill_use")
     ox_gathered = False
 
     while True:
@@ -973,20 +948,19 @@ def activate_daily_pet_skills(instance_index):
 
         # Try to activate a pet skill
         activated = False
-        if skills_roi:
-            skill_templates = [skill_name for skill_name, _ in PET_SKILLS if not ox_gathered or skill_name != "pet_skill_ox"]
-            clicked_skill = click_first_found_template(
-                instance_index,
-                skill_templates,
-                roi=skills_roi,
-                delay=0.8,
-            )
-            if clicked_skill is not None:
-                log_message(f"Found {clicked_skill}, clicking to activate it...", level="info")
-                if click_on_template("pet_skill_use", instance_index, roi=use_roi, delay=1.0):
-                    activated = True
-                else:
-                    log_message("Use button NOT found after clicking a pet skill.", level="warning")
+        skill_templates = [skill_name for skill_name, _ in PET_SKILLS if not ox_gathered or skill_name != "pet_skill_ox"]
+        clicked_skill = click_first_found_template(
+            instance_index,
+            skill_templates,
+            roi="pet_skill_buttons",
+            delay=0.8,
+        )
+        if clicked_skill is not None:
+            log_message(f"Found {clicked_skill}, clicking to activate it...", level="info")
+            if click_on_template("pet_skill_use", instance_index, roi="pet_skill_use", delay=1.0):
+                activated = True
+            else:
+                log_message("Use button NOT found after clicking a pet skill.", level="warning")
 
         if activated:
             continue  # re-detect the remaining skills
@@ -1030,7 +1004,7 @@ def train_troops(instance_index):
     if not go_sidemenu_city(instance_index):
         return False, 6 * 60 * 60
 
-    if not click_on_text("Infantry", instance_index, roi=get_roi("sidemenu"), delay=3):
+    if not click_on_text("Infantry", instance_index, roi="sidemenu", delay=3):
         log_message("Infantry camp entry NOT found in side menu. Aborting.", level="warning")
         return False, 6 * 60 * 60
 

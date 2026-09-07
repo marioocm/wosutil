@@ -55,7 +55,7 @@ class TestClaimNomadicShop(unittest.TestCase):
         """After opening the shop the Nomadic tab is clicked by text."""
         self.assertEqual(claim_nomadic_shop_rss_and_vip(0), (True, 3600))
         self.go_shop.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Nomadic", 0, roi=ROI_SHOP_TABS, delay=1.0)
+        self.click_text.assert_called_once_with("Nomadic", 0, roi="shop_tabs", delay=1.0)
 
     def test_fails_when_nomadic_tab_missing(self):
         """The task fails when the Nomadic tab is not found."""
@@ -113,7 +113,7 @@ class TestClaimMysteryShop(unittest.TestCase):
         """After opening the shop the Mystery tab is clicked by text."""
         self.assertEqual(claim_mystery_shop(0), (True, 3600))
         self.go_shop.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Mystery", 0, roi=ROI_SHOP_TABS, delay=1.0)
+        self.click_text.assert_called_once_with("Mystery", 0, roi="shop_tabs", delay=1.0)
 
     def test_fails_when_mystery_tab_missing(self):
         """The task fails when the Mystery tab is not found."""

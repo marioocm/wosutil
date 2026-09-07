@@ -253,7 +253,7 @@ def _ensure_task_list_utc_time(instance_index: int) -> bool:
             return True
         if uses_utc is False:
             log_message("The task list shows local time; switching it to UTC time.", level="info")
-            click_on_template("task_list_time", instance_index, roi=ROI["task_list"], delay=1.0)
+            click_on_template("task_list_time", instance_index, roi="task_list", delay=1.0)
             continue
         log_message("Could not read the task list time mode label.", level="warning")
         return False
