@@ -65,7 +65,7 @@ class TestTrainTroopCamp(unittest.TestCase):
         result = _train_troop_camp(0)
         self.assertEqual(result, 200)
         self.click_coords.assert_any_call(100, 900 - 84, 0, delay=1.0)
-        self.click_template.assert_called_once_with("train_troop_promote", 0, roi=ROI_PROMOTE, delay=1.0)
+        self.click_template.assert_called_once_with("train_troop_promote", 0, roi="train_troop_promote", delay=1.0)
         self.click_coords.assert_any_call(521, 904, 0, delay=1.0)
 
     def test_uses_train_button_when_promote_not_found(self):
@@ -113,7 +113,7 @@ class TestTrainTroopsTask(unittest.TestCase):
         self.train_camp.side_effect = [720, None, 360]
         self.assertEqual(train_troops(0), (True, 360))
         self.go_sidemenu_city.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Infantry", 0, roi=(0, 173, 484, 759), delay=3)
+        self.click_text.assert_called_once_with("Infantry", 0, roi="sidemenu", delay=3)
         self.assertEqual(self.train_camp.call_count, 3)
         self.click_coords.assert_any_call(362, 1238, 0, delay=1.0)
         self.click_coords.assert_any_call(586, 1238, 0, delay=1.0)

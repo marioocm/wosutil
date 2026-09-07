@@ -227,7 +227,10 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
     Args:
         template_name (str): Template name in TEMPLATE_PATHS.
         instance_index (int): Emulator instance index.
-        roi (tuple, optional): Region of interest (x, y, w, h).
+        roi (tuple, str or None, optional): Region of interest as an (x, y, w, h)
+            tuple, or an ROI name in the ROI dict (resolved via get_roi, fails
+            when missing). When omitted the template is searched on the full
+            screen.
         delay (float): Delay after the click.
         gray (bool): Use gray-scale matching when True.
         screenshot_path (str, optional): Reuse an already taken screenshot
@@ -239,6 +242,14 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
     Returns:
         bool: True if the template was found and clicked, False otherwise.
     """
+    if isinstance(roi, str):
+        resolved_roi = get_roi(roi)
+        if resolved_roi is None:
+            log_message(f"ROI '{roi}' not found in ROI, cannot click on '{template_name}'.", level="error")
+            return False
+    else:
+        resolved_roi = roi
+
     owned_screenshot = screenshot_path is None
     if screenshot_path is None:
         screenshot_path = take_screenshot(instance_index)
@@ -247,7 +258,7 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
         return False
 
     try:
-        center = _locate_template_center(template_name, screenshot_path, roi=roi, gray=gray, threshold=threshold)
+        center = _locate_template_center(template_name, screenshot_path, roi=resolved_roi, gray=gray, threshold=threshold)
         if center is None:
             return False
         click_on_coordinates(center[0], center[1], instance_index, delay=delay)
@@ -273,7 +284,10 @@ def _click_template_repeatedly(
         template_name (str): Template name in TEMPLATE_PATHS.
         instance_index (int): Emulator instance index.
         clicks (int): Number of clicks to send after the template is found.
-        roi (tuple, optional): Region of interest (x, y, w, h).
+        roi (tuple, str or None, optional): Region of interest as an (x, y, w, h)
+            tuple, or an ROI name in the ROI dict (resolved via get_roi, fails
+            when missing). When omitted the template is searched on the full
+            screen.
         delay (float): Delay after each click.
         gray (bool): Use gray-scale matching when True. The default is color
             matching.
@@ -282,13 +296,21 @@ def _click_template_repeatedly(
     Returns:
         bool: True when the template was found and all clicks were sent.
     """
+    if isinstance(roi, str):
+        resolved_roi = get_roi(roi)
+        if resolved_roi is None:
+            log_message(f"ROI '{roi}' not found in ROI, cannot click on '{template_name}'.", level="error")
+            return False
+    else:
+        resolved_roi = roi
+
     screenshot_path = take_screenshot(instance_index)
     if not screenshot_path:
         log_message("Could not take a screenshot to search the templates.", level="error")
         return False
 
     try:
-        center = _locate_template_center(template_name, screenshot_path, roi=roi, gray=gray, threshold=threshold)
+        center = _locate_template_center(template_name, screenshot_path, roi=resolved_roi, gray=gray, threshold=threshold)
         if center is None:
             return False
         for _ in range(clicks):
@@ -312,7 +334,10 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
     Args:
         instance_index (int): Emulator instance index.
         templates (list): Template names or (template_name, gray) tuples.
-        roi (tuple, optional): Region of interest (x, y, w, h).
+        roi (tuple, str or None, optional): Region of interest as an (x, y, w, h)
+            tuple, or an ROI name in the ROI dict (resolved via get_roi, fails
+            when missing). When omitted the template is searched on the full
+            screen.
         delay (float): Delay after the click.
         screenshot_path (str, optional): Reuse an already taken screenshot
             instead of capturing a new one. Only valid when the caller can
@@ -322,6 +347,14 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
     Returns:
         str or None: The name of the clicked template, or None if none was found.
     """
+    if isinstance(roi, str):
+        resolved_roi = get_roi(roi)
+        if resolved_roi is None:
+            log_message(f"ROI '{roi}' not found in ROI, cannot search the templates.", level="error")
+            return None
+    else:
+        resolved_roi = roi
+
     owned_screenshot = screenshot_path is None
     if screenshot_path is None:
         screenshot_path = take_screenshot(instance_index)
@@ -334,7 +367,7 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
                 template_name, gray = entry
             else:
                 template_name, gray = entry, False
-            if click_on_template(template_name, instance_index, roi=roi, delay=delay, gray=gray, screenshot_path=screenshot_path):
+            if click_on_template(template_name, instance_index, roi=resolved_roi, delay=delay, gray=gray, screenshot_path=screenshot_path):
                 return template_name
         return None
     finally:
@@ -351,7 +384,9 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
     Args:
         text (str): Text to search for and click, e.g. 'Tundra Trek'.
         instance_index (int): Emulator instance index.
-        roi (tuple, optional): Region of interest (x, y, w, h).
+        roi (tuple, str or None, optional): Region of interest as an (x, y, w, h)
+            tuple, or an ROI name in the ROI dict (resolved via get_roi, fails
+            when missing). When omitted the text is searched on the full screen.
         delay (float): Delay after the click.
         screenshot_path (str, optional): Reuse an already taken screenshot
             instead of capturing a new one. Only valid when the caller can
@@ -365,6 +400,14 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
     Returns:
         bool: True if the text was found and clicked, False otherwise.
     """
+    if isinstance(roi, str):
+        resolved_roi = get_roi(roi)
+        if resolved_roi is None:
+            log_message(f"ROI '{roi}' not found in ROI, cannot click on '{text}'.", level="error")
+            return False
+    else:
+        resolved_roi = roi
+
     owned_screenshot = screenshot_path is None
     if screenshot_path is None:
         screenshot_path = take_screenshot(instance_index)
@@ -374,7 +417,7 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
 
     try:
         text_search_kwargs = {
-            "roi": roi,
+            "roi": resolved_roi,
             "instance_index": instance_index,
             "debug_label": f"click_text_{text}",
             "last": last,
@@ -604,7 +647,7 @@ def go_sidemenu_city(instance_index):
     """
     if not go_sidemenu(instance_index):
         return False
-    if not click_on_text("City", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+    if not click_on_text("City", instance_index, roi="sidemenu", delay=1.0):
         log_message("City tab NOT found in side menu. Aborting.", level="warning")
         return False
     return True
@@ -621,11 +664,11 @@ def go_sidemenu_daily(instance_index):
     """
     if not go_sidemenu(instance_index):
         return False
-    if not click_on_text("Daily", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+    if not click_on_text("Daily", instance_index, roi="sidemenu", delay=1.0):
         log_message("Daily tab NOT found in side menu. Aborting.", level="warning")
         return False
     # Uncheck "Hide completed mission" if it is checked (no-op when unchecked).
-    click_on_template("sidemenu_daily_hide_completed_mission", instance_index, roi=get_roi("sidemenu"))
+    click_on_template("sidemenu_daily_hide_completed_mission", instance_index, roi="sidemenu")
     return True
 
 
@@ -665,7 +708,7 @@ def go_tundra_trek(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_text("Tundra Trek", instance_index, roi=get_roi("sidemenu"), delay=1.0):
+    if not click_on_text("Tundra Trek", instance_index, roi="sidemenu", delay=1.0):
         log_message("Tundra trek entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
@@ -683,7 +726,7 @@ def go_pet_adventure(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_text("Pet Adventure", instance_index, roi=get_roi("sidemenu"), delay=1.0, last=True):
+    if not click_on_text("Pet Adventure", instance_index, roi="sidemenu", delay=1.0, last=True):
         log_message("Pet Adventure entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
@@ -1083,7 +1126,7 @@ def go_pet_skill(instance_index):
     """
     if not ensure_city_screen(instance_index):
         return False
-    if not click_on_template("pet_skill_button", instance_index, roi=get_roi("bottom_right_side_icons"), delay=1.0):
+    if not click_on_template("pet_skill_button", instance_index, roi="bottom_right_side_icons", delay=1.0):
         log_message("Pet skill button NOT found. Aborting.", level="warning")
         return False
     return True
@@ -1252,18 +1295,13 @@ def gather_tile(instance_index, resource):
     if not go_worldmap_search(instance_index):
         return None
 
-    search_roi = get_roi("worldmap_search")
-    if not search_roi:
-        log_message("Could not get the world-map search ROI.", level="error")
-        return None
-
-    if not click_on_text(resource.title(), instance_index, roi=search_roi, fuzzy=True):
+    if not click_on_text(resource.title(), instance_index, roi="worldmap_search", fuzzy=True):
         log_message(f"Resource '{resource}' NOT found in the world-map search.", level="warning")
         return None
 
-    _click_template_repeatedly("gather_tile_increase_level", instance_index, clicks=10, roi=search_roi, gray=False, threshold=0.92)
+    _click_template_repeatedly("gather_tile_increase_level", instance_index, clicks=10, roi="worldmap_search", gray=False, threshold=0.92)
 
-    if not click_on_text("Search", instance_index, roi=search_roi, delay=3.0, last=True, fuzzy=True):
+    if not click_on_text("Search", instance_index, roi="worldmap_search", delay=3.0, last=True, fuzzy=True):
         log_message("Search button NOT found in the world-map search.", level="warning")
         return None
 
@@ -1271,11 +1309,7 @@ def gather_tile(instance_index, resource):
     if gathering_time is None:
         return None
 
-    gather_roi = get_roi("gathering_tile_info")
-    if not gather_roi:
-        log_message("Could not get the gathering tile info ROI.", level="error")
-        return None
-    if not click_on_text("Gather", instance_index, roi=gather_roi, last=True, fuzzy=True):
+    if not click_on_text("Gather", instance_index, roi="gathering_tile_info", last=True, fuzzy=True):
         log_message("Gather button NOT found on the resource tile.", level="warning")
         return None
     if not _click_leftmost_template(instance_index, "remove_hero", delay=1.0):
@@ -1364,7 +1398,7 @@ def go_intel(instance_index):
         return True
     if not ensure_world_screen(instance_index):
         return False
-    click_on_template("intel_button", instance_index, roi=get_roi("bottom_right_side_icons"), delay=0.8)
+    click_on_template("intel_button", instance_index, roi="bottom_right_side_icons", delay=0.8)
     click_on_coordinates(58, 210, instance_index)
     return True
 
@@ -1785,11 +1819,6 @@ def _click_intel_template(instance_index, templates):
     Returns:
         str or None: The name of the clicked template, or None if none was found.
     """
-    roi = get_roi("intel")
-    if not roi:
-        log_message("Could not get the ROI for 'intel'", level="error")
-        return None
-
     screenshot_path = take_screenshot(instance_index)
     if not screenshot_path:
         log_message("Could not take a screenshot for the intel template search.", level="error")
@@ -1805,8 +1834,7 @@ def _click_intel_template(instance_index, templates):
             if not screenshot_path:
                 return None
 
-        claim_roi = get_roi("intel_claim_all")
-        if claim_roi and click_on_template("intel_claim_all", instance_index, roi=claim_roi, screenshot_path=screenshot_path):
+        if click_on_template("intel_claim_all", instance_index, roi="intel_claim_all", screenshot_path=screenshot_path):
             press_android_back_button(instance_index)
             delete_temp_screenshot(screenshot_path)
             screenshot_path = take_screenshot(instance_index)
@@ -1815,7 +1843,7 @@ def _click_intel_template(instance_index, templates):
         else:
             log_message("'intel_claim_all' not found on the screen.", level="info")
 
-        return click_first_found_template(instance_index, templates, roi=roi, screenshot_path=screenshot_path)
+        return click_first_found_template(instance_index, templates, roi="intel", screenshot_path=screenshot_path)
     finally:
         delete_temp_screenshot(screenshot_path)
 
@@ -1857,7 +1885,7 @@ def kill_intel_beast(instance_index):
             )
             press_android_back_button(instance_index)
             continue
-        click_on_template("intel_button", instance_index, roi=get_roi("bottom_right_side_icons"), delay=0.8)
+        click_on_template("intel_button", instance_index, roi="bottom_right_side_icons", delay=0.8)
         return result
     log_message("The beast attack could not be confirmed after several attempts, skipping for now.", level="warning")
     return None
@@ -1885,7 +1913,7 @@ def rescue_intel_survivor(instance_index):
         return False  # No survivor found
     click_on_coordinates(360, 908, instance_index)
     click_on_coordinates(360, 620, instance_index)
-    click_on_template("intel_button", instance_index, roi=get_roi("bottom_right_side_icons"), delay=0.8)
+    click_on_template("intel_button", instance_index, roi="bottom_right_side_icons", delay=0.8)
     return True
 
 
@@ -1934,7 +1962,7 @@ def do_intel_exploration(instance_index):
         time.sleep(4 if first_retry else 5)
         first_retry = False
     press_android_back_button(instance_index)
-    click_on_template("intel_button", instance_index, roi=get_roi("bottom_right_side_icons"), delay=0.8)
+    click_on_template("intel_button", instance_index, roi="bottom_right_side_icons", delay=0.8)
     return True
 
 
@@ -1973,7 +2001,7 @@ def _train_troop_camp(instance_index):
         else:
             log_message("No non-zero troop digit found to promote from, skipping that step.", level="info")
 
-        if click_on_template("train_troop_promote", instance_index, roi=get_roi("train_troop_promote"), delay=1.0):
+        if click_on_template("train_troop_promote", instance_index, roi="train_troop_promote", delay=1.0):
             click_on_coordinates(521, 904, instance_index, delay=1.0)
         else:
             click_on_coordinates(531, 1119, instance_index, delay=1.0)
