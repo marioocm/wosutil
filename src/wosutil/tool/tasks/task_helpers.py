@@ -1772,6 +1772,7 @@ def join_bear_rally(instance_index, march):
         screenshot_path = take_screenshot(instance_index)
         if not screenshot_path:
             press_android_back_button(instance_index)
+            press_android_back_button(instance_index)
             time.sleep(BEAR_RALLY_RETRY_SECONDS)
             continue
         try:
@@ -1784,6 +1785,7 @@ def join_bear_rally(instance_index, march):
         if rally is None:
             # Close the rallies panel before retrying.
             press_android_back_button(instance_index)
+            press_android_back_button(instance_index)
             time.sleep(BEAR_RALLY_RETRY_SECONDS)
             continue
 
@@ -1795,6 +1797,8 @@ def join_bear_rally(instance_index, march):
         if result is False:
             log_message("No troops left to send to the bear rally, skipping it.", level="warning")
             press_android_back_button(instance_index)
+            press_android_back_button(instance_index)
+            press_android_back_button(instance_index)
             return None
         if result is None:
             # The join click did not open the send-march screen (e.g. the rally
@@ -1802,9 +1806,11 @@ def join_bear_rally(instance_index, march):
             # retry instead of counting the march as sent.
             log_message("Could not open the send-march screen, closing the panel and retrying.", level="warning")
             press_android_back_button(instance_index)
+            press_android_back_button(instance_index)
             time.sleep(BEAR_RALLY_RETRY_SECONDS)
             continue
         # Back so the next rally attempt starts clean.
+        press_android_back_button(instance_index)
         press_android_back_button(instance_index)
         elapsed = time.time() - read_at
         return max(0, timer_seconds + BEAR_RALLY_MARGIN_SECONDS - elapsed)
@@ -1827,6 +1833,9 @@ def call_bear_rally(instance_index):
         False: When there are no troops left to send.
         None: When the rally could not be called (a step of the flow failed).
     """
+    if not ensure_world_screen(instance_index):
+        return None
+
     if not click_on_template("bear_trap_icon", instance_index, delay=2.0):
         log_message("Bear trap icon not found on the world map, cannot call a rally.", level="warning")
         return None

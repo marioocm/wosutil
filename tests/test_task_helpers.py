@@ -1236,7 +1236,8 @@ class TestJoinBearRally(unittest.TestCase):
         self.click_coords.assert_any_call(642, 392, 0, delay=0.8)
         self.select_march.assert_called_once_with(0, 5)
         self.send_march.assert_called_once_with(0)
-        self.back_button.assert_called_once_with(0)
+        self.assertEqual(self.back_button.call_count, 2)
+        self.back_button.assert_called_with(0)
         self.sleep.assert_not_called()
 
     def test_retries_when_no_valid_rally(self):
@@ -1249,8 +1250,8 @@ class TestJoinBearRally(unittest.TestCase):
         self.sleep.assert_any_call(BEAR_RALLY_RETRY_SECONDS)
         self.assertEqual(self.go_rally_tab.call_count, 2)
         self.assertEqual(self.read_countdowns.call_count, 2)
-        # One back to close the panel without rallies, another after sending.
-        self.assertEqual(self.back_button.call_count, 2)
+        # Two backs to close the panel without rallies, two more after sending.
+        self.assertEqual(self.back_button.call_count, 4)
         self.back_button.assert_called_with(0)
 
     def test_returns_none_when_no_troops(self):
@@ -1261,7 +1262,7 @@ class TestJoinBearRally(unittest.TestCase):
 
         self.assertIsNone(result)
         self.send_march.assert_called_once_with(0)
-        self.back_button.assert_called_once_with(0)
+        self.assertEqual(self.back_button.call_count, 3)
 
     def test_retries_when_send_march_screen_not_confirmed(self):
         """When the Deploy screen never opens the join is retried, not counted as sent."""
@@ -1274,6 +1275,8 @@ class TestJoinBearRally(unittest.TestCase):
         self.sleep.assert_any_call(BEAR_RALLY_RETRY_SECONDS)
         self.assertEqual(self.go_rally_tab.call_count, 2)
         self.assertEqual(self.click_coords.call_count, 2)
+        # Two backs to close the panel after the stale join, two more after sending.
+        self.assertEqual(self.back_button.call_count, 4)
 
 
 class TestCallBearRally(unittest.TestCase):
@@ -1282,6 +1285,7 @@ class TestCallBearRally(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.ensure_world_screen", return_value=True),
             patch("wosutil.tool.tasks.task_helpers.click_on_template", return_value=True),
             patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
             patch("wosutil.tool.tasks.task_helpers.select_march"),
@@ -1291,6 +1295,7 @@ class TestCallBearRally(unittest.TestCase):
         ]
         self.mocks = [p.start() for p in self.patchers]
         (
+            self.ensure_world,
             self.click_template,
             self.click_coords,
             self.select_march,
@@ -1309,11 +1314,24 @@ class TestCallBearRally(unittest.TestCase):
         result = call_bear_rally(0)
 
         self.assertEqual(result, 60 * 2 + BEAR_TRAP_OWN_RALLY_PREP_SECONDS)
+        self.ensure_world.assert_called_once_with(0)
         self.click_template.assert_any_call("bear_trap_icon", 0, delay=2.0)
         self.click_template.assert_any_call("bear_trap_rally", 0, delay=0.8)
         self.click_coords.assert_called_once_with(360, 812, 0, delay=0.8)
         self.select_march.assert_called_once_with(0, 4)
         self.send_march.assert_called_once_with(0)
+        self.back_button.assert_not_called()
+
+    def test_returns_none_when_not_on_world_screen(self):
+        """Without the world screen the rally is not attempted."""
+        self.ensure_world.return_value = False
+        result = call_bear_rally(0)
+
+        self.assertIsNone(result)
+        self.ensure_world.assert_called_once_with(0)
+        self.click_template.assert_not_called()
+        self.click_coords.assert_not_called()
+        self.select_march.assert_not_called()
         self.back_button.assert_not_called()
 
     def test_returns_none_when_icon_not_found(self):
