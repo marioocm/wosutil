@@ -101,6 +101,33 @@ def clear_template_cache():
     _template_cache.clear()
 
 
+def _load_screenshot_and_template(screenshot_path: str, template_path: str, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Load the screenshot and template for a search, cropping the screenshot to the ROI.
+
+    Each element is None when its own load failed, so callers keep their
+    own error handling (logging vs silent skip).
+
+    Args:
+        screenshot_path (str): Path to the screenshot image file.
+        template_path (str): Path to the template image file.
+        roi (tuple, optional): Region of interest as (x, y, w, h) to crop
+            the screenshot to.
+
+    Returns:
+        tuple: (screenshot, template) images, either None on load failure.
+    """
+    img = cv2.imread(screenshot_path)
+    if img is None:
+        return None, None
+    template = load_template(template_path)
+    if template is None:
+        return img, None
+    if roi:
+        x, y, w, h = roi
+        img = img[y : y + h, x : x + w]
+    return img, template
+
+
 def find_multiple_templates(
     template_path: str,
     screenshot_path: str,
@@ -121,17 +148,9 @@ def find_multiple_templates(
         list: List of tuples (x, y, w, h) for each found instance (after NMS).
     """
     try:
-        img_rgb = cv2.imread(screenshot_path)
-        if img_rgb is None:
+        img_rgb, template = _load_screenshot_and_template(screenshot_path, template_path, roi)
+        if img_rgb is None or template is None:
             return []
-
-        template = load_template(template_path)
-        if template is None:
-            return []
-
-        if roi:
-            x, y, w, h = roi
-            img_rgb = img_rgb[y : y + h, x : x + w]
 
         res = cv2.matchTemplate(img_rgb, template, cv2.TM_CCOEFF_NORMED)
         locations = np.where(res >= threshold)
@@ -798,13 +817,12 @@ def find_template_center_on_screen(
         tuple: (True, (cx, cy)) if found, (False, None) if not.
     """
     try:
-        img = cv2.imread(screenshot_path)
+        img, template = _load_screenshot_and_template(screenshot_path, template_path, roi)
         if img is None:
             msg = f"Error loading screenshot: {screenshot_path}"
             log_message(msg, level="error")
             return False, None
 
-        template = load_template(template_path)
         if template is None:
             msg = f"Error loading template: {template_path}"
             log_message(msg, level="error")
@@ -816,10 +834,6 @@ def find_template_center_on_screen(
         if grayscale:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-
-        if roi:
-            x, y, w, h = roi
-            img = img[y : y + h, x : x + w]
 
         res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
         _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
