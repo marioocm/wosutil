@@ -30,8 +30,10 @@ from wosutil.tool.tasks.task_helpers import (
     click_on_text,
     ensure_hero_recruit_screen,
     gather_tile,
+    go_alliance_tab,
     go_hero_recruit_screen,
     go_pet_adventure,
+    go_rally_tab,
     go_sidemenu_city,
     go_sidemenu_daily,
     go_tundra_trek,
@@ -1005,14 +1007,82 @@ class TestReadRallyHelpers(unittest.TestCase):
         mock_find.assert_called_once_with("/tmp/join.png", "/tmp/shot.png", roi=roi, threshold=0.96)
 
 
+class TestGoAllianceTab(unittest.TestCase):
+    """Test the go_alliance_tab navigation helper."""
+
+    def test_clicks_alliance_when_on_city_screen(self):
+        """On the city screen it clicks alliance without ensuring the screen."""
+        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=True), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen") as is_world, patch(
+            "wosutil.tool.tasks.task_helpers.ensure_city_screen"
+        ) as ensure_city, patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+            result = go_alliance_tab(0)
+
+        self.assertTrue(result)
+        click_on.assert_called_once_with("alliance", 0, delay=1.5)
+        ensure_city.assert_not_called()
+        is_world.assert_not_called()
+
+    def test_clicks_alliance_when_on_world_screen(self):
+        """On the world screen it clicks alliance without ensuring the city screen."""
+        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=True), patch(
+            "wosutil.tool.tasks.task_helpers.ensure_city_screen"
+        ) as ensure_city, patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+            result = go_alliance_tab(0)
+
+        self.assertTrue(result)
+        click_on.assert_called_once_with("alliance", 0, delay=1.5)
+        ensure_city.assert_not_called()
+
+    def test_ensures_city_screen_when_on_neither_screen(self):
+        """When on neither screen it ensures the city screen first."""
+        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=False), patch(
+            "wosutil.tool.tasks.task_helpers.ensure_city_screen", return_value=True
+        ) as ensure_city, patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+            result = go_alliance_tab(0)
+
+        self.assertTrue(result)
+        ensure_city.assert_called_once_with(0)
+        click_on.assert_called_once_with("alliance", 0, delay=1.5)
+
+    def test_returns_false_when_city_screen_unreachable(self):
+        """When the city screen cannot be reached it returns False without clicking."""
+        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=False), patch(
+            "wosutil.tool.tasks.task_helpers.ensure_city_screen", return_value=False
+        ), patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+            result = go_alliance_tab(0)
+
+        self.assertFalse(result)
+        click_on.assert_not_called()
+
+
+class TestGoRallyTab(unittest.TestCase):
+    """Test the go_rally_tab navigation helper."""
+
+    def test_opens_alliance_then_rally_tabs(self):
+        """It opens the alliance tab and clicks twice to reach the rally tab."""
+        with patch("wosutil.tool.tasks.task_helpers.go_alliance_tab", return_value=True) as go_alliance, patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click_coords:
+            result = go_rally_tab(0)
+
+        self.assertTrue(result)
+        go_alliance.assert_called_once_with(0)
+        click_coords.assert_has_calls([call(196, 665, 0), call(130, 130, 0)])
+
+    def test_returns_false_when_alliance_tab_fails(self):
+        """When the alliance tab cannot be reached it returns False without clicking."""
+        with patch("wosutil.tool.tasks.task_helpers.go_alliance_tab", return_value=False), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click_coords:
+            result = go_rally_tab(0)
+
+        self.assertFalse(result)
+        click_coords.assert_not_called()
+
+
 class TestJoinBearRally(unittest.TestCase):
     """Test the join_bear_rally helper."""
 
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.ensure_world_screen", return_value=True),
-            patch("wosutil.tool.tasks.task_helpers.click_on_template", return_value=True),
+            patch("wosutil.tool.tasks.task_helpers.go_rally_tab", return_value=True),
             patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"),
             patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
             patch("wosutil.tool.tasks.task_helpers._read_rally_countdowns"),
@@ -1025,8 +1095,7 @@ class TestJoinBearRally(unittest.TestCase):
         ]
         self.mocks = [p.start() for p in self.patchers]
         (
-            self.ensure_world_screen,
-            self.click_on_template,
+            self.go_rally_tab,
             self.take_screenshot,
             self.delete_screenshot,
             self.read_countdowns,
@@ -1047,7 +1116,7 @@ class TestJoinBearRally(unittest.TestCase):
             result = join_bear_rally(0, 5)
 
         self.assertEqual(result, 156 + BEAR_RALLY_MARGIN_SECONDS)
-        self.click_on_template.assert_called_once()
+        self.go_rally_tab.assert_called_once_with(0)
         self.click_coords.assert_any_call(642, 392, 0, delay=0.8)
         self.select_march.assert_called_once_with(0, 5)
         self.send_march.assert_called_once_with(0)
@@ -1062,9 +1131,9 @@ class TestJoinBearRally(unittest.TestCase):
 
         self.assertEqual(result, 156 + BEAR_RALLY_MARGIN_SECONDS)
         self.sleep.assert_any_call(BEAR_RALLY_RETRY_SECONDS)
-        self.assertEqual(self.click_on_template.call_count, 2)
+        self.assertEqual(self.go_rally_tab.call_count, 2)
         self.assertEqual(self.read_countdowns.call_count, 2)
-        # One back to close the panel without rallies, another to return to the world map after sending.
+        # One back to close the panel without rallies, another after sending.
         self.assertEqual(self.back_button.call_count, 2)
         self.back_button.assert_called_with(0)
 
@@ -1087,7 +1156,7 @@ class TestJoinBearRally(unittest.TestCase):
         self.assertEqual(result, 156 + BEAR_RALLY_MARGIN_SECONDS)
         self.send_march.assert_has_calls([call(0), call(0)])
         self.sleep.assert_any_call(BEAR_RALLY_RETRY_SECONDS)
-        self.assertEqual(self.click_on_template.call_count, 2)
+        self.assertEqual(self.go_rally_tab.call_count, 2)
         self.assertEqual(self.click_coords.call_count, 2)
 
 
