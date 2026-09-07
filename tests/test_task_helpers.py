@@ -378,7 +378,7 @@ class TestIsGameOnHeroRecruitScreen(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.get_template_path"),
             patch("wosutil.tool.tasks.task_helpers.get_roi"),
-            patch("wosutil.tool.tasks.task_helpers.find_template_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.take_screenshot, self.get_template_path, self.get_roi, self.find_template = self.mocks
@@ -389,7 +389,7 @@ class TestIsGameOnHeroRecruitScreen(unittest.TestCase):
         self.take_screenshot.return_value = "/tmp/shot.png"
         self.get_template_path.return_value = "/tmp/hero_recruit_screen.png"
         self.get_roi.return_value = (583, 164, 134, 414)
-        self.find_template.return_value = (True, (600, 200, 46, 48))
+        self.find_template.return_value = (True, (600, 200))
         self.assertTrue(is_game_on_hero_recruit_screen(0))
         self.find_template.assert_called_once_with("/tmp/hero_recruit_screen.png", "/tmp/shot.png", threshold=SCREEN_CHECK_THRESHOLD, roi=(583, 164, 134, 414))
 
@@ -616,11 +616,10 @@ class TestClickOnTemplate(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.get_template_path"),
             patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
-            patch("wosutil.tool.tasks.task_helpers.find_gray_template_center_on_screen"),
             patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.take_screenshot, self.get_template_path, self.find_center, self.find_gray_center, self.click_coords = self.mocks
+        self.take_screenshot, self.get_template_path, self.find_center, self.click_coords = self.mocks
         self.take_screenshot.return_value = "/tmp/shot.png"
         self.get_template_path.return_value = "/tmp/template.png"
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
@@ -654,11 +653,13 @@ class TestClickOnTemplate(unittest.TestCase):
         self.click_coords.assert_called_once_with(50, 60, 0, delay=CLICK_DELAY)
 
     def test_gray_variant_uses_gray_matching(self):
-        """The gray flag selects the gray-scale matching function."""
-        self.find_gray_center.return_value = (True, (10, 20))
+        """The gray flag selects gray-scale matching on the unified finder."""
+        self.find_center.return_value = (True, (10, 20))
         self.assertTrue(click_on_template("my_template", 0, gray=True, delay=0.5))
         self.click_coords.assert_called_once_with(10, 20, 0, delay=0.5)
-        self.find_center.assert_not_called()
+        self.find_center.assert_called_once()
+        _args, kwargs = self.find_center.call_args
+        self.assertTrue(kwargs.get("grayscale"))
 
 
 class TestClickTemplateRepeatedly(unittest.TestCase):
@@ -670,7 +671,6 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.get_template_path"),
             patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
-            patch("wosutil.tool.tasks.task_helpers.find_gray_template_center_on_screen"),
             patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
             patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
         ]
@@ -679,7 +679,6 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
             self.take_screenshot,
             self.get_template_path,
             self.find_center,
-            self.find_gray_center,
             self.click_coords,
             self.delete_screenshot,
         ) = self.mocks
@@ -699,8 +698,8 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
             "/tmp/shot.png",
             threshold=SCREEN_CHECK_THRESHOLD,
             roi=(1, 2, 3, 4),
+            grayscale=False,
         )
-        self.find_gray_center.assert_not_called()
         self.assertEqual(self.click_coords.call_count, 10)
         self.assertTrue(all(call_args == call(50, 60, 0, delay=0.1) for call_args in self.click_coords.call_args_list))
         self.delete_screenshot.assert_called_once_with("/tmp/shot.png")
@@ -817,7 +816,7 @@ class TestIsGameOnScreen(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.get_template_path"),
             patch("wosutil.tool.tasks.task_helpers.get_roi"),
-            patch("wosutil.tool.tasks.task_helpers.find_template_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.take_screenshot, self.get_template_path, self.get_roi, self.find_template = self.mocks
@@ -828,7 +827,7 @@ class TestIsGameOnScreen(unittest.TestCase):
         self.take_screenshot.return_value = "/tmp/shot.png"
         self.get_template_path.return_value = "/tmp/intel_screen.png"
         self.get_roi.return_value = (0, 0, 324, 98)
-        self.find_template.return_value = (True, (100, 30, 46, 48))
+        self.find_template.return_value = (True, (100, 30))
         self.assertTrue(is_game_on_screen(0, "intel_screen", "intel_screen"))
         self.get_template_path.assert_called_once_with("intel_screen")
         self.get_roi.assert_called_once_with("intel_screen")

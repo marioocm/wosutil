@@ -32,11 +32,8 @@ from wosutil.emulator.emulator_manager import (
 )
 from wosutil.emulator.image_utils import (
     find_first_non_zero_digit_position,
-    find_gray_template_center_on_screen,
-    find_gray_template_on_screen,
     find_multiple_templates,
     find_template_center_on_screen,
-    find_template_on_screen,
     find_text_center_on_screen,
     find_text_on_screen,
     read_screen_time,
@@ -215,8 +212,7 @@ def _locate_template_center(template_name, screenshot_path, roi, gray, threshold
     template_path = get_template_path(template_name)
     if not template_path:
         return None
-    finder = find_gray_template_center_on_screen if gray else find_template_center_on_screen
-    found, center = finder(template_path, screenshot_path, threshold=threshold, roi=roi)
+    found, center = find_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi, grayscale=gray)
     if not found or not center:
         return None
     return center[0], center[1]
@@ -430,7 +426,7 @@ def is_game_on_screen(instance_index, template_name, roi_name=None, screenshot_p
     roi = get_roi(roi_name) if roi_name else None
 
     try:
-        found, _ = find_template_on_screen(template_path, captured_screenshot_path, threshold=threshold, roi=roi)
+        found, _ = find_template_center_on_screen(template_path, captured_screenshot_path, threshold=threshold, roi=roi)
         return found
     finally:
         if owned_screenshot:
@@ -1912,7 +1908,7 @@ def do_intel_exploration(instance_index):
         stop_signal.check()
         screenshot_path = take_screenshot(instance_index)
         if screenshot_path and victory_template:
-            found, _ = find_gray_template_on_screen(victory_template, screenshot_path, roi=victory_roi)
+            found, _ = find_template_center_on_screen(victory_template, screenshot_path, roi=victory_roi, grayscale=True)
             delete_temp_screenshot(screenshot_path)
             if found:
                 break
