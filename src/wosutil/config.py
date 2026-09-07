@@ -184,6 +184,8 @@ TEMPLATE_PATHS = {
 # --- Automation Parameters ---
 SCREEN_CHECK_THRESHOLD = 0.8  # Confidence threshold for template matching (0.0 to 1.0)
 MAIN_SCREEN_MAX_ATTEMPTS = 5  # Max attempts to reach main screen by pressing back
+GAME_BOOT_GRACE_SECONDS = 15  # Max wait for the game process after launch before navigating
+GAME_PROCESS_RECHECK_SECONDS = 5  # Wait before re-checking a missing game process (transient ADB hiccups)
 BACK_BUTTON_DELAY = 0.6  # Short delay after pressing back button
 CLICK_DELAY = 0.6  # Delay between consecutive clicks in a sequence
 INTEL_TIMER_MIN_SECONDS = 60  # Minimum reschedule time to trust the intel screen timer OCR

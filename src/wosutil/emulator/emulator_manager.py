@@ -88,19 +88,19 @@ def execute_adb_command(command_parts, instance_index, timeout=10, log_errors_as
     full_command = backend.build_adb_command(command_parts, instance_index)
     short_command = " ".join(["adb", "-s", backend.get_serial(instance_index)] + command_parts)
 
-    log_message(f"Executing: {short_command}", level="adb")
+    log_message(f"Executing on instance {instance_index}: {short_command}", level="adb")
 
     result = run_process_robust(full_command, timeout=timeout)
     if result is None:
-        log_message(f"ADB command timed out after {timeout} seconds: {short_command}", level="error")
+        log_message(f"ADB command timed out after {timeout} seconds on instance {instance_index}: {short_command}", level="error")
         if log_errors_as_info:
-            log_message("Error executing ADB command: command timed out", level="error")
+            log_message(f"Error executing ADB command on instance {instance_index}: command timed out", level="error")
         return None
 
     # adb pull/push writes normal progress ("1 file pulled...") to stderr:
     # only treat stderr as a warning when the command actually failed.
     if result.stderr and not log_errors_as_info and result.returncode != 0:
-        log_message(f"ADB stderr: {result.stderr}", level="warning")
+        log_message(f"ADB stderr on instance {instance_index}: {result.stderr}", level="warning")
     return result
 
 
@@ -160,7 +160,7 @@ def verify_adb_connected(instance_index, max_attempts=5, wait=3, cache_seconds=1
     if last_verified and time.time() - last_verified < cache_seconds:
         return True
 
-    log_message(f"Attempting to connect ADB ({serial})...", level="adb")
+    log_message(f"Attempting to connect ADB ({serial}) on instance {instance_index}...", level="adb")
 
     for attempt in range(max_attempts):
         stop_signal.check()
@@ -169,17 +169,17 @@ def verify_adb_connected(instance_index, max_attempts=5, wait=3, cache_seconds=1
             # The 'adb devices' command itself failed or returned nothing: the
             # ADB server is broken, so re-running the same command won't help.
             # Skip the remaining retries and restart the server directly.
-            log_message("ADB devices command failed or returned no output.", level="warning")
+            log_message(f"ADB devices command failed or returned no output (instance {instance_index}).", level="warning")
             break
         state = devices.get(serial)
         if state == "device":
-            log_message("ADB connected successfully.", level="success")
+            log_message(f"ADB connected successfully on instance {instance_index}.", level="success")
             _adb_verified_cache[serial] = time.time()
             return True
         if state == "offline":
-            log_message(f"ADB device {serial} is offline. Reconnecting...", level="warning")
+            log_message(f"ADB device {serial} is offline. Reconnecting (instance {instance_index})...", level="warning")
         else:
-            log_message(f"ADB device {serial} not found in device list. Connecting...", level="warning")
+            log_message(f"ADB device {serial} not found in device list. Connecting (instance {instance_index})...", level="warning")
         _connect_adb_device(serial)
 
         if attempt < max_attempts - 1:
@@ -192,11 +192,11 @@ def verify_adb_connected(instance_index, max_attempts=5, wait=3, cache_seconds=1
     _connect_adb_device(serial)
     devices = _list_adb_devices()
     if devices.get(serial) == "device":
-        log_message("ADB connected successfully after server restart.", level="success")
+        log_message(f"ADB connected successfully after server restart on instance {instance_index}.", level="success")
         _adb_verified_cache[serial] = time.time()
         return True
 
-    log_message("Could not establish or verify ADB connection with the emulator.", level="error")
+    log_message(f"Could not establish or verify ADB connection with the emulator on instance {instance_index}.", level="error")
     return False
 
 
@@ -211,16 +211,16 @@ def is_wos_running(instance_index, verbose=True):
         bool: True if the game is running, False otherwise.
     """
     if verbose:
-        log_message("Checking if the game is already running...", level="info")
+        log_message(f"Checking if the game is already running on instance {instance_index}...", level="info")
     result = execute_adb_command(["shell", "pidof", WHITEOUT_PACKAGE], instance_index)
 
     if result and result.stdout.strip():
         if verbose:
-            log_message("Whiteout Survival is already running.", level="success")
+            log_message(f"Whiteout Survival is already running on instance {instance_index}.", level="success")
         return True
     else:
         if verbose:
-            log_message("Whiteout Survival is not running.", level="info")
+            log_message(f"Whiteout Survival is not running on instance {instance_index}.", level="info")
         return False
 
 
@@ -245,16 +245,16 @@ def is_wos_installed(instance_index, retries=3):
         bool: True if the game is installed (or could not be ruled out),
             False only when it is confirmed absent.
     """
-    log_message("Checking if the game is installed...", level="info")
+    log_message(f"Checking if the game is installed on instance {instance_index}...", level="info")
     for attempt in range(retries):
         if verify_adb_connected(instance_index, max_attempts=2, wait=2):
             result = execute_adb_command(["shell", "pm", "list", "packages", WHITEOUT_PACKAGE], instance_index)
             if result and result.returncode == 0:
                 if WHITEOUT_PACKAGE in result.stdout:
-                    log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) is installed.", level="success")
+                    log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) is installed on instance {instance_index}.", level="success")
                     return True
                 # The query succeeded and the package is absent: definitive.
-                log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) not installed.", level="info")
+                log_message(f"Whiteout Survival ({WHITEOUT_PACKAGE}) not installed on instance {instance_index}.", level="info")
                 return False
             # The package manager is not ready yet (e.g. Android is still
             # booting); wait before retrying (transient).
@@ -281,7 +281,7 @@ def take_screenshot(instance_index):
     """
     stop_signal.check()
     if not verify_adb_connected(instance_index):
-        log_message("No active ADB connection. Cannot take screenshot.", level="error")
+        log_message(f"No active ADB connection on instance {instance_index}. Cannot take screenshot.", level="error")
         return None
 
     local_full_path = None
@@ -296,28 +296,28 @@ def take_screenshot(instance_index):
         filename = os.path.basename(local_full_path)
         remote_path = f"/sdcard/{filename}"
 
-        log_message(f"Taking remote screenshot on: {remote_path}", level="debug")
+        log_message(f"Taking remote screenshot on instance {instance_index}: {remote_path}", level="debug")
         result_screencap = execute_adb_command(["shell", "screencap", "-p", remote_path], instance_index)
 
         if not result_screencap or result_screencap.returncode != 0:
-            log_message("Failed to take screenshot on the emulator.", level="error")
+            log_message(f"Failed to take screenshot on the emulator on instance {instance_index}.", level="error")
             return None
 
-        log_message(f"Downloading screenshot to temporary file: {local_full_path}", level="debug")
+        log_message(f"Downloading screenshot to temporary file on instance {instance_index}: {local_full_path}", level="debug")
         result_pull = execute_adb_command(["pull", remote_path, local_full_path], instance_index)
 
         if not result_pull or result_pull.returncode != 0:
-            log_message("Failed to download screenshot from the emulator.", level="error")
+            log_message(f"Failed to download screenshot from the emulator on instance {instance_index}.", level="error")
             return None
 
         screenshot_ready = True
-        log_message(f"Screenshot saved to temporary file: {local_full_path}", level="debug")
+        log_message(f"Screenshot saved to temporary file on instance {instance_index}: {local_full_path}", level="debug")
         return local_full_path
     finally:
         if remote_path:
             # Cleanup must not hide the original screencap/pull result.
             with contextlib.suppress(Exception):
-                log_message("Deleting screenshot from emulator...", level="debug")
+                log_message(f"Deleting screenshot from emulator on instance {instance_index}...", level="debug")
                 execute_adb_command(["shell", "rm", remote_path], instance_index)
         if not screenshot_ready:
             delete_temp_screenshot(local_full_path)
@@ -372,7 +372,7 @@ def click_on_coordinates(x, y, instance_index, delay=CLICK_DELAY):
         delay (float): Delay after clicking in seconds.
         instance_index (int): Emulator instance index.
     """
-    log_message(f"Clicking on coordinates: ({x}, {y})", level="info")
+    log_message(f"Clicking on coordinates on instance {instance_index}: ({x}, {y})", level="info")
     result = execute_adb_command(["shell", "input", "tap", str(x), str(y)], instance_index)
     _require_adb_success(result, f"tap ({x}, {y})")
     stop_signal.check()
@@ -397,7 +397,7 @@ def click_on(coordinate_name, instance_index, delay=CLICK_DELAY):
         click_on_coordinates(x, y, instance_index, delay)
         return True
     else:
-        log_message(f"Could not click on '{coordinate_name}': coordinate not found", level="error")
+        log_message(f"Could not click on '{coordinate_name}' on instance {instance_index}: coordinate not found", level="error")
         return False
 
 
@@ -426,7 +426,7 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
     down = ["shell", "input", "motionevent", "DOWN", str(start_x), str(start_y)]
     result = execute_adb_command(down, instance_index)
     if result is None or result.returncode != 0:
-        log_message("input motionevent not supported, falling back to swipe + press at the end point.", level="warning")
+        log_message(f"input motionevent not supported on instance {instance_index}, falling back to swipe + press at the end point.", level="warning")
         fallback_swipe = execute_adb_command(
             ["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms + hold_end_ms)],
             instance_index,
@@ -473,7 +473,7 @@ def scroll_screen(start_x, start_y, end_x, end_y, duration_ms, instance_index, h
         hold_end_ms (int): Extra milliseconds to hold the finger at the end point (0 to skip).
         delay (float): Delay after scrolling in seconds (0 to skip).
     """
-    log_message(f"Performing scroll from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration_ms}ms", level="info")
+    log_message(f"Performing scroll on instance {instance_index} from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration_ms}ms", level="info")
     if hold_end_ms > 0:
         _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index)
     else:
@@ -493,7 +493,7 @@ def long_press_on_coordinates(x, y, duration_ms, instance_index):
         duration_ms (int): Duration of the press in milliseconds.
         instance_index (int): Emulator instance index.
     """
-    log_message(f"Long pressing on coordinates: ({x}, {y}) for {duration_ms}ms", level="info")
+    log_message(f"Long pressing on coordinates on instance {instance_index}: ({x}, {y}) for {duration_ms}ms", level="info")
     result = execute_adb_command(["shell", "input", "swipe", str(x), str(y), str(x), str(y), str(duration_ms)], instance_index)
     _require_adb_success(result, f"long press ({x}, {y})")
 
@@ -505,7 +505,7 @@ def press_android_back_button(instance_index, delay=BACK_BUTTON_DELAY):
         delay (float): Delay after pressing in seconds.
         instance_index (int): Emulator instance index.
     """
-    log_message("Pressing Android back button...", level="info")
+    log_message(f"Pressing Android back button on instance {instance_index}...", level="info")
     result = execute_adb_command(["shell", "input", "keyevent", "4"], instance_index)
     _require_adb_success(result, "Android back button")
     stop_signal.check()
@@ -518,7 +518,7 @@ def force_stop_game(instance_index):
     Args:
         instance_index (int): Emulator instance index.
     """
-    log_message(f"Forcing game '{WHITEOUT_PACKAGE}' to stop...", level="warning")
+    log_message(f"Forcing game '{WHITEOUT_PACKAGE}' to stop on instance {instance_index}...", level="warning")
     result = execute_adb_command(["shell", "am", "force-stop", WHITEOUT_PACKAGE], instance_index)
     _require_adb_success(result, "force-stop game")
     return True
@@ -533,10 +533,10 @@ def launch_game_activity(instance_index):
     Returns:
         bool: True if successful, False otherwise.
     """
-    log_message("Starting Whiteout Survival...", level="info")
+    log_message(f"Starting Whiteout Survival on instance {instance_index}...", level="info")
     result = execute_adb_command(["shell", "am", "start", "-n", f"{WHITEOUT_PACKAGE}/{WHITEOUT_ACTIVITY}"], instance_index)
     if not result or result.returncode != 0:
-        log_message(f"Could not start the main activity '{WHITEOUT_ACTIVITY}'. Attempting to start with the general launcher...", level="warning")
+        log_message(f"Could not start the main activity '{WHITEOUT_ACTIVITY}' on instance {instance_index}. Attempting to start with the general launcher...", level="warning")
         # Fall back to the general launcher when the main activity is unknown.
         result_alt = execute_adb_command(["shell", "monkey", "-p", WHITEOUT_PACKAGE, "1"], instance_index)
         return result_alt and result_alt.returncode == 0

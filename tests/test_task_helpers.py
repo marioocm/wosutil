@@ -1367,6 +1367,44 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
         self.assertFalse(launch_and_reach_city_screen(0))
         self.assertEqual(press_android_back_button.call_count, 10)
 
+    def test_waits_for_boot_before_navigating(self):
+        """No screenshot or back happens until the game process appears."""
+        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen, press_android_back_button
+
+        is_wos_running.side_effect = [False, False, True, True]
+        is_game_on_city_screen.return_value = True
+
+        self.assertTrue(launch_and_reach_city_screen(0))
+        self.assertGreaterEqual(is_wos_running.call_count, 3)
+        press_android_back_button.assert_not_called()
+
+    def test_aborts_without_navigating_when_process_never_boots(self):
+        """A game that never spawns fails before any navigation."""
+        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen, press_android_back_button
+
+        is_wos_running.return_value = False
+
+        self.assertFalse(launch_and_reach_city_screen(0))
+        is_game_on_city_screen.assert_not_called()
+        press_android_back_button.assert_not_called()
+
+    def test_survives_transient_missing_process(self):
+        """A single empty pidof is re-checked instead of failing the launch."""
+        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen
+
+        is_wos_running.side_effect = [True, False, True, True]
+        is_game_on_city_screen.return_value = True
+
+        self.assertTrue(launch_and_reach_city_screen(0))
+
+    def test_aborts_when_process_still_missing_after_recheck(self):
+        """Two consecutive empty pidofs still fail the launch."""
+        from wosutil.tool.tasks.task_helpers import is_wos_running, launch_and_reach_city_screen
+
+        is_wos_running.side_effect = [True, False, False]
+
+        self.assertFalse(launch_and_reach_city_screen(0))
+
 
 if __name__ == "__main__":
     unittest.main()
