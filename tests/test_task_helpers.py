@@ -32,6 +32,7 @@ from wosutil.tool.tasks.task_helpers import (
     gather_tile,
     go_alliance_tab,
     go_hero_recruit_screen,
+    go_island,
     go_pet_adventure,
     go_rally_tab,
     go_sidemenu_city,
@@ -607,6 +608,47 @@ class TestGoPetAdventure(unittest.TestCase):
         """Navigation fails when the Pet Adventure entry is not found."""
         self.click_text.return_value = False
         self.assertFalse(go_pet_adventure(0))
+
+
+class TestGoIsland(unittest.TestCase):
+    """Test cases for navigating to the island screen."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.go_sidemenu_daily, self.scroll_screen, self.click_text, self.click_coords = self.mocks
+        self.go_sidemenu_daily.return_value = True
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_navigates_with_controlled_scroll_and_tree_click(self):
+        """The Daily tab, a controlled 500px scroll and the Tree entry are used to reach the island."""
+        self.assertTrue(go_island(0))
+        self.go_sidemenu_daily.assert_called_once_with(0)
+        self.scroll_screen.assert_called_once_with(13, 500, 13, 0, 500, 0, hold_end_ms=500, delay=1.0)
+        self.click_text.assert_called_once_with("Tree", 0, roi="sidemenu", delay=4)
+        self.assertEqual(self.click_coords.call_count, 2)
+        self.click_coords.assert_any_call(100, 70, 0)
+
+    def test_returns_false_when_daily_tab_not_reached(self):
+        """Navigation fails when the Daily tab cannot be reached."""
+        self.go_sidemenu_daily.return_value = False
+        self.assertFalse(go_island(0))
+        self.scroll_screen.assert_not_called()
+        self.click_text.assert_not_called()
+        self.click_coords.assert_not_called()
+
+    def test_returns_false_when_tree_missing(self):
+        """Navigation fails when the Tree entry is not found."""
+        self.click_text.return_value = False
+        self.assertFalse(go_island(0))
+        self.click_coords.assert_not_called()
 
 
 class TestClickOnTemplate(unittest.TestCase):
