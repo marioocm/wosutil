@@ -19,7 +19,6 @@ from wosutil.emulator.image_utils import (
     clear_template_cache,
     find_multiple_templates,
     find_template_center_on_screen,
-    find_template_on_screen,
     find_text_center_on_screen,
     find_text_on_image,
     find_text_on_screen,
@@ -100,16 +99,15 @@ class TestImageUtils(unittest.TestCase):
         template2 = load_template(self.template_path)
         self.assertIsNot(template1, template2)
 
-    def test_find_template_on_screen_success(self):
-        """Test successful template finding."""
-        found, position = find_template_on_screen(self.template_path, self.screenshot_path, threshold=0.8)
+    def test_find_template_center_success(self):
+        """Color and gray-scale matching return the same center."""
+        for grayscale in (False, True):
+            with self.subTest(grayscale=grayscale):
+                found, center = find_template_center_on_screen(self.template_path, self.screenshot_path, threshold=0.8, grayscale=grayscale)
 
-        self.assertTrue(found)
-        self.assertIsNotNone(position)
-        if position is not None:  # Type guard for linter
-            x, y, w, h = position
-            self.assertEqual(w, 10)
-            self.assertEqual(h, 10)
+                self.assertTrue(found)
+                # Template is at (20, 20) with size 10x10 -> center (25, 25)
+                self.assertEqual(center, (25, 25))
 
     def test_read_screen_time_accepts_custom_ocr_modes(self):
         """A caller can add OCR modes needed by a different timer rendering."""
@@ -185,34 +183,39 @@ class TestImageUtils(unittest.TestCase):
         mask_gray = np.array(_preprocess_timer_red_text(img))
         self.assertEqual(int((mask_gray > 0).sum()), 0)
 
-    def test_find_template_on_screen_not_found(self):
-        """Test template not found."""
+    def test_find_template_center_not_found(self):
+        """A missing template is not found in either mode."""
         # Create screenshot without template (different pattern)
         screenshot = np.ones((50, 50, 3), dtype=np.uint8) * 128
         # Add some random noise to make it different
         screenshot[10:20, 10:20] = np.random.randint(0, 255, (10, 10, 3), dtype=np.uint8)
         cv2.imwrite(self.screenshot_path, screenshot)
 
-        found, position = find_template_on_screen(self.template_path, self.screenshot_path, threshold=0.9)
+        for grayscale in (False, True):
+            with self.subTest(grayscale=grayscale):
+                found, center = find_template_center_on_screen(self.template_path, self.screenshot_path, threshold=0.9, grayscale=grayscale)
 
-        self.assertFalse(found)
-        self.assertIsNone(position)
+                self.assertFalse(found)
+                self.assertIsNone(center)
 
-    def test_find_template_on_screen_with_roi(self):
-        """Test template finding with ROI."""
-        found, position = find_template_on_screen(
-            self.template_path,
-            self.screenshot_path,
-            threshold=0.8,
-            roi=(15, 15, 20, 20),  # ROI that includes the template
-        )
+    def test_find_template_center_with_roi(self):
+        """Template finding with ROI returns the full-screen center."""
+        for grayscale in (False, True):
+            with self.subTest(grayscale=grayscale):
+                found, center = find_template_center_on_screen(
+                    self.template_path,
+                    self.screenshot_path,
+                    threshold=0.8,
+                    roi=(15, 15, 20, 20),  # ROI that includes the template
+                    grayscale=grayscale,
+                )
 
-        self.assertTrue(found)
-        self.assertIsNotNone(position)
+                self.assertTrue(found)
+                self.assertEqual(center, (25, 25))
 
-    def test_find_template_on_screen_roi_outside(self):
-        """Test template finding with ROI outside template location."""
-        found, position = find_template_on_screen(
+    def test_find_template_center_roi_outside(self):
+        """A ROI outside the template location finds nothing."""
+        found, center = find_template_center_on_screen(
             self.template_path,
             self.screenshot_path,
             threshold=0.8,
@@ -220,33 +223,12 @@ class TestImageUtils(unittest.TestCase):
         )
 
         self.assertFalse(found)
-        self.assertIsNone(position)
+        self.assertIsNone(center)
 
     def test_get_box_center(self):
         """Test computing the center of a box."""
         self.assertEqual(get_box_center((20, 30, 10, 20)), (25, 40))
         self.assertEqual(get_box_center((0, 0, 1, 1)), (0, 0))
-
-    def test_find_template_center_on_screen(self):
-        """Test template finding returning the center point."""
-        found, center = find_template_center_on_screen(self.template_path, self.screenshot_path, threshold=0.8)
-
-        self.assertTrue(found)
-        self.assertIsNotNone(center)
-        if center is not None:  # Type guard for linter
-            # Template is at (20, 20) with size 10x10 -> center (25, 25)
-            self.assertEqual(center, (25, 25))
-
-    def test_find_template_center_on_screen_not_found(self):
-        """Test center search when the template is not present."""
-        screenshot = np.ones((50, 50, 3), dtype=np.uint8) * 128
-        screenshot[10:20, 10:20] = np.random.randint(0, 255, (10, 10, 3), dtype=np.uint8)
-        cv2.imwrite(self.screenshot_path, screenshot)
-
-        found, center = find_template_center_on_screen(self.template_path, self.screenshot_path, threshold=0.9)
-
-        self.assertFalse(found)
-        self.assertIsNone(center)
 
     def test_find_multiple_templates(self):
         """Test finding multiple template instances."""
@@ -323,20 +305,20 @@ class TestImageUtils(unittest.TestCase):
 
     def test_find_template_invalid_files(self):
         """Test template finding with invalid files."""
-        found, position = find_template_on_screen("nonexistent_template.png", "nonexistent_screenshot.png")
+        found, center = find_template_center_on_screen("nonexistent_template.png", "nonexistent_screenshot.png")
 
         self.assertFalse(found)
-        self.assertIsNone(position)
+        self.assertIsNone(center)
 
     @patch("cv2.imread")
     def test_find_template_cv2_error(self, mock_imread):
         """Test template finding with CV2 error."""
         mock_imread.return_value = None
 
-        found, position = find_template_on_screen(self.template_path, self.screenshot_path)
+        found, center = find_template_center_on_screen(self.template_path, self.screenshot_path)
 
         self.assertFalse(found)
-        self.assertIsNone(position)
+        self.assertIsNone(center)
 
 
 class TestTemplateConfidence(unittest.TestCase):

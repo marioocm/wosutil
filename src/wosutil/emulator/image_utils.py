@@ -101,70 +101,6 @@ def clear_template_cache():
     _template_cache.clear()
 
 
-def find_template_on_screen(
-    template_path: str, screenshot_path: str, threshold: float = SCREEN_CHECK_THRESHOLD, roi: Optional[Tuple[int, int, int, int]] = None
-) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
-    """Searches for the template image within the screenshot.
-
-    Returns (True, (x, y, w, h)) if found, (False, None) if not found.
-
-    Args:
-        template_path (str): Path to the template image file.
-        screenshot_path (str): Path to the screenshot image file (should be a temporary file, not deleted by this function).
-        threshold (float): Minimum confidence threshold for a match.
-        roi (tuple, optional): Region of interest as (x, y, w, h) to search within the screenshot.
-
-    Returns:
-        tuple: (bool, (x, y, w, h) or None)
-    """
-    try:
-        # Load screenshot
-        img_rgb = cv2.imread(screenshot_path)
-        if img_rgb is None:
-            msg = f"Error loading screenshot: {screenshot_path}"
-            log_message(msg, level="error")
-            return False, None
-
-        # Load template (with caching)
-        template = load_template(template_path)
-        if template is None:
-            msg = f"Error loading template: {template_path}"
-            log_message(msg, level="error")
-            return False, None
-
-        template_name = os.path.basename(template_path)
-
-        # Apply ROI if specified
-        if roi:
-            x, y, w, h = roi
-            img_rgb = img_rgb[y : y + h, x : x + w]
-
-        # Perform template matching
-        res = cv2.matchTemplate(img_rgb, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-
-        if max_val >= threshold:
-            top_left = max_loc
-            h, w = template.shape[:2]
-
-            # Adjust coordinates if ROI was used
-            if roi:
-                top_left = (top_left[0] + roi[0], top_left[1] + roi[1])
-
-            msg = f"Template '{template_name}' found at {top_left} with confidence {max_val:.2f}"
-            log_message(msg, level="success")
-            return True, (top_left[0], top_left[1], w, h)
-        else:
-            msg = f"Template '{template_name}' not found or confidence too low ({max_val:.2f} < {threshold})"
-            log_message(msg, level="info")
-            return False, None
-
-    except Exception as e:
-        msg = f"Error in template matching: {e}"
-        log_message(msg, level="error")
-        return False, None
-
-
 def find_multiple_templates(
     template_path: str,
     screenshot_path: str,
@@ -824,62 +760,6 @@ def find_first_non_zero_digit_position(instance_index: int, roi: Optional[Tuple[
         return None
 
 
-def find_gray_template_on_screen(
-    template_path: str, screenshot_path: str, threshold: float = SCREEN_CHECK_THRESHOLD, roi: Optional[Tuple[int, int, int, int]] = None
-) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
-    """Search for the template in grayscale.
-
-    Converts both images to grayscale before comparing.
-    Returns (True, (x, y, w, h)) if found, (False, None) otherwise.
-    """
-    try:
-        # Load screenshot
-        img_rgb = cv2.imread(screenshot_path)
-        if img_rgb is None:
-            msg = f"Error loading screenshot: {screenshot_path}"
-            log_message(msg, level="error")
-            return False, None
-
-        # Load template (with cache)
-        template = load_template(template_path)
-        if template is None:
-            msg = f"Error loading template: {template_path}"
-            log_message(msg, level="error")
-            return False, None
-
-        template_name = os.path.basename(template_path)
-
-        # Convert both images to grayscale
-        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-        template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-
-        # Apply ROI if specified
-        if roi:
-            x, y, w, h = roi
-            img_gray = img_gray[y : y + h, x : x + w]
-
-        # Matching
-        res = cv2.matchTemplate(img_gray, template_gray, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-
-        if max_val >= threshold:
-            top_left = max_loc
-            h, w = template_gray.shape[:2]
-            if roi:
-                top_left = (top_left[0] + roi[0], top_left[1] + roi[1])
-            msg = f"[GRAY] Template '{template_name}' found at {top_left} with confidence {max_val:.2f}"
-            log_message(msg, level="success")
-            return True, (top_left[0], top_left[1], w, h)
-        else:
-            msg = f"[GRAY] Template '{template_name}' not found or confidence too low ({max_val:.2f} < {threshold})"
-            log_message(msg, level="info")
-            return False, None
-    except Exception as e:
-        msg = f"Error in gray template matching: {e}"
-        log_message(msg, level="error")
-        return False, None
-
-
 def get_box_center(box: Tuple[int, int, int, int]) -> Tuple[int, int]:
     """Returns the center point of a (x, y, w, h) box.
 
@@ -894,38 +774,73 @@ def get_box_center(box: Tuple[int, int, int, int]) -> Tuple[int, int]:
 
 
 def find_template_center_on_screen(
-    template_path: str, screenshot_path: str, threshold: float = SCREEN_CHECK_THRESHOLD, roi: Optional[Tuple[int, int, int, int]] = None
+    template_path: str,
+    screenshot_path: str,
+    threshold: float = SCREEN_CHECK_THRESHOLD,
+    roi: Optional[Tuple[int, int, int, int]] = None,
+    grayscale: bool = False,
 ) -> Tuple[bool, Optional[Tuple[int, int]]]:
-    """Searches for the template and returns the center point of the match.
+    """Search for a template and return the center of the match.
 
-    Wraps :func:`find_template_on_screen` returning the center (cx, cy) of the
-    template instead of the (x, y, w, h) box, so callers can click directly
-    without computing it.
+    Unifies the former color / gray-scale and box / center variants: set
+    ``grayscale`` to True for gray-scale matching (robust against color
+    shifts), otherwise color matching is used. The center is always
+    returned because every caller either clicks it or only checks ``found``.
+
+    Args:
+        template_path (str): Path to the template image file.
+        screenshot_path (str): Path to the screenshot image file (should be a temporary file, not deleted by this function).
+        threshold (float): Minimum confidence threshold for a match.
+        roi (tuple, optional): Region of interest as (x, y, w, h) to search within the screenshot.
+        grayscale (bool): Match in gray scale when True, in color otherwise.
 
     Returns:
         tuple: (True, (cx, cy)) if found, (False, None) if not.
     """
-    found, box = find_template_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
-    if not found or box is None:
+    try:
+        img = cv2.imread(screenshot_path)
+        if img is None:
+            msg = f"Error loading screenshot: {screenshot_path}"
+            log_message(msg, level="error")
+            return False, None
+
+        template = load_template(template_path)
+        if template is None:
+            msg = f"Error loading template: {template_path}"
+            log_message(msg, level="error")
+            return False, None
+
+        template_name = os.path.basename(template_path)
+        prefix = "[GRAY] " if grayscale else ""
+
+        if grayscale:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+        if roi:
+            x, y, w, h = roi
+            img = img[y : y + h, x : x + w]
+
+        res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
+        _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(res)
+
+        if max_val >= threshold:
+            top_left = max_loc
+            h, w = template.shape[:2]
+            if roi:
+                top_left = (top_left[0] + roi[0], top_left[1] + roi[1])
+            msg = f"{prefix}Template '{template_name}' found at {top_left} with confidence {max_val:.2f}"
+            log_message(msg, level="success")
+            return True, get_box_center((top_left[0], top_left[1], w, h))
+
+        msg = f"{prefix}Template '{template_name}' not found or confidence too low ({max_val:.2f} < {threshold})"
+        log_message(msg, level="info")
         return False, None
-    return True, get_box_center(box)
 
-
-def find_gray_template_center_on_screen(
-    template_path: str, screenshot_path: str, threshold: float = SCREEN_CHECK_THRESHOLD, roi: Optional[Tuple[int, int, int, int]] = None
-) -> Tuple[bool, Optional[Tuple[int, int]]]:
-    """Searches for the template in gray scale and returns the center point of the match.
-
-    Wraps :func:`find_gray_template_on_screen` returning the center (cx, cy)
-    of the template instead of the (x, y, w, h) box.
-
-    Returns:
-        tuple: (True, (cx, cy)) if found, (False, None) if not.
-    """
-    found, box = find_gray_template_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi)
-    if not found or box is None:
+    except Exception as e:
+        msg = f"Error in template matching: {e}"
+        log_message(msg, level="error")
         return False, None
-    return True, get_box_center(box)
 
 
 def _normalize_word(word: str) -> str:
