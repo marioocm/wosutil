@@ -481,7 +481,7 @@ class MultiInstanceToolController:
             verify_adb_connected,
         )
         from wosutil.tool.profiles.profile_manager import ProfileManager
-        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen
+        from wosutil.tool.tasks.navigation import launch_and_reach_city_screen
 
         def instance_worker():
             try:
