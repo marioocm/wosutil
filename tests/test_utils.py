@@ -10,12 +10,17 @@ from unittest.mock import MagicMock, patch
 from wosutil.stop import StopSignal, ToolStopped
 from wosutil.utils import (
     RecoverableRotatingFileHandler,
+    _detached_creation_flags,
+    _hidden_startupinfo,
+    _no_window_creation_flags,
+    _terminate_process_tree,
     ensure_directory_exists,
     get_current_instance,
     instance_log_context,
     load_json_file,
     log_message,
     retry_operation,
+    run_process_robust,
     safe_int,
     save_json_file,
     set_current_instance,
@@ -314,6 +319,75 @@ class TestInstanceLogPrefix(unittest.TestCase):
             log_message("[1] already tagged", level="info")
         self.assertTrue(any("[1] already tagged" in line for line in logs.output))
         self.assertFalse(any("[1] [1]" in line for line in logs.output))
+
+
+class TestNoConsoleFlash(unittest.TestCase):
+    """Child consoles must never flash a CMD window over the windowed exe."""
+
+    def test_no_window_flags_are_zero_outside_windows(self):
+        """Linux CI has no Win32 flags: helpers degrade to 0/None."""
+        import wosutil.utils as utils
+
+        with patch.object(utils.os, "name", "posix"):
+            self.assertEqual(_no_window_creation_flags(), 0)
+            self.assertIsNone(_hidden_startupinfo())
+            self.assertEqual(_detached_creation_flags(), 0)
+
+    def test_detached_flags_include_no_window_on_windows(self):
+        """Emulator launches (incl. ldconsole) must not flash a console."""
+        import subprocess
+
+        import wosutil.utils as utils
+
+        with patch.object(utils.os, "name", "nt"), patch.object(subprocess, "DETACHED_PROCESS", 0x8, create=True), patch.object(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True
+        ), patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
+            flags = _detached_creation_flags()
+        self.assertTrue(flags & 0x08000000)
+
+    def test_hidden_startupinfo_hides_window_on_windows(self):
+        """Console helpers use SW_HIDE so taskkill/adb never appear."""
+        import subprocess
+
+        import wosutil.utils as utils
+
+        with patch.object(utils.os, "name", "nt"), patch.object(subprocess, "STARTUPINFO", subprocess.STARTUPINFO if hasattr(subprocess, "STARTUPINFO") else MagicMock, create=True):
+            info = _hidden_startupinfo()
+        if info is not None:  # Windows only; None elsewhere is covered above.
+            self.assertTrue(info.dwFlags & subprocess.STARTF_USESHOWWINDOW)
+
+    def test_run_process_robust_hides_console_window(self):
+        """Adb and every helper via run_process_robust get no-window flags."""
+        import wosutil.utils as utils
+
+        sentinel_flags = 0x08000000
+        sentinel_info = object()
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_proc.returncode = 0
+        with patch.object(utils, "_no_window_creation_flags", return_value=sentinel_flags), patch.object(utils, "_hidden_startupinfo", return_value=sentinel_info), patch(
+            "subprocess.Popen", return_value=mock_proc
+        ) as mock_popen:
+            run_process_robust(["adb", "devices"], timeout=5)
+        _, kwargs = mock_popen.call_args
+        self.assertEqual(kwargs.get("creationflags"), sentinel_flags)
+        self.assertIs(kwargs.get("startupinfo"), sentinel_info)
+
+    def test_terminate_process_tree_hides_taskkill_window(self):
+        """Taskkill must not flash when a hung adb command times out."""
+        import wosutil.utils as utils
+
+        sentinel_flags = 0x08000000
+        sentinel_info = object()
+        proc = MagicMock()
+        proc.pid = 1234
+        with patch.object(utils.os, "name", "nt"), patch.object(utils, "_no_window_creation_flags", return_value=sentinel_flags), patch.object(
+            utils, "_hidden_startupinfo", return_value=sentinel_info
+        ), patch("subprocess.Popen"), patch("subprocess.run") as mock_run, patch("subprocess.DEVNULL", MagicMock()):
+            _terminate_process_tree(proc)
+        _, kwargs = mock_run.call_args
+        self.assertEqual(kwargs.get("creationflags"), sentinel_flags)
+        self.assertIs(kwargs.get("startupinfo"), sentinel_info)
 
 
 if __name__ == "__main__":

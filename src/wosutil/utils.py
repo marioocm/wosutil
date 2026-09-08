@@ -307,6 +307,34 @@ def retry_operation(
     return False
 
 
+def _no_window_creation_flags():
+    """Return CREATE_NO_WINDOW on Windows (0 elsewhere).
+
+    Every console helper (adb, taskkill, ldconsole, tesseract via
+    pytesseract helpers) must use it: the exe is built windowed
+    (``console=False``), but a child console process still flashes its own
+    CMD window unless this flag is set.
+    """
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _hidden_startupinfo():
+    """Return a STARTUPINFO hiding the child console window (None elsewhere).
+
+    Used together with :func:`_no_window_creation_flags` for console
+    helpers. GUI emulator windows use :func:`_minimized_startupinfo`
+    instead so they appear minimized rather than hidden.
+    """
+    if os.name != "nt":
+        return None
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    return startupinfo
+
+
 def _terminate_process_tree(process):
     """Terminates a process and its children (best effort)."""
     try:
@@ -316,6 +344,8 @@ def _terminate_process_tree(process):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
+                creationflags=_no_window_creation_flags(),
+                startupinfo=_hidden_startupinfo(),
             )
         else:
             process.kill()
@@ -342,14 +372,14 @@ def run_process_robust(command: list, timeout: int = 30):
     Returns:
         subprocess.CompletedProcess or None if the command timed out.
     """
-    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
             process = subprocess.Popen(
                 command,
                 stdout=stdout_file,
                 stderr=stderr_file,
-                creationflags=creation_flags,
+                creationflags=_no_window_creation_flags(),
+                startupinfo=_hidden_startupinfo(),
             )
             try:
                 process.wait(timeout=timeout)
@@ -398,12 +428,14 @@ def _detached_creation_flags():
     """Return the Windows creation flags for a detached process (0 elsewhere).
 
     Emulator processes are launched detached so they outlive the tool and are
-    monitored by polling. The flags only exist on Windows; the backends are
-    Windows-only at runtime, but tests also run on Linux CI.
+    monitored by polling. CREATE_NO_WINDOW is included so console launchers
+    (e.g. ldconsole) never flash a CMD window; GUI emulators ignore it. The
+    flags only exist on Windows; the backends are Windows-only at runtime,
+    but tests also run on Linux CI.
     """
     if os.name != "nt":
         return 0
-    return getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    return getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _is_process_named(name, expected_name):

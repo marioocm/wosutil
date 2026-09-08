@@ -573,6 +573,23 @@ class TestQuietWindowHandling(unittest.TestCase):
             self.assertTrue(info.dwFlags & subprocess.STARTF_USESHOWWINDOW)
             self.assertEqual(info.wShowWindow, 7)
 
+    def test_start_instance_launches_without_console_window(self):
+        """Popen gets the detached flags (incl. CREATE_NO_WINDOW) + minimized info."""
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
+        sentinel_flags = 0x08000000 | 0x8 | 0x200
+        sentinel_info = object()
+        with patch("subprocess.Popen") as mock_popen, patch("wosutil.emulator.backends.time.sleep"), patch.object(
+            backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]
+        ), patch.object(backends.MuMuBackend, "_instance_name", return_value="Healer"), patch("wosutil.emulator.backends._detached_creation_flags", return_value=sentinel_flags), patch(
+            "wosutil.emulator.backends._minimized_startupinfo", return_value=sentinel_info
+        ), patch("wosutil.emulator.backends.minimize_process_windows"), patch("wosutil.emulator.backends.minimize_windows_by_title"), patch(
+            "wosutil.emulator.backends.start_minimized_enabled", return_value=False
+        ):
+            self.assertTrue(backend.start_instance(0))
+        _, kwargs = mock_popen.call_args
+        self.assertEqual(kwargs.get("creationflags"), sentinel_flags)
+        self.assertIs(kwargs.get("startupinfo"), sentinel_info)
+
 
 def tempfile_helper(content):
     """Write ``content`` to a temporary file and return its path."""
