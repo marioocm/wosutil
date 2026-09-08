@@ -3,10 +3,11 @@
 Manages running automation tasks across multiple emulator instances with threading and memory optimization.
 """
 
+import contextlib
 import gc
 import threading
 import time
-from typing import Dict
+from typing import Dict, Set
 
 from wosutil.config import INSTANCE_SELECTION_FILE, WHITEOUT_PACKAGE
 from wosutil.emulator.emulator_manager import check_emulator_health, force_restart_emulator
@@ -21,7 +22,7 @@ from wosutil.tool.tasks.task_schedule import (
     snapshot_instance_schedule,
 )
 from wosutil.tool.utc_time import sync_utc_time
-from wosutil.utils import load_json_file, retry_operation, safe_int, save_json_file
+from wosutil.utils import instance_log_context, load_json_file, retry_operation, safe_int, save_json_file
 
 # Tasks whose run times are closer than this are considered the same time
 # window: when both are due (or become due within the window), the priority
@@ -158,6 +159,14 @@ class MultiInstanceToolController:
         self.last_memory_cleanup = time.time()
         self.memory_cleanup_interval = 300  # 5 minutes
 
+        # Seconds between emulator health probes while tasks run.
+        self.health_check_interval = 60
+
+        # Instances with an intentional close already underway (idle shutdown,
+        # error cleanup): a periodic health check must not force-restart
+        # under the thread that is closing them.
+        self._stopping_instances: Set[int] = set()
+
         # Task schedule memory (persisted between sessions)
         self._schedule_lock = threading.Lock()
         self._task_schedule = None
@@ -214,6 +223,33 @@ class MultiInstanceToolController:
         with self._state_lock:
             if self.instance_threads.get(index) is thread:
                 del self.instance_threads[index]
+
+    def _another_worker_alive(self, index):
+        """Return True when a different live thread already owns the instance."""
+        with self._state_lock:
+            current = self.instance_threads.get(index)
+            return current is not None and current is not threading.current_thread() and current.is_alive()
+
+    def _yield_worker(self, index, reason):
+        """Back out without touching slot ownership (it belongs to another thread)."""
+        self.log_message(reason, "warning")
+        self._remove_thread_reference(index, threading.current_thread())
+
+    @contextlib.contextmanager
+    def _intentional_stop(self, index):
+        """Mark an instance as being closed on purpose for the duration of the block."""
+        with self._state_lock:
+            self._stopping_instances.add(index)
+        try:
+            yield
+        finally:
+            with self._state_lock:
+                self._stopping_instances.discard(index)
+
+    def _stop_in_progress(self, index):
+        """Return True when another thread is already closing the instance on purpose."""
+        with self._state_lock:
+            return index in self._stopping_instances
 
     def set_max_instances_var(self, max_instances_var):
         """Sets the variable that controls the maximum number of simultaneous instances.
@@ -484,6 +520,15 @@ class MultiInstanceToolController:
         from wosutil.tool.tasks.navigation import launch_and_reach_city_screen
 
         def instance_worker():
+            if self._another_worker_alive(index):
+                # A live thread already owns this slot (stale requeue racing
+                # a worker that never exited): back out without stopping its
+                # emulator or releasing its slot.
+                self._yield_worker(index, f"Duplicate worker for instance {index} detected (another thread is active); yielding.")
+                return
+            # Cleared on the yield paths below, where the slot belongs to
+            # another thread and this worker must leave it alone.
+            owns_slot = True
             try:
                 pm = self.instances_profile_managers.get(index)
                 if pm is None:
@@ -676,14 +721,20 @@ class MultiInstanceToolController:
 
                 # Main task loop
                 last_health_check = time.time()
-                health_check_interval = 60  # Check emulator health every 60 seconds
 
                 while not self.tool_should_stop.is_set():
                     now = time.time()
 
                     # Periodic health check
-                    if now - last_health_check > health_check_interval:
+                    if now - last_health_check > self.health_check_interval:
                         if not check_emulator_health(index):
+                            if self._stop_in_progress(index):
+                                # Another thread is already closing this
+                                # instance on purpose: yield instead of
+                                # force-restarting under its feet.
+                                owns_slot = False
+                                self._yield_worker(index, f"Close of instance {index} is already in progress; yielding.")
+                                return
                             self.log_message(f"Emulator instance {index} appears to be hanging during operation. Attempting restart...", "warning")
                             if force_restart_emulator(index, self.multi_instance_manager):
                                 self.log_message(f"Emulator instance {index} restarted successfully during operation.", "success")
@@ -717,7 +768,8 @@ class MultiInstanceToolController:
                                 f"The next task for instance {index} is more than 120 seconds away. Closing the emulator, freeing the slot and requeuing.",
                                 "info",
                             )
-                            self.multi_instance_manager.stop_instance(index)
+                            with self._intentional_stop(index):
+                                self.multi_instance_manager.stop_instance(index)
                             self._discard_active_instance(index)
                             self._enqueue_instance(index, profile_name)
                             self.launch_next_instances()
@@ -767,17 +819,25 @@ class MultiInstanceToolController:
                 self.log_message(f"Error in instance {index}: {e}", "error")
                 # Close the emulator on any error
                 try:
-                    self.multi_instance_manager.stop_instance(index)
+                    with self._intentional_stop(index):
+                        self.multi_instance_manager.stop_instance(index)
                     self.log_message(f"Emulator instance {index} closed due to error.", "info")
                 except Exception as close_error:
                     self.log_message(f"Error closing emulator instance {index}: {close_error}", "error")
-                self._discard_active_instance(index)
-                self.launch_next_instances()
+                # Count the failure like any other launch failure: after
+                # max_launch_attempts consecutive errors the instance backs
+                # off for RETRY_COOLDOWN_SECONDS instead of spinning in a
+                # tight stop/retry loop that hammers the shared ADB server.
+                self._requeue_with_limit(index, profile_name)
             finally:
-                self._discard_active_instance(index)
+                if owns_slot:
+                    self._discard_active_instance(index)
                 self._remove_thread_reference(index, threading.current_thread())
 
-        instance_worker()
+        # Bind the thread to the instance so every emitted log carries a
+        # "[index]" prefix (see wosutil.utils.instance_log_context).
+        with instance_log_context(index):
+            instance_worker()
 
     def stop_tool(self):
         """Stops the automation tool and cleans up resources."""

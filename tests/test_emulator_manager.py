@@ -1,9 +1,11 @@
 """Unit tests for the emulator manager scroll gesture helpers."""
 
 import subprocess
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+import wosutil.emulator.emulator_manager as emulator_manager
 from wosutil.emulator.emulator_manager import (
     WHITEOUT_PACKAGE,
     AdbCommandError,
@@ -12,8 +14,10 @@ from wosutil.emulator.emulator_manager import (
     force_restart_emulator,
     force_stop_game,
     is_wos_installed,
+    restart_adb_server,
     scroll_screen,
     take_screenshot,
+    verify_adb_connected,
 )
 
 SHELL = "shell"
@@ -81,6 +85,40 @@ class TestIsWosInstalled(unittest.TestCase):
         ]
         self.assertFalse(is_wos_installed(0))
         self.assertEqual(self.execute_adb_command.call_count, 2)
+
+
+class TestRestartAdbServerRateLimit(unittest.TestCase):
+    """The shared ADB server must not be restarted on every single failure."""
+
+    def setUp(self):
+        """Reset the global restart timestamp between tests."""
+        self._old_timestamp = emulator_manager._last_adb_restart_time
+        emulator_manager._last_adb_restart_time = 0.0
+        self.addCleanup(setattr, emulator_manager, "_last_adb_restart_time", self._old_timestamp)
+
+    def test_second_restart_within_interval_is_skipped(self):
+        """Back-to-back restarts would disconnect the healthy instances too."""
+        with patch("wosutil.emulator.emulator_manager.get_active_backend") as backend:
+            self.assertTrue(restart_adb_server())
+            self.assertFalse(restart_adb_server())
+            self.assertEqual(backend.return_value.restart_server.call_count, 1)
+
+    def test_restart_allowed_after_interval(self):
+        """A restart after the cooldown is honored again."""
+        with patch("wosutil.emulator.emulator_manager.get_active_backend") as backend:
+            self.assertTrue(restart_adb_server())
+            emulator_manager._last_adb_restart_time -= emulator_manager.ADB_RESTART_MIN_INTERVAL_SECONDS + 1
+            self.assertTrue(restart_adb_server())
+            self.assertEqual(backend.return_value.restart_server.call_count, 2)
+
+    def test_verify_does_not_restart_server_when_restart_is_recent(self):
+        """A missing device with a recently restarted server only reconnects."""
+        emulator_manager._last_adb_restart_time = time.time()
+        with patch("wosutil.emulator.emulator_manager.get_active_backend") as backend, patch("wosutil.emulator.emulator_manager._list_adb_devices", return_value={"127.0.0.1:9999": "device"}), patch(
+            "wosutil.emulator.emulator_manager._connect_adb_device"
+        ), patch("wosutil.emulator.emulator_manager.time.sleep"):
+            self.assertFalse(verify_adb_connected(0, max_attempts=1, wait=0))
+            backend.return_value.restart_server.assert_not_called()
 
 
 class TestScrollScreen(unittest.TestCase):
