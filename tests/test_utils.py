@@ -351,10 +351,18 @@ class TestNoConsoleFlash(unittest.TestCase):
 
         import wosutil.utils as utils
 
-        with patch.object(utils.os, "name", "nt"), patch.object(subprocess, "STARTUPINFO", subprocess.STARTUPINFO if hasattr(subprocess, "STARTUPINFO") else MagicMock, create=True):
+        class FakeStartupInfo:
+            def __init__(self):
+                self.dwFlags = 0
+                self.wShowWindow = None
+
+        with patch.object(utils.os, "name", "nt"), patch.object(subprocess, "STARTUPINFO", FakeStartupInfo, create=True), patch.object(
+            subprocess, "STARTF_USESHOWWINDOW", 1, create=True
+        ), patch.object(subprocess, "SW_HIDE", 0, create=True):
             info = _hidden_startupinfo()
-        if info is not None:  # Windows only; None elsewhere is covered above.
-            self.assertTrue(info.dwFlags & subprocess.STARTF_USESHOWWINDOW)
+        self.assertIsNotNone(info)
+        self.assertTrue(info.dwFlags & 1)
+        self.assertEqual(info.wShowWindow, 0)
 
     def test_run_process_robust_hides_console_window(self):
         """Adb and every helper via run_process_robust get no-window flags."""

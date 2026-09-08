@@ -329,8 +329,11 @@ def _hidden_startupinfo():
     """
     if os.name != "nt":
         return None
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is None:
+        return None
+    startupinfo = startupinfo_cls()
+    startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
     startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
     return startupinfo
 
@@ -418,8 +421,11 @@ def _minimized_startupinfo():
     """
     if os.name != "nt":
         return None
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is None:
+        return None
+    startupinfo = startupinfo_cls()
+    startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
     startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimized, not activated
     return startupinfo
 
