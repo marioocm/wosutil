@@ -28,6 +28,16 @@ _adb_verified_cache: dict = {}
 # calls leave the server in a broken state that hangs later commands.
 _adb_restart_lock = threading.Lock()
 
+# Minimum seconds between two global ADB server restarts. Losing one device
+# must not restart the server shared by every instance on every failure:
+# each restart disconnects the healthy instances too, so a single hung
+# instance would otherwise drag all the others into a restart storm.
+ADB_RESTART_MIN_INTERVAL_SECONDS = 30.0
+
+# Timestamp of the last honored ADB server restart (guarded by
+# _adb_restart_lock together with the restart itself).
+_last_adb_restart_time: float = 0.0
+
 # The emulator backend selected at startup; all ADB calls below delegate to it.
 _active_backend = None
 
@@ -556,14 +566,32 @@ def restart_adb_server():
     Serialized with a lock: several instances can call this at the same time
     (each one that fails to connect restarts the server) and overlapping
     ``kill-server``/``start-server`` calls corrupt the server state.
+
+    Rate-limited: at most one restart per
+    ``ADB_RESTART_MIN_INTERVAL_SECONDS`` is honored. Callers that arrive
+    sooner get ``False`` and must only reconnect their own device instead of
+    restarting the server shared by every instance.
+
+    Returns:
+        bool: True when the server was restarted, False when the call was
+            skipped because the previous restart is still too recent or the
+            restart itself failed.
     """
+    global _last_adb_restart_time
     with _adb_restart_lock:
+        now = time.time()
+        if now - _last_adb_restart_time < ADB_RESTART_MIN_INTERVAL_SECONDS:
+            log_message("Skipping ADB server restart (previous restart is still too recent).", level="info")
+            return False
         log_message("Restarting ADB server...", level="warning")
         try:
             get_active_backend().restart_server()
             log_message("ADB server restarted successfully.", level="success")
+            _last_adb_restart_time = now
+            return True
         except Exception as e:
             log_message(f"Error restarting ADB server: {e}", level="error")
+            return False
 
 
 def check_emulator_health(instance_index):
