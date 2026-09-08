@@ -634,7 +634,8 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         """No forced restart under a worker that is already closing the instance."""
         manager = FakeManagerRunning()
         controller = self._make_controller(manager)
-        controller.health_check_interval = 0
+        # Negative interval: fires on the first pass however coarse the clock is.
+        controller.health_check_interval = -1
         controller.instances_profile_managers[0] = MagicMock()
         controller._stopping_instances.add(0)
         self.addCleanup(controller._stopping_instances.discard, 0)
@@ -653,7 +654,8 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         """The guard only skips restarts, it never disables them."""
         manager = FakeManagerRunning()
         controller = self._make_controller(manager)
-        controller.health_check_interval = 0
+        # Negative interval: fires on the first pass however coarse the clock is.
+        controller.health_check_interval = -1
         pm = MagicMock()
         pm.running_tasks_state = [{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}]
         controller.instances_profile_managers[0] = pm
