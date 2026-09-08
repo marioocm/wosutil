@@ -38,7 +38,9 @@ class TestTrainTroopCamp(unittest.TestCase):
         self.on_screen.return_value = True
         self.read_timer.return_value = 100
         _train_troop_camp(0)
-        self.assertEqual(len(self.header_clicks()), 4)
+        self.assertEqual(len(self.header_clicks()), 1)
+        header_call = self.header_clicks()[0]
+        self.assertEqual(header_call.kwargs.get("clicks"), 4)
 
     def test_returns_timer_when_training_in_progress(self):
         """When the speed-up icon is present the remaining timer is returned."""
@@ -84,7 +86,7 @@ class TestTrainTroopCamp(unittest.TestCase):
         self.digit_pos.return_value = None
         self.click_template.return_value = False
         self.assertIsNone(_train_troop_camp(0))
-        self.assertEqual(self.click_coords.call_count, 4 + 3)  # 4 header taps + 3 train fallback clicks
+        self.assertEqual(self.click_coords.call_count, 1 + 3)  # 1 header call (clicks=4) + 3 train fallback clicks
 
 
 class TestTrainTroopsTask(unittest.TestCase):

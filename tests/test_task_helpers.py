@@ -14,7 +14,6 @@ from wosutil.tool.tasks.navigation import (
     WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
     WORLD_MAP_SEARCH_SCROLL_END,
     WORLD_MAP_SEARCH_SCROLL_START,
-    _click_template_repeatedly,
     click_first_found_template,
     click_on_template,
     click_on_text,
@@ -278,7 +277,7 @@ class TestGatherTile(unittest.TestCase):
             patch("wosutil.tool.tasks.task_helpers.get_roi"),
             patch("wosutil.tool.tasks.navigation.get_roi"),
             patch("wosutil.tool.tasks.task_helpers.click_on_text"),
-            patch("wosutil.tool.tasks.task_helpers._click_template_repeatedly"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_template"),
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
             patch("wosutil.tool.tasks.navigation.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
@@ -296,7 +295,7 @@ class TestGatherTile(unittest.TestCase):
             self.get_roi,
             self.nav_get_roi,
             self.click_text,
-            self.click_template_repeatedly,
+            self.click_template,
             self.take_screenshot,
             self.nav_take_screenshot,
             self.delete_screenshot,
@@ -318,7 +317,7 @@ class TestGatherTile(unittest.TestCase):
         self.get_roi.side_effect = lambda name: roi_by_name.get(name, (501, 1138, 118, 29))
         self.nav_get_roi.side_effect = self.get_roi.side_effect
         self.click_text.return_value = True
-        self.click_template_repeatedly.return_value = True
+        self.click_template.return_value = True
         self.take_screenshot.return_value = "/tmp/march.png"
         self.nav_take_screenshot.return_value = "/tmp/march.png"
         self.nav_get_template_path.return_value = "/tmp/remove_hero.png"
@@ -338,13 +337,13 @@ class TestGatherTile(unittest.TestCase):
         self.click_text.assert_any_call("Search", 0, roi="worldmap_search", delay=3.0, last=True, fuzzy=True)
         self.click_text.assert_any_call("Gather", 0, roi="gathering_tile_info", last=True, fuzzy=True)
         self.send_march.assert_called_once_with(0)
-        self.click_template_repeatedly.assert_called_once_with(
+        self.click_template.assert_called_once_with(
             "gather_tile_increase_level",
             0,
-            clicks=10,
             roi="worldmap_search",
             gray=False,
             threshold=0.92,
+            clicks=10,
         )
         self.find_text.assert_called_once_with(
             "/tmp/march.png",
@@ -734,36 +733,11 @@ class TestClickOnTemplate(unittest.TestCase):
         self.find_center.assert_not_called()
         self.click_coords.assert_not_called()
 
-
-class TestClickTemplateRepeatedly(unittest.TestCase):
-    """Test the single-search repeated-click template helper."""
-
-    def setUp(self):
-        """Set up shared mocks."""
-        self.patchers = [
-            patch("wosutil.tool.tasks.navigation.take_screenshot"),
-            patch("wosutil.tool.tasks.navigation.get_template_path"),
-            patch("wosutil.tool.tasks.navigation.find_template_center_on_screen"),
-            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
-            patch("wosutil.tool.tasks.navigation.delete_temp_screenshot"),
-        ]
-        self.mocks = [p.start() for p in self.patchers]
-        (
-            self.take_screenshot,
-            self.get_template_path,
-            self.find_center,
-            self.click_coords,
-            self.delete_screenshot,
-        ) = self.mocks
-        self.take_screenshot.return_value = "/tmp/shot.png"
-        self.get_template_path.return_value = "/tmp/template.png"
-        self.addCleanup(lambda: [p.stop() for p in self.patchers])
-
-    def test_finds_once_and_clicks_the_same_center_repeatedly(self):
-        """Ten clicks reuse one template match and one screenshot."""
+    def test_clicks_multiple_times_with_single_search(self):
+        """Multiple clicks reuse one template match and one screenshot."""
         self.find_center.return_value = (True, (50, 60))
 
-        self.assertTrue(_click_template_repeatedly("my_template", 0, clicks=10, roi=(1, 2, 3, 4), delay=0.1))
+        self.assertTrue(click_on_template("my_template", 0, roi=(1, 2, 3, 4), delay=0.1, clicks=10))
 
         self.take_screenshot.assert_called_once_with(0)
         self.find_center.assert_called_once_with(
@@ -775,29 +749,14 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
         )
         self.assertEqual(self.click_coords.call_count, 10)
         self.assertTrue(all(call_args == call(50, 60, 0, delay=0.1) for call_args in self.click_coords.call_args_list))
-        self.delete_screenshot.assert_called_once_with("/tmp/shot.png")
 
-    def test_resolves_roi_name(self):
-        """An ROI name is resolved via get_roi before searching."""
+    def test_single_click_by_default(self):
+        """Omitting clicks preserves the original single-click behavior."""
         self.find_center.return_value = (True, (50, 60))
-        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
-            self.assertTrue(_click_template_repeatedly("my_template", 0, clicks=2, roi="my_roi"))
-        get_roi.assert_called_once_with("my_roi")
-        self.find_center.assert_called_once_with(
-            "/tmp/template.png",
-            "/tmp/shot.png",
-            threshold=SCREEN_CHECK_THRESHOLD,
-            roi=(1, 2, 3, 4),
-            grayscale=False,
-        )
 
-    def test_returns_false_when_roi_name_missing(self):
-        """A missing ROI name fails without taking a screenshot."""
-        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=None):
-            self.assertFalse(_click_template_repeatedly("my_template", 0, clicks=2, roi="missing_roi"))
-        self.take_screenshot.assert_not_called()
-        self.find_center.assert_not_called()
-        self.click_coords.assert_not_called()
+        self.assertTrue(click_on_template("my_template", 0, delay=0.1))
+
+        self.assertEqual(self.click_coords.call_count, 1)
 
 
 class TestClickFirstFoundTemplate(unittest.TestCase):

@@ -279,5 +279,25 @@ class TestForceRestartEmulator(unittest.TestCase):
         self.assertFalse(result)
 
 
+class TestClickCoordinatesClicks(unittest.TestCase):
+    """The clicks parameter sends repeated taps on the same coordinates."""
+
+    def test_single_click_by_default(self):
+        """Omitting clicks preserves the original single-tap behavior."""
+        with patch("wosutil.emulator.emulator_manager.execute_adb_command", return_value=_ok()) as execute, patch("wosutil.emulator.emulator_manager.time.sleep") as sleep:
+            self.assertTrue(click_on_coordinates(10, 20, 0))
+
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual(sleep.call_count, 1)
+
+    def test_multiple_clicks_tap_and_wait_each_time(self):
+        """Each repeated click issues its own tap and delay."""
+        with patch("wosutil.emulator.emulator_manager.execute_adb_command", return_value=_ok()) as execute, patch("wosutil.emulator.emulator_manager.time.sleep") as sleep:
+            self.assertTrue(click_on_coordinates(10, 20, 0, delay=0.1, clicks=3))
+
+        self.assertEqual(execute.call_count, 3)
+        self.assertEqual(sleep.call_count, 3)
+
+
 if __name__ == "__main__":
     unittest.main()
