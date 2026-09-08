@@ -5,6 +5,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+from wosutil.emulator.emulator_manager import AdbCommandError
 from wosutil.stop import stop_signal
 from wosutil.tool.tool_instances_controller import MultiInstanceToolController, pick_scheduled_task
 
@@ -546,6 +547,124 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         with patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save:
             self._run_worker_once(controller, pm)
         mock_save.assert_not_called()
+
+    def _run_crashing_worker(self, controller):
+        """Run the worker with a game launch that always blows up on ADB."""
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen",
+            side_effect=AdbCommandError("ADB operation 'force-stop game' failed with exit code 1"),
+        ), patch("wosutil.tool.tool_instances_controller.time.sleep"), patch.object(controller, "launch_next_instances"):
+            controller.run_profile_on_instance_with_slot(0, "All")
+
+    def test_worker_error_counts_toward_retry_attempts(self):
+        """An ADB crash must count as a launch failure and re-queue the instance."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        self._run_crashing_worker(controller)
+        self.assertEqual(controller.instance_launch_attempts[0], 1)
+        self.assertIn((0, "All"), controller.instance_queue)
+        self.assertNotIn(0, controller.active_instances)
+
+    def test_worker_error_backs_off_after_max_attempts(self):
+        """Consecutive ADB crashes must pause the instance instead of spinning."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        controller.max_launch_attempts = 1
+        self._run_crashing_worker(controller)
+        self.assertGreater(controller._retry_blocked_until[0], time.time())
+        self.assertIn((0, "All"), controller.instance_queue)
+
+    def _run_idle_worker(self, controller, profile_name="All"):
+        """Run the worker whose next task is far away (idle-close path)."""
+        pm = MagicMock()
+        pm.running_tasks_state = [{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}]
+        controller.instances_profile_managers[0] = pm
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True
+        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"):
+            controller.run_profile_on_instance_with_slot(0, profile_name)
+
+    def test_duplicate_worker_yields_without_touching_the_slot(self):
+        """A second worker must not stop the emulator owned by the live one."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        controller.active_instances.add(0)
+        other = MagicMock()
+        other.is_alive.return_value = True
+        controller.instance_threads[0] = other
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen"
+        ) as mock_launch, patch("wosutil.tool.tool_instances_controller.sync_utc_time"):
+            controller.run_profile_on_instance_with_slot(0, "All")
+        mock_launch.assert_not_called()
+        self.assertEqual(manager.start_calls, 0)
+        self.assertEqual(manager.stop_calls, 0)
+        self.assertIn(0, controller.active_instances)
+        self.assertIs(controller.instance_threads[0], other)
+        self.assertTrue(any("Duplicate worker" in msg for msg, _level in self.logs))
+
+    def test_stale_thread_reference_does_not_block_takeover(self):
+        """A dead thread entry must not stop the replacement worker."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        other = MagicMock()
+        other.is_alive.return_value = False
+        controller.instance_threads[0] = other
+        self._run_idle_worker(controller)
+        self.assertIn((0, "All"), controller.instance_queue)
+        self.assertTrue(any("Task cycle finished" in msg for msg, _level in self.logs))
+
+    def test_idle_close_marks_stopping_during_stop(self):
+        """The intentional close is visible so health checks back off meanwhile."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        seen = {}
+        real_stop = manager.stop_instance
+
+        def stop_and_check(index):
+            seen["marked"] = controller._stop_in_progress(index)
+            return real_stop(index)
+
+        manager.stop_instance = stop_and_check
+        self._run_idle_worker(controller)
+        self.assertTrue(seen.get("marked"))
+        self.assertFalse(controller._stop_in_progress(0))
+
+    def test_health_check_yields_when_close_in_progress(self):
+        """No forced restart under a worker that is already closing the instance."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        controller.health_check_interval = 0
+        controller.instances_profile_managers[0] = MagicMock()
+        controller._stopping_instances.add(0)
+        self.addCleanup(controller._stopping_instances.discard, 0)
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True
+        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"), patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False), patch(
+            "wosutil.tool.tool_instances_controller.force_restart_emulator"
+        ) as mock_restart:
+            controller.run_profile_on_instance_with_slot(0, "All")
+        mock_restart.assert_not_called()
+        self.assertEqual(manager.stop_calls, 0)
+        self.assertEqual(controller.instance_queue, [])
+        self.assertTrue(any("already in progress" in msg for msg, _level in self.logs))
+
+    def test_health_check_restarts_when_no_close_in_progress(self):
+        """The guard only skips restarts, it never disables them."""
+        manager = FakeManagerRunning()
+        controller = self._make_controller(manager)
+        controller.health_check_interval = 0
+        pm = MagicMock()
+        pm.running_tasks_state = [{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}]
+        controller.instances_profile_managers[0] = pm
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
+            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True
+        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"), patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False), patch(
+            "wosutil.tool.tool_instances_controller.force_restart_emulator", return_value=True
+        ) as mock_restart:
+            controller.run_profile_on_instance_with_slot(0, "All")
+        mock_restart.assert_called_once()
+        self.assertGreaterEqual(manager.stop_calls, 1)
 
 
 class TestSelfHealingQueue(unittest.TestCase):
