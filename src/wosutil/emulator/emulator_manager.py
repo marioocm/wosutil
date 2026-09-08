@@ -363,30 +363,36 @@ def cleanup_stale_temp_screenshots(max_age_seconds=24 * 60 * 60):
         pass
 
 
-def click_on_coordinates(x, y, instance_index, delay=CLICK_DELAY):
+def click_on_coordinates(x, y, instance_index, delay=CLICK_DELAY, clicks=1):
     """Clicks on specific coordinates on the emulator screen.
 
     Args:
         x (int): X coordinate.
         y (int): Y coordinate.
-        delay (float): Delay after clicking in seconds.
+        delay (float): Delay after each click in seconds.
         instance_index (int): Emulator instance index.
+        clicks (int): Number of times to click the same coordinates.
     """
-    log_message(f"Clicking on coordinates on instance {instance_index}: ({x}, {y})", level="info")
-    result = execute_adb_command(["shell", "input", "tap", str(x), str(y)], instance_index)
-    _require_adb_success(result, f"tap ({x}, {y})")
-    stop_signal.check()
-    time.sleep(delay)
+    if clicks > 1:
+        log_message(f"Clicking {clicks} times on coordinates on instance {instance_index}: ({x}, {y})", level="info")
+    else:
+        log_message(f"Clicking on coordinates on instance {instance_index}: ({x}, {y})", level="info")
+    for _ in range(clicks):
+        result = execute_adb_command(["shell", "input", "tap", str(x), str(y)], instance_index)
+        _require_adb_success(result, f"tap ({x}, {y})")
+        stop_signal.check()
+        time.sleep(delay)
     return True
 
 
-def click_on(coordinate_name, instance_index, delay=CLICK_DELAY):
+def click_on(coordinate_name, instance_index, delay=CLICK_DELAY, clicks=1):
     """Clicks on a named coordinate from the COORDINATES dictionary.
 
     Args:
         coordinate_name (str): Name of the coordinate (e.g., "world", "alliance", "shop").
         instance_index (int): Emulator instance index.
-        delay (float): Delay after clicking in seconds.
+        delay (float): Delay after each click in seconds.
+        clicks (int): Number of times to click the same coordinates.
 
     Returns:
         bool: True if click was successful, False if coordinate not found.
@@ -394,7 +400,7 @@ def click_on(coordinate_name, instance_index, delay=CLICK_DELAY):
     coordinates = get_coordinates(coordinate_name)
     if coordinates:
         x, y = coordinates
-        click_on_coordinates(x, y, instance_index, delay)
+        click_on_coordinates(x, y, instance_index, delay, clicks)
         return True
     else:
         log_message(f"Could not click on '{coordinate_name}' on instance {instance_index}: coordinate not found", level="error")

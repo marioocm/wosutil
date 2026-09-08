@@ -761,58 +761,6 @@ def _click_leftmost_template(instance_index, template_name, delay=CLICK_DELAY):
         delete_temp_screenshot(screenshot_path)
 
 
-def _click_template_repeatedly(
-    template_name,
-    instance_index,
-    clicks,
-    roi=None,
-    delay=CLICK_DELAY,
-    gray=False,
-    threshold=SCREEN_CHECK_THRESHOLD,
-):
-    """Locate a template once and click its unchanged center repeatedly.
-
-    Args:
-        template_name (str): Template name in TEMPLATE_PATHS.
-        instance_index (int): Emulator instance index.
-        clicks (int): Number of clicks to send after the template is found.
-        roi (tuple, str or None, optional): Region of interest as an (x, y, w, h)
-            tuple, or an ROI name in the ROI dict (resolved via get_roi, fails
-            when missing). When omitted the template is searched on the full
-            screen.
-        delay (float): Delay after each click.
-        gray (bool): Use gray-scale matching when True. The default is color
-            matching.
-        threshold (float): Minimum confidence threshold for a match.
-
-    Returns:
-        bool: True when the template was found and all clicks were sent.
-    """
-    if isinstance(roi, str):
-        resolved_roi = get_roi(roi)
-        if resolved_roi is None:
-            log_message(f"ROI '{roi}' not found in ROI, cannot click on '{template_name}'.", level="error")
-            return False
-    else:
-        resolved_roi = roi
-
-    screenshot_path = take_screenshot(instance_index)
-    if not screenshot_path:
-        log_message("Could not take a screenshot to search the templates.", level="error")
-        return False
-
-    try:
-        center = _locate_template_center(template_name, screenshot_path, roi=resolved_roi, gray=gray, threshold=threshold)
-        if center is None:
-            return False
-        for _ in range(clicks):
-            click_on_coordinates(center[0], center[1], instance_index, delay=delay)
-        log_message(f"Template '{template_name}' found; clicked it {clicks} times.", level="success")
-        return True
-    finally:
-        delete_temp_screenshot(screenshot_path)
-
-
 def _locate_template_center(template_name, screenshot_path, roi, gray, threshold):
     """Find a template on a screenshot and return its center.
 
@@ -889,11 +837,12 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
             delete_temp_screenshot(screenshot_path)
 
 
-def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY, gray=False, screenshot_path=None, threshold=SCREEN_CHECK_THRESHOLD):
+def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY, gray=False, screenshot_path=None, threshold=SCREEN_CHECK_THRESHOLD, clicks=1):
     """Takes a screenshot and clicks the center of the given template if found.
 
     Generic helper that replaces the repeated "screenshot -> find template ->
-    click its center" pattern.
+    click its center" pattern. The template is located once and its unchanged
+    center is clicked ``clicks`` times.
 
     Args:
         template_name (str): Template name in TEMPLATE_PATHS.
@@ -902,13 +851,14 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
             tuple, or an ROI name in the ROI dict (resolved via get_roi, fails
             when missing). When omitted the template is searched on the full
             screen.
-        delay (float): Delay after the click.
+        delay (float): Delay after each click.
         gray (bool): Use gray-scale matching when True.
         screenshot_path (str, optional): Reuse an already taken screenshot
             instead of capturing a new one. Only valid when the caller can
             guarantee no screen change has happened since the capture (that is,
             no click between captures).
         threshold (float): Minimum confidence threshold for a match.
+        clicks (int): Number of times to click the found center.
 
     Returns:
         bool: True if the template was found and clicked, False otherwise.
@@ -932,8 +882,12 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
         center = _locate_template_center(template_name, screenshot_path, roi=resolved_roi, gray=gray, threshold=threshold)
         if center is None:
             return False
-        click_on_coordinates(center[0], center[1], instance_index, delay=delay)
-        log_message(f"Template '{template_name}' found, clicking at ({center[0]}, {center[1]}).", level="success")
+        for _ in range(clicks):
+            click_on_coordinates(center[0], center[1], instance_index, delay=delay)
+        if clicks > 1:
+            log_message(f"Template '{template_name}' found; clicked it {clicks} times.", level="success")
+        else:
+            log_message(f"Template '{template_name}' found, clicking at ({center[0]}, {center[1]}).", level="success")
         return True
     finally:
         if owned_screenshot:

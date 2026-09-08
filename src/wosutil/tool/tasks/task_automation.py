@@ -227,17 +227,13 @@ def claim_mail(instance_index):
     # Click sequence to navigate and claim mail
     click_on_coordinates(665, 1050, instance_index)
     click_on_coordinates(88, 120, instance_index)
-    for _ in range(3):
-        click_on_coordinates(560, 1240, instance_index)
+    click_on_coordinates(560, 1240, instance_index, clicks=3)
     click_on_coordinates(226, 120, instance_index)
-    for _ in range(3):
-        click_on_coordinates(560, 1240, instance_index)
+    click_on_coordinates(560, 1240, instance_index, clicks=3)
     click_on_coordinates(360, 120, instance_index)
-    for _ in range(3):
-        click_on_coordinates(560, 1240, instance_index)
+    click_on_coordinates(560, 1240, instance_index, clicks=3)
     click_on_coordinates(500, 120, instance_index)
-    for _ in range(3):
-        click_on_coordinates(560, 1240, instance_index)
+    click_on_coordinates(560, 1240, instance_index, clicks=3)
 
     press_android_back_button(instance_index)
     return True
@@ -261,18 +257,15 @@ def claim_alliance_chests(instance_index):
     # Click on chest tab
     click_on_coordinates(360, 206, instance_index)
     # Click on top tab 3 times
-    for _ in range(3):
-        click_on_coordinates(360, 54, instance_index)
+    click_on_coordinates(360, 54, instance_index, clicks=3)
     # Click on open chest
     click_on_coordinates(534, 400, instance_index)
     # Click on claim button 5 times
-    for _ in range(5):
-        click_on_coordinates(565, 1186, instance_index)
+    click_on_coordinates(565, 1186, instance_index, clicks=5)
     # Click on left tab
     click_on_coordinates(190, 400, instance_index)
     # Click on claim button 5 times
-    for _ in range(5):
-        click_on_coordinates(360, 1208, instance_index)
+    click_on_coordinates(360, 1208, instance_index, clicks=5)
     # Android back button 2 times
     press_android_back_button(instance_index)
     press_android_back_button(instance_index)
@@ -294,11 +287,9 @@ def claim_triumph(instance_index):
 
     click_on_coordinates(360, 1205, instance_index)
     click_on_coordinates(360, 460, instance_index)
-    for _ in range(3):
-        click_on_coordinates(360, 38, instance_index)
+    click_on_coordinates(360, 38, instance_index, clicks=3)
     click_on_coordinates(360, 870, instance_index)
-    for _ in range(3):
-        click_on_coordinates(360, 38, instance_index)
+    click_on_coordinates(360, 38, instance_index, clicks=3)
     press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return True
@@ -613,9 +604,7 @@ def claim_vip_daily_rewards(instance_index):
     click_on("vip", instance_index, delay=0.7)
     click_on_coordinates(628, 282, instance_index, delay=2)
     press_android_back_button(instance_index)
-    click_on_coordinates(585, 826, instance_index, delay=0.7)
-    click_on_coordinates(585, 826, instance_index, delay=0.7)
-    click_on_coordinates(585, 826, instance_index, delay=0.7)
+    click_on_coordinates(585, 826, instance_index, delay=0.7, clicks=3)
 
     reschedule = get_seconds_until_utc_midnight(instance_index, fallback=12 * 60 * 60)
     if reschedule is not None:
@@ -707,8 +696,7 @@ def claim_pet_adventure_ally_treasure(instance_index):
 
     click_on_coordinates(634, 1201, instance_index)
     click_on_coordinates(363, 1083, instance_index)
-    for _ in range(3):
-        click_on_coordinates(359, 1254, instance_index)
+    click_on_coordinates(359, 1254, instance_index, clicks=3)
     press_android_back_button(instance_index)
 
     reschedule = get_seconds_until_utc_midnight(instance_index, fallback=12 * 60 * 60)
@@ -1000,8 +988,7 @@ def train_troops(instance_index):
         log_message("Infantry camp entry NOT found in side menu. Aborting.", level="warning")
         return False, 6 * 60 * 60
 
-    for _ in range(4):
-        click_on_coordinates(359, 578, instance_index, delay=0.5)
+    click_on_coordinates(359, 578, instance_index, delay=0.5, clicks=4)
 
     if not click_on_template("train_troop", instance_index, delay=1.0):
         log_message("Train troop button NOT found. Aborting.", level="warning")

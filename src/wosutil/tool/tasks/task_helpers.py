@@ -34,7 +34,6 @@ from wosutil.preferences import GATHER_RESOURCES, get_bear_rally_call_march, get
 from wosutil.stop import stop_signal
 from wosutil.tool.tasks.navigation import (
     _click_leftmost_template,
-    _click_template_repeatedly,
     click_first_found_template,
     click_on_template,
     click_on_text,
@@ -452,7 +451,7 @@ def gather_tile(instance_index, resource):
         log_message(f"Resource '{resource}' NOT found in the world-map search.", level="warning")
         return None
 
-    _click_template_repeatedly("gather_tile_increase_level", instance_index, clicks=10, roi="worldmap_search", gray=False, threshold=0.92)
+    click_on_template("gather_tile_increase_level", instance_index, roi="worldmap_search", gray=False, threshold=0.92, clicks=10)
 
     if not click_on_text("Search", instance_index, roi="worldmap_search", delay=3.0, last=True, fuzzy=True):
         log_message("Search button NOT found in the world-map search.", level="warning")
@@ -1082,8 +1081,7 @@ def _train_troop_camp(instance_index):
     Returns:
         int or None: Remaining training time in seconds, or None if not detected.
     """
-    for _ in range(4):
-        click_on_coordinates(360, 40, instance_index, delay=0.5)
+    click_on_coordinates(360, 40, instance_index, delay=0.5, clicks=4)
 
     for _ in range(3):
         stop_signal.check()
