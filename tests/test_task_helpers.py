@@ -10,26 +10,15 @@ from wosutil.config import (
     INTEL_BEAST_MAX_WAIT_SECONDS,
     SCREEN_CHECK_THRESHOLD,
 )
-from wosutil.tool.tasks.task_helpers import (
-    BEAR_RALLY_MARGIN_SECONDS,
-    BEAR_RALLY_RETRY_SECONDS,
-    BEAR_TRAP_OWN_RALLY_PREP_SECONDS,
-    KILL_BEAST_MARCH_POSITIONS,
-    KILL_BEAST_MARCH_SCROLL_END,
-    KILL_BEAST_MARCH_SCROLL_START,
+from wosutil.tool.tasks.navigation import (
     WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
     WORLD_MAP_SEARCH_SCROLL_END,
     WORLD_MAP_SEARCH_SCROLL_START,
     _click_template_repeatedly,
-    _pick_valid_rally,
-    _read_join_rally_buttons,
-    _read_rally_countdowns,
-    call_bear_rally,
     click_first_found_template,
     click_on_template,
     click_on_text,
     ensure_hero_recruit_screen,
-    gather_tile,
     go_alliance_tab,
     go_hero_recruit_screen,
     go_island,
@@ -41,6 +30,19 @@ from wosutil.tool.tasks.task_helpers import (
     go_worldmap_search,
     is_game_on_hero_recruit_screen,
     is_game_on_screen,
+)
+from wosutil.tool.tasks.task_helpers import (
+    BEAR_RALLY_MARGIN_SECONDS,
+    BEAR_RALLY_RETRY_SECONDS,
+    BEAR_TRAP_OWN_RALLY_PREP_SECONDS,
+    KILL_BEAST_MARCH_POSITIONS,
+    KILL_BEAST_MARCH_SCROLL_END,
+    KILL_BEAST_MARCH_SCROLL_START,
+    _pick_valid_rally,
+    _read_join_rally_buttons,
+    _read_rally_countdowns,
+    call_bear_rally,
+    gather_tile,
     join_bear_rally,
     kill_beast,
     kill_intel_beast,
@@ -223,10 +225,10 @@ class TestGoWorldMapSearch(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.ensure_world_screen"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
-            patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
-            patch("wosutil.tool.tasks.task_helpers.time.sleep"),
+            patch("wosutil.tool.tasks.navigation.ensure_world_screen"),
+            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
+            patch("wosutil.tool.tasks.navigation.scroll_screen"),
+            patch("wosutil.tool.tasks.navigation.time.sleep"),
         ]
         self.ensure_world, self.click_coords, self.scroll_screen, self.sleep = [p.start() for p in self.patchers]
         self.ensure_world.return_value = True
@@ -272,14 +274,17 @@ class TestGatherTile(unittest.TestCase):
         """Set up shared mocks."""
         self.patchers = [
             patch("wosutil.tool.tasks.task_helpers.go_worldmap_search"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
             patch("wosutil.tool.tasks.task_helpers.get_roi"),
+            patch("wosutil.tool.tasks.navigation.get_roi"),
             patch("wosutil.tool.tasks.task_helpers.click_on_text"),
             patch("wosutil.tool.tasks.task_helpers._click_template_repeatedly"),
             patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.navigation.take_screenshot"),
             patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
-            patch("wosutil.tool.tasks.task_helpers.find_multiple_templates"),
+            patch("wosutil.tool.tasks.navigation.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.navigation.get_template_path"),
+            patch("wosutil.tool.tasks.navigation.find_multiple_templates"),
             patch("wosutil.tool.tasks.task_helpers.find_text_on_screen"),
             patch("wosutil.tool.tasks.task_helpers.read_screen_time"),
             patch("wosutil.tool.tasks.task_helpers.send_march"),
@@ -289,12 +294,15 @@ class TestGatherTile(unittest.TestCase):
             self.go_search,
             self.click_coords,
             self.get_roi,
+            self.nav_get_roi,
             self.click_text,
             self.click_template_repeatedly,
             self.take_screenshot,
+            self.nav_take_screenshot,
             self.delete_screenshot,
-            self.get_template_path,
-            self.find_multiple,
+            self.nav_delete_screenshot,
+            self.nav_get_template_path,
+            self.nav_find_multiple,
             self.find_text,
             self.read_time,
             self.send_march,
@@ -308,11 +316,13 @@ class TestGatherTile(unittest.TestCase):
             "worldmap": (0, 95, 718, 1008),
         }
         self.get_roi.side_effect = lambda name: roi_by_name.get(name, (501, 1138, 118, 29))
+        self.nav_get_roi.side_effect = self.get_roi.side_effect
         self.click_text.return_value = True
         self.click_template_repeatedly.return_value = True
         self.take_screenshot.return_value = "/tmp/march.png"
-        self.get_template_path.return_value = "/tmp/remove_hero.png"
-        self.find_multiple.return_value = [(400, 100, 30, 30), (200, 100, 30, 30)]
+        self.nav_take_screenshot.return_value = "/tmp/march.png"
+        self.nav_get_template_path.return_value = "/tmp/remove_hero.png"
+        self.nav_find_multiple.return_value = [(400, 100, 30, 30), (200, 100, 30, 30)]
         self.find_text.return_value = (True, (190, 514, 150, 24))
         self.read_time.side_effect = [120]
         self.send_march.return_value = 60
@@ -378,10 +388,10 @@ class TestIsGameOnHeroRecruitScreen(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
-            patch("wosutil.tool.tasks.task_helpers.get_roi"),
-            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
+            patch("wosutil.tool.tasks.navigation.take_screenshot"),
+            patch("wosutil.tool.tasks.navigation.get_template_path"),
+            patch("wosutil.tool.tasks.navigation.get_roi"),
+            patch("wosutil.tool.tasks.navigation.find_template_center_on_screen"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.take_screenshot, self.get_template_path, self.get_roi, self.find_template = self.mocks
@@ -425,9 +435,9 @@ class TestEnsureHeroRecruitScreen(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.is_game_on_hero_recruit_screen"),
-            patch("wosutil.tool.tasks.task_helpers.go_hero_recruit_screen"),
-            patch("wosutil.tool.tasks.task_helpers.time.sleep"),
+            patch("wosutil.tool.tasks.navigation.is_game_on_hero_recruit_screen"),
+            patch("wosutil.tool.tasks.navigation.go_hero_recruit_screen"),
+            patch("wosutil.tool.tasks.navigation.time.sleep"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.is_on_screen, self.go, self.time_sleep = self.mocks
@@ -458,10 +468,10 @@ class TestGoHeroRecruitScreen(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.is_game_on_hero_recruit_screen"),
-            patch("wosutil.tool.tasks.task_helpers.ensure_city_screen"),
-            patch("wosutil.tool.tasks.task_helpers.click_on"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.navigation.is_game_on_hero_recruit_screen"),
+            patch("wosutil.tool.tasks.navigation.ensure_city_screen"),
+            patch("wosutil.tool.tasks.navigation.click_on"),
+            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.is_on_screen, self.ensure_city, self.click_on, self.click_coords = self.mocks
@@ -498,10 +508,10 @@ class TestGoSidemenuTab(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.go_sidemenu"),
-            patch("wosutil.tool.tasks.task_helpers.get_roi"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_template"),
+            patch("wosutil.tool.tasks.navigation.go_sidemenu"),
+            patch("wosutil.tool.tasks.navigation.get_roi"),
+            patch("wosutil.tool.tasks.navigation.click_on_text"),
+            patch("wosutil.tool.tasks.navigation.click_on_template"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.go_sidemenu, self.get_roi, self.click_text, self.click_template = self.mocks
@@ -546,9 +556,9 @@ class TestGoTundraTrek(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
-            patch("wosutil.tool.tasks.task_helpers.get_roi"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+            patch("wosutil.tool.tasks.navigation.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.navigation.get_roi"),
+            patch("wosutil.tool.tasks.navigation.click_on_text"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
@@ -581,9 +591,9 @@ class TestGoPetAdventure(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
-            patch("wosutil.tool.tasks.task_helpers.get_roi"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
+            patch("wosutil.tool.tasks.navigation.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.navigation.get_roi"),
+            patch("wosutil.tool.tasks.navigation.click_on_text"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
@@ -616,10 +626,10 @@ class TestGoIsland(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.go_sidemenu_daily"),
-            patch("wosutil.tool.tasks.task_helpers.scroll_screen"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_text"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.navigation.go_sidemenu_daily"),
+            patch("wosutil.tool.tasks.navigation.scroll_screen"),
+            patch("wosutil.tool.tasks.navigation.click_on_text"),
+            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.go_sidemenu_daily, self.scroll_screen, self.click_text, self.click_coords = self.mocks
@@ -657,10 +667,10 @@ class TestClickOnTemplate(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
-            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.navigation.take_screenshot"),
+            patch("wosutil.tool.tasks.navigation.get_template_path"),
+            patch("wosutil.tool.tasks.navigation.find_template_center_on_screen"),
+            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.take_screenshot, self.get_template_path, self.find_center, self.click_coords = self.mocks
@@ -708,7 +718,7 @@ class TestClickOnTemplate(unittest.TestCase):
     def test_resolves_roi_name(self):
         """An ROI name is resolved via get_roi before searching."""
         self.find_center.return_value = (True, (10, 20))
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
             self.assertTrue(click_on_template("my_template", 0, roi="my_roi"))
         get_roi.assert_called_once_with("my_roi")
         self.find_center.assert_called_once()
@@ -718,7 +728,7 @@ class TestClickOnTemplate(unittest.TestCase):
 
     def test_returns_false_when_roi_name_missing(self):
         """A missing ROI name fails without taking a screenshot."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=None):
             self.assertFalse(click_on_template("my_template", 0, roi="missing_roi"))
         self.take_screenshot.assert_not_called()
         self.find_center.assert_not_called()
@@ -731,11 +741,11 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
-            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
-            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.navigation.take_screenshot"),
+            patch("wosutil.tool.tasks.navigation.get_template_path"),
+            patch("wosutil.tool.tasks.navigation.find_template_center_on_screen"),
+            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
+            patch("wosutil.tool.tasks.navigation.delete_temp_screenshot"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         (
@@ -770,7 +780,7 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
     def test_resolves_roi_name(self):
         """An ROI name is resolved via get_roi before searching."""
         self.find_center.return_value = (True, (50, 60))
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
             self.assertTrue(_click_template_repeatedly("my_template", 0, clicks=2, roi="my_roi"))
         get_roi.assert_called_once_with("my_roi")
         self.find_center.assert_called_once_with(
@@ -783,7 +793,7 @@ class TestClickTemplateRepeatedly(unittest.TestCase):
 
     def test_returns_false_when_roi_name_missing(self):
         """A missing ROI name fails without taking a screenshot."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=None):
             self.assertFalse(_click_template_repeatedly("my_template", 0, clicks=2, roi="missing_roi"))
         self.take_screenshot.assert_not_called()
         self.find_center.assert_not_called()
@@ -796,8 +806,8 @@ class TestClickFirstFoundTemplate(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_template"),
+            patch("wosutil.tool.tasks.navigation.take_screenshot"),
+            patch("wosutil.tool.tasks.navigation.click_on_template"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.take_screenshot, self.click_template = self.mocks
@@ -837,7 +847,7 @@ class TestClickFirstFoundTemplate(unittest.TestCase):
     def test_resolves_roi_name(self):
         """An ROI name is resolved once and the tuple is forwarded."""
         self.click_template.side_effect = [True]
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
             result = click_first_found_template(0, ["a"], roi="my_roi")
         self.assertEqual(result, "a")
         get_roi.assert_called_once_with("my_roi")
@@ -845,7 +855,7 @@ class TestClickFirstFoundTemplate(unittest.TestCase):
 
     def test_returns_none_when_roi_name_missing(self):
         """A missing ROI name fails without taking a screenshot."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=None):
             self.assertIsNone(click_first_found_template(0, ["a"], roi="missing_roi"))
         self.take_screenshot.assert_not_called()
         self.click_template.assert_not_called()
@@ -857,10 +867,10 @@ class TestClickOnText(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.find_text_center_on_screen"),
-            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates"),
+            patch("wosutil.tool.tasks.navigation.take_screenshot"),
+            patch("wosutil.tool.tasks.navigation.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.navigation.find_text_center_on_screen"),
+            patch("wosutil.tool.tasks.navigation.click_on_coordinates"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.take_screenshot, self.delete_temp_screenshot, self.find_center, self.click_coords = self.mocks
@@ -910,7 +920,7 @@ class TestClickOnText(unittest.TestCase):
     def test_resolves_roi_name(self):
         """An ROI name is resolved via get_roi before searching."""
         self.find_center.return_value = (True, (10, 20))
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=(1, 2, 3, 4)) as get_roi:
             self.assertTrue(click_on_text("City", 0, roi="my_roi"))
         get_roi.assert_called_once_with("my_roi")
         self.find_center.assert_called_once_with("/tmp/shot.png", "City", roi=(1, 2, 3, 4), instance_index=0, debug_label="click_text_City", last=False)
@@ -918,7 +928,7 @@ class TestClickOnText(unittest.TestCase):
 
     def test_returns_false_when_roi_name_missing(self):
         """A missing ROI name fails without taking a screenshot."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=None):
+        with patch("wosutil.tool.tasks.navigation.get_roi", return_value=None):
             self.assertFalse(click_on_text("City", 0, roi="missing_roi"))
         self.take_screenshot.assert_not_called()
         self.find_center.assert_not_called()
@@ -931,10 +941,10 @@ class TestIsGameOnScreen(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
-            patch("wosutil.tool.tasks.task_helpers.get_template_path"),
-            patch("wosutil.tool.tasks.task_helpers.get_roi"),
-            patch("wosutil.tool.tasks.task_helpers.find_template_center_on_screen"),
+            patch("wosutil.tool.tasks.navigation.take_screenshot"),
+            patch("wosutil.tool.tasks.navigation.get_template_path"),
+            patch("wosutil.tool.tasks.navigation.get_roi"),
+            patch("wosutil.tool.tasks.navigation.find_template_center_on_screen"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.take_screenshot, self.get_template_path, self.get_roi, self.find_template = self.mocks
@@ -1038,10 +1048,10 @@ class TestEnsureCityScreenNotInstalled(unittest.TestCase):
 
     def test_aborts_without_launching_when_game_missing(self):
         """Missing game: clear error and no launch/restart of the emulator."""
-        with patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_wos_installed", return_value=False), patch(
-            "wosutil.tool.tasks.task_helpers.launch_and_reach_city_screen"
-        ) as mock_launch, patch("wosutil.tool.tasks.task_helpers.get_multi_instance_manager") as mock_manager:
-            from wosutil.tool.tasks.task_helpers import ensure_city_screen
+        with patch("wosutil.tool.tasks.navigation.is_wos_running", return_value=False), patch("wosutil.tool.tasks.navigation.is_wos_installed", return_value=False), patch(
+            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen"
+        ) as mock_launch, patch("wosutil.tool.tasks.navigation.get_multi_instance_manager") as mock_manager:
+            from wosutil.tool.tasks.navigation import ensure_city_screen
 
             result = ensure_city_screen(0)
 
@@ -1128,9 +1138,9 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_clicks_alliance_when_on_city_screen(self):
         """On the city screen it clicks alliance without ensuring the screen."""
-        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=True), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen") as is_world, patch(
-            "wosutil.tool.tasks.task_helpers.ensure_city_screen"
-        ) as ensure_city, patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=True), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen") as is_world, patch(
+            "wosutil.tool.tasks.navigation.ensure_city_screen"
+        ) as ensure_city, patch("wosutil.tool.tasks.navigation.click_on") as click_on:
             result = go_alliance_tab(0)
 
         self.assertTrue(result)
@@ -1140,9 +1150,9 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_clicks_alliance_when_on_world_screen(self):
         """On the world screen it clicks alliance without ensuring the city screen."""
-        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=True), patch(
-            "wosutil.tool.tasks.task_helpers.ensure_city_screen"
-        ) as ensure_city, patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=True), patch(
+            "wosutil.tool.tasks.navigation.ensure_city_screen"
+        ) as ensure_city, patch("wosutil.tool.tasks.navigation.click_on") as click_on:
             result = go_alliance_tab(0)
 
         self.assertTrue(result)
@@ -1151,9 +1161,9 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_ensures_city_screen_when_on_neither_screen(self):
         """When on neither screen it ensures the city screen first."""
-        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=False), patch(
-            "wosutil.tool.tasks.task_helpers.ensure_city_screen", return_value=True
-        ) as ensure_city, patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=False), patch(
+            "wosutil.tool.tasks.navigation.ensure_city_screen", return_value=True
+        ) as ensure_city, patch("wosutil.tool.tasks.navigation.click_on") as click_on:
             result = go_alliance_tab(0)
 
         self.assertTrue(result)
@@ -1162,9 +1172,9 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_returns_false_when_city_screen_unreachable(self):
         """When the city screen cannot be reached it returns False without clicking."""
-        with patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=False), patch(
-            "wosutil.tool.tasks.task_helpers.ensure_city_screen", return_value=False
-        ), patch("wosutil.tool.tasks.task_helpers.click_on") as click_on:
+        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=False), patch(
+            "wosutil.tool.tasks.navigation.ensure_city_screen", return_value=False
+        ), patch("wosutil.tool.tasks.navigation.click_on") as click_on:
             result = go_alliance_tab(0)
 
         self.assertFalse(result)
@@ -1176,7 +1186,7 @@ class TestGoRallyTab(unittest.TestCase):
 
     def test_opens_alliance_then_rally_tabs(self):
         """It opens the alliance tab and clicks twice to reach the rally tab."""
-        with patch("wosutil.tool.tasks.task_helpers.go_alliance_tab", return_value=True) as go_alliance, patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click_coords:
+        with patch("wosutil.tool.tasks.navigation.go_alliance_tab", return_value=True) as go_alliance, patch("wosutil.tool.tasks.navigation.click_on_coordinates") as click_coords:
             result = go_rally_tab(0)
 
         self.assertTrue(result)
@@ -1185,7 +1195,7 @@ class TestGoRallyTab(unittest.TestCase):
 
     def test_returns_false_when_alliance_tab_fails(self):
         """When the alliance tab cannot be reached it returns False without clicking."""
-        with patch("wosutil.tool.tasks.task_helpers.go_alliance_tab", return_value=False), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click_coords:
+        with patch("wosutil.tool.tasks.navigation.go_alliance_tab", return_value=False), patch("wosutil.tool.tasks.navigation.click_on_coordinates") as click_coords:
             result = go_rally_tab(0)
 
         self.assertFalse(result)
@@ -1376,14 +1386,14 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
     def setUp(self):
         """Patch the launch flow so no real ADB or sleeps are used."""
         self.patches = [
-            patch("wosutil.tool.tasks.task_helpers.force_stop_game"),
-            patch("wosutil.tool.tasks.task_helpers.launch_game_activity"),
-            patch("wosutil.tool.tasks.task_helpers.stop_signal.wait", return_value=False),
-            patch("wosutil.tool.tasks.task_helpers.is_wos_running", return_value=True),
-            patch("wosutil.tool.tasks.task_helpers.is_game_on_city_screen", return_value=False),
-            patch("wosutil.tool.tasks.task_helpers.is_game_on_world_screen", return_value=False),
-            patch("wosutil.tool.tasks.task_helpers.go_cityworld"),
-            patch("wosutil.tool.tasks.task_helpers.press_android_back_button"),
+            patch("wosutil.tool.tasks.navigation.force_stop_game"),
+            patch("wosutil.tool.tasks.navigation.launch_game_activity"),
+            patch("wosutil.tool.tasks.navigation.stop_signal.wait", return_value=False),
+            patch("wosutil.tool.tasks.navigation.is_wos_running", return_value=True),
+            patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.go_cityworld"),
+            patch("wosutil.tool.tasks.navigation.press_android_back_button"),
         ]
         for p in self.patches:
             p.start()
@@ -1395,7 +1405,7 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
 
     def test_reaches_city_screen_and_stops_early(self):
         """The launch ends on the first check the city screen appears."""
-        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, launch_and_reach_city_screen, press_android_back_button
+        from wosutil.tool.tasks.navigation import is_game_on_city_screen, launch_and_reach_city_screen, press_android_back_button
 
         is_game_on_city_screen.side_effect = [False, True]
         result = launch_and_reach_city_screen(0)
@@ -1406,14 +1416,14 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
 
     def test_aborts_when_process_disappears(self):
         """A missing game process fails the launch immediately."""
-        from wosutil.tool.tasks.task_helpers import is_wos_running, launch_and_reach_city_screen
+        from wosutil.tool.tasks.navigation import is_wos_running, launch_and_reach_city_screen
 
         is_wos_running.return_value = False
         self.assertFalse(launch_and_reach_city_screen(0))
 
     def test_switches_from_world_screen(self):
         """A world screen is switched back to the city instead of pressing back."""
-        from wosutil.tool.tasks.task_helpers import go_cityworld, is_game_on_world_screen, launch_and_reach_city_screen, press_android_back_button
+        from wosutil.tool.tasks.navigation import go_cityworld, is_game_on_world_screen, launch_and_reach_city_screen, press_android_back_button
 
         is_game_on_world_screen.side_effect = [True] + [False] * 9
         self.assertFalse(launch_and_reach_city_screen(0))
@@ -1422,14 +1432,14 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
 
     def test_gives_up_after_ten_checks(self):
         """Without a city screen the launch fails after 10 navigations."""
-        from wosutil.tool.tasks.task_helpers import launch_and_reach_city_screen, press_android_back_button
+        from wosutil.tool.tasks.navigation import launch_and_reach_city_screen, press_android_back_button
 
         self.assertFalse(launch_and_reach_city_screen(0))
         self.assertEqual(press_android_back_button.call_count, 10)
 
     def test_waits_for_boot_before_navigating(self):
         """No screenshot or back happens until the game process appears."""
-        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen, press_android_back_button
+        from wosutil.tool.tasks.navigation import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen, press_android_back_button
 
         is_wos_running.side_effect = [False, False, True, True]
         is_game_on_city_screen.return_value = True
@@ -1440,7 +1450,7 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
 
     def test_aborts_without_navigating_when_process_never_boots(self):
         """A game that never spawns fails before any navigation."""
-        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen, press_android_back_button
+        from wosutil.tool.tasks.navigation import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen, press_android_back_button
 
         is_wos_running.return_value = False
 
@@ -1450,7 +1460,7 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
 
     def test_survives_transient_missing_process(self):
         """A single empty pidof is re-checked instead of failing the launch."""
-        from wosutil.tool.tasks.task_helpers import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen
+        from wosutil.tool.tasks.navigation import is_game_on_city_screen, is_wos_running, launch_and_reach_city_screen
 
         is_wos_running.side_effect = [True, False, True, True]
         is_game_on_city_screen.return_value = True
@@ -1459,7 +1469,7 @@ class TestLaunchAndReachCityScreen(unittest.TestCase):
 
     def test_aborts_when_process_still_missing_after_recheck(self):
         """Two consecutive empty pidofs still fail the launch."""
-        from wosutil.tool.tasks.task_helpers import is_wos_running, launch_and_reach_city_screen
+        from wosutil.tool.tasks.navigation import is_wos_running, launch_and_reach_city_screen
 
         is_wos_running.side_effect = [True, False, False]
 

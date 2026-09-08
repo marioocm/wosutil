@@ -3,6 +3,7 @@
 import unittest
 from unittest.mock import call, patch
 
+from wosutil.tool.tasks.navigation import ensure_pet_adventure_screen
 from wosutil.tool.tasks.task_automation import (
     PET_ADVENTURE_CHESTS_DAILY_LIMIT_RESCHEDULE_SECONDS,
     PET_ADVENTURE_CHESTS_RESCHEDULE_SECONDS,
@@ -13,7 +14,6 @@ from wosutil.tool.tasks.task_helpers import (
     PET_ADVENTURE_CHEST_TEMPLATES,
     PET_ADVENTURE_CHEST_THRESHOLD,
     detect_pet_adventure_chests,
-    ensure_pet_adventure_screen,
     merge_pet_adventure_chest_matches,
     open_pet_adventure_chest,
     start_pet_adventure_chest,
@@ -356,9 +356,9 @@ class TestEnsurePetAdventureScreen(unittest.TestCase):
     def setUp(self):
         """Set up shared mocks."""
         self.patchers = [
-            patch("wosutil.tool.tasks.task_helpers.is_game_on_pet_adventure_screen"),
-            patch("wosutil.tool.tasks.task_helpers.press_android_back_button"),
-            patch("wosutil.tool.tasks.task_helpers.time.sleep"),
+            patch("wosutil.tool.tasks.navigation.is_game_on_pet_adventure_screen"),
+            patch("wosutil.tool.tasks.navigation.press_android_back_button"),
+            patch("wosutil.tool.tasks.navigation.time.sleep"),
         ]
         self.mocks = [p.start() for p in self.patchers]
         self.is_on_screen, self.press_back, self.time_sleep = self.mocks

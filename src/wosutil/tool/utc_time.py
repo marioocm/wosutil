@@ -37,7 +37,7 @@ from wosutil.emulator.emulator_manager import (
 )
 from wosutil.emulator.image_utils import read_screen_utc_time, read_words_on_image
 from wosutil.stop import stop_signal
-from wosutil.tool.tasks.task_helpers import click_on_template, ensure_world_screen
+from wosutil.tool.tasks.navigation import click_on_template, ensure_world_screen
 from wosutil.utils import log_message
 
 # Per-instance cache of the last read game clock, with the wall-clock
