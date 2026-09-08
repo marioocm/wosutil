@@ -11,10 +11,14 @@ from wosutil.stop import StopSignal, ToolStopped
 from wosutil.utils import (
     RecoverableRotatingFileHandler,
     ensure_directory_exists,
+    get_current_instance,
+    instance_log_context,
     load_json_file,
+    log_message,
     retry_operation,
     safe_int,
     save_json_file,
+    set_current_instance,
 )
 
 
@@ -269,6 +273,47 @@ class TestRecoverableRotatingFileHandler(unittest.TestCase):
         content = self._content()
         self.assertIn("before", content)
         self.assertIn("after", content)
+
+
+class TestInstanceLogPrefix(unittest.TestCase):
+    """Worker logs carry their instance index as a [i] prefix."""
+
+    def tearDown(self):
+        """Do not leak the thread-local instance into other tests."""
+        set_current_instance(None)
+
+    def test_no_prefix_outside_worker_context(self):
+        """Main/GUI thread logs keep their plain message."""
+        self.assertIsNone(get_current_instance())
+        with self.assertLogs("wosutil", level="INFO") as logs:
+            log_message("plain message", level="info")
+        self.assertTrue(any("plain message" in line for line in logs.output))
+        self.assertFalse(any("[0] plain message" in line for line in logs.output))
+
+    def test_prefix_added_inside_worker_context(self):
+        """Every message from the worker thread shows its instance."""
+        with instance_log_context(2):
+            self.assertEqual(get_current_instance(), 2)
+            with self.assertLogs("wosutil", level="INFO") as logs:
+                log_message("hello", level="info")
+                log_message("something failed", level="error")
+        self.assertTrue(any("[2] hello" in line for line in logs.output))
+        self.assertTrue(any("[2] something failed" in line for line in logs.output))
+
+    def test_context_restores_previous_instance(self):
+        """Nested/exiting contexts never leak the index to other threads."""
+        with instance_log_context(1):
+            with instance_log_context(3):
+                self.assertEqual(get_current_instance(), 3)
+            self.assertEqual(get_current_instance(), 1)
+        self.assertIsNone(get_current_instance())
+
+    def test_already_prefixed_message_is_not_doubled(self):
+        """A message starting with [ is left untouched."""
+        with instance_log_context(1), self.assertLogs("wosutil", level="INFO") as logs:
+            log_message("[1] already tagged", level="info")
+        self.assertTrue(any("[1] already tagged" in line for line in logs.output))
+        self.assertFalse(any("[1] [1]" in line for line in logs.output))
 
 
 if __name__ == "__main__":

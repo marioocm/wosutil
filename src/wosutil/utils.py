@@ -13,6 +13,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import tkinter as tk
 from logging.handlers import RotatingFileHandler
@@ -27,6 +28,33 @@ from wosutil.stop import ToolStopped
 # Global variable to store the GUI log widget
 gui_log_widget = None
 _logging_configured = False
+
+# Thread-local index of the emulator instance the current thread works on.
+# Worker threads set it on start so every message they emit carries a "[i]"
+# prefix; the GUI/launcher threads leave it unset (no prefix).
+_thread_state = threading.local()
+
+
+def set_current_instance(index):
+    """Bind the calling thread to an emulator instance index (None clears)."""
+    _thread_state.instance_index = index
+
+
+def get_current_instance():
+    """Return the instance index bound to the calling thread (None outside workers)."""
+    return getattr(_thread_state, "instance_index", None)
+
+
+@contextlib.contextmanager
+def instance_log_context(index):
+    """Emit "[index]"-prefixed logs for the block, restoring the previous binding."""
+    previous = get_current_instance()
+    set_current_instance(index)
+    try:
+        yield
+    finally:
+        set_current_instance(previous)
+
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
@@ -417,6 +445,12 @@ def log_message(message, level="info"):
 
         if not get_debug_mode():
             return
+
+    # Tag worker messages with their instance so multi-instance logs stay
+    # attributable: "[1] Starting Whiteout Survival...".
+    instance_index = get_current_instance()
+    if instance_index is not None and not str(message).startswith("["):
+        message = f"[{instance_index}] {message}"
 
     # Log to console / file (handlers are configured by the entry points).
     logger = logging.getLogger("wosutil")
