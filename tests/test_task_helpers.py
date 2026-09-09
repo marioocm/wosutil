@@ -333,11 +333,11 @@ class TestGatherTile(unittest.TestCase):
 
         self.assertEqual(result, 60)
         self.go_search.assert_called_once_with(0)
-        self.click_text.assert_any_call("Wood", 0, roi="worldmap_search", fuzzy=True)
+        self.click_template.assert_any_call("worldmap_search_wood", 0, roi="worldmap_search")
         self.click_text.assert_any_call("Search", 0, roi="worldmap_search", delay=3.0, last=True, fuzzy=True)
         self.click_text.assert_any_call("Gather", 0, roi="gathering_tile_info", last=True, fuzzy=True)
         self.send_march.assert_called_once_with(0)
-        self.click_template.assert_called_once_with(
+        self.click_template.assert_any_call(
             "gather_tile_increase_level",
             0,
             roi="worldmap_search",
@@ -354,12 +354,34 @@ class TestGatherTile(unittest.TestCase):
         self.assertEqual(self.read_time.call_args_list[0].kwargs["ocr_psms"], (6, 7, 8, 11, 12, 13))
         self.click_coords.assert_any_call(215, 115, 0, delay=1.0)
 
-    def test_meat_uses_the_resource_label_subregion(self):
-        """Meat is searched in the narrow label area instead of the full ROI."""
+    def test_meat_uses_the_resource_icon_template(self):
+        """Meat is selected via its building icon template instead of OCR text."""
         result = gather_tile(0, "meat")
 
         self.assertEqual(result, 60)
-        self.click_text.assert_any_call("Meat", 0, roi="worldmap_search", fuzzy=True)
+        self.click_template.assert_any_call("worldmap_search_meat", 0, roi="worldmap_search")
+
+    def test_each_resource_clicks_its_own_icon_template(self):
+        """Every gather resource maps to its building icon template."""
+        self.read_time.side_effect = [120, 120, 120, 120]
+        for resource in ("meat", "wood", "coal", "iron"):
+            with self.subTest(resource=resource):
+                self.click_template.reset_mock()
+                self.assertEqual(gather_tile(0, resource), 60)
+                self.click_template.assert_any_call(f"worldmap_search_{resource}", 0, roi="worldmap_search")
+
+    def test_worldmap_search_icon_templates_exist_on_disk(self):
+        """The four building icon templates must exist in TEMPLATE_PATHS."""
+        import os
+
+        from wosutil.config import TEMPLATE_PATHS
+
+        for resource in ("meat", "wood", "coal", "iron"):
+            with self.subTest(resource=resource):
+                path = TEMPLATE_PATHS.get(f"worldmap_search_{resource}")
+                self.assertIsNotNone(path)
+                assert path is not None
+                self.assertTrue(os.path.exists(path), f"missing template file: {path}")
 
     def test_invalid_resource_is_rejected_before_navigation(self):
         """An unsupported resource does not interact with the emulator."""
