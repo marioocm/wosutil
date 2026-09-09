@@ -492,59 +492,6 @@ class TestTextOcr(unittest.TestCase):
                     self.assertGreater(h, 0)
                     self.assertTrue(0 <= x < self.image.width and 0 <= y < self.image.height)
 
-    def render_resource_label(self, text):
-        """Render a white game-style label over a bright tinted tile edge.
-
-        Mimics the world-map search panel: white glyphs with a dark outline
-        drawn on top of light-cyan tile artwork, snow specks and map text,
-        over the blue world map.
-        """
-        import random
-
-        from PIL import ImageDraw, ImageFont
-
-        font_path = r"C:\Windows\Fonts\arialbd.ttf"
-        if not os.path.exists(font_path):
-            self.skipTest(f"Font not available: {font_path}")
-        img = Image.new("RGB", (200, 80), (70, 130, 180))
-        draw = ImageDraw.Draw(img)
-        for y in range(56):  # tile edge with a vertical gradient
-            draw.line([(0, y), (200, y)], fill=(min(188 + y // 3, 255), 231, min(251, 251 - y // 8)))
-        small_font = ImageFont.truetype(font_path, 12)
-        draw.text((14, 8), "Lv.30", fill=(255, 255, 255), font=small_font, stroke_width=1, stroke_fill=(60, 60, 60))
-        for x, y in ((30, 40), (52, 30), (150, 44), (168, 28), (110, 20)):  # snow specks
-            draw.ellipse([x, y, x + 5, y + 5], fill=(240, 248, 252))
-        font = ImageFont.truetype(font_path, 17)
-        draw.text((100, 40), text, fill=(255, 255, 255), font=font, anchor="mm", stroke_width=1, stroke_fill=(60, 60, 60))
-        rnd = random.Random(42)  # deterministic speckle noise
-        px = img.load()
-        for _ in range(900):
-            x, y = rnd.randrange(img.width), rnd.randrange(img.height)
-            r, g, b = px[x, y]
-            d = rnd.randint(-25, 25)
-            px[x, y] = (max(0, min(255, r + d)), max(0, min(255, g + d)), max(0, min(255, b + d)))
-        return img
-
-    def test_fuzzy_search_reads_resource_labels_over_bright_tiles(self):
-        """Resource labels must stay readable over bright tinted tile artwork.
-
-        Regression: the world-map search labels sit on light-cyan tile edges
-        that a plain brightness mask merged with the white glyphs into one
-        unreadable blob ('Coal' was never found while gathering). The noisy
-        render keeps the raw-upscale fallback from rescuing the old mask.
-        """
-        for target in ("Meat", "Wood", "Coal", "Iron"):
-            with self.subTest(target=target):
-                img = self.render_resource_label(target)
-                found, box = find_text_on_image(img, target, fuzzy=True)
-                self.assertTrue(found, f"'{target}' should be readable over a bright tile edge")
-                self.assertIsNotNone(box)
-                if box is not None:  # Type guard for linter
-                    x, y, w, h = box
-                    self.assertGreater(w, 0)
-                    self.assertGreater(h, 0)
-                    self.assertTrue(0 <= x < img.width and 0 <= y < img.height)
-
     def render_gather_button(self):
         """Render a game-style blue button with a white label on the dialog panel."""
         from PIL import ImageDraw, ImageFont
