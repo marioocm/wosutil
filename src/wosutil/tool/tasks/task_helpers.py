@@ -447,7 +447,7 @@ def gather_tile(instance_index, resource):
     if not go_worldmap_search(instance_index):
         return None
 
-    if not click_on_text(resource.title(), instance_index, roi="worldmap_search", fuzzy=True):
+    if not click_on_template(f"worldmap_search_{resource}", instance_index, roi="worldmap_search"):
         log_message(f"Resource '{resource}' NOT found in the world-map search.", level="warning")
         return None
 
