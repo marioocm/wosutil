@@ -18,6 +18,9 @@ dist/
 # User data
 data/*
 
+# Local test captures
+tests/data/
+
 # Temp files
 tests/.tmp/
 *.log
