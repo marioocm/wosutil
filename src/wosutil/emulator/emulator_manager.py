@@ -17,7 +17,11 @@ from wosutil.config import (
 )
 from wosutil.emulator.backends import MuMuBackend
 from wosutil.stop import ToolStopped, stop_signal
-from wosutil.utils import get_coordinates, log_message, run_process_robust
+from wosutil.utils import get_coordinates, log_message, run_process_robust, run_process_robust_bytes
+
+# PNG file signature: exec-out payloads must start with it, otherwise the
+# stream carried an error message instead of a screenshot.
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 # Successful ADB verifications per serial, cached for a short window
 # so per-screenshot checks don't re-run subprocesses or spam the log.
@@ -283,6 +287,11 @@ def is_wos_installed(instance_index, retries=3):
 def take_screenshot(instance_index):
     """Takes a screenshot from the emulator and saves it to a temporary file.
 
+    Streams the PNG through a single ``exec-out screencap`` round trip
+    instead of the historical screencap-to-file plus pull plus remote
+    cleanup (three trips). Same contract: callers get a local path and
+    must delete it with :func:`delete_temp_screenshot`.
+
     Args:
         instance_index (int): Emulator instance index.
 
@@ -294,41 +303,25 @@ def take_screenshot(instance_index):
         log_message(f"No active ADB connection on instance {instance_index}. Cannot take screenshot.", level="error")
         return None
 
-    local_full_path = None
-    remote_path = None
+    # Close the descriptor before writing the file. Keeping a
+    # NamedTemporaryFile open while writing the same path can fail on
+    # Windows because of the file sharing mode.
+    descriptor, local_full_path = tempfile.mkstemp(suffix=".png", prefix="wosutil_")
+    os.close(descriptor)
     screenshot_ready = False
     try:
-        # Close the descriptor before ADB writes the file. Keeping a
-        # NamedTemporaryFile open while ``adb pull`` opens the same path can
-        # fail on Windows because of the file sharing mode.
-        descriptor, local_full_path = tempfile.mkstemp(suffix=".png", prefix="wosutil_")
-        os.close(descriptor)
-        filename = os.path.basename(local_full_path)
-        remote_path = f"/sdcard/{filename}"
-
-        log_message(f"Taking remote screenshot on instance {instance_index}: {remote_path}", level="debug")
-        result_screencap = execute_adb_command(["shell", "screencap", "-p", remote_path], instance_index)
-
-        if not result_screencap or result_screencap.returncode != 0:
-            log_message(f"Failed to take screenshot on the emulator on instance {instance_index}.", level="error")
+        log_message(f"Taking screenshot on instance {instance_index} via exec-out.", level="debug")
+        full_command = get_active_backend().build_adb_command(["exec-out", "screencap", "-p"], instance_index)
+        result = run_process_robust_bytes(full_command, timeout=10)
+        if result is None or result.returncode != 0 or not result.stdout.startswith(_PNG_SIGNATURE):
+            log_message(f"Failed to take screenshot from the emulator on instance {instance_index}.", level="error")
             return None
-
-        log_message(f"Downloading screenshot to temporary file on instance {instance_index}: {local_full_path}", level="debug")
-        result_pull = execute_adb_command(["pull", remote_path, local_full_path], instance_index)
-
-        if not result_pull or result_pull.returncode != 0:
-            log_message(f"Failed to download screenshot from the emulator on instance {instance_index}.", level="error")
-            return None
-
+        with open(local_full_path, "wb") as screenshot_file:
+            screenshot_file.write(result.stdout)
         screenshot_ready = True
         log_message(f"Screenshot saved to temporary file on instance {instance_index}: {local_full_path}", level="debug")
         return local_full_path
     finally:
-        if remote_path:
-            # Cleanup must not hide the original screencap/pull result.
-            with contextlib.suppress(Exception):
-                log_message(f"Deleting screenshot from emulator on instance {instance_index}...", level="debug")
-                execute_adb_command(["shell", "rm", remote_path], instance_index)
         if not screenshot_ready:
             delete_temp_screenshot(local_full_path)
 

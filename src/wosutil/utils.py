@@ -403,6 +403,50 @@ def run_process_robust(command: list, timeout: int = 30):
         return subprocess.CompletedProcess(args=command, returncode=-1, stdout="", stderr=str(e))
 
 
+def run_process_robust_bytes(command: list, timeout: int = 30):
+    """Run a subprocess keeping stdout/stderr as raw bytes.
+
+    Same deadlock-safe pattern as :func:`run_process_robust` (temporary
+    files instead of pipes), but without the UTF-8 decoding, for binary
+    payloads such as ``adb exec-out screencap -p`` PNG streams, which the
+    text decoding would mangle.
+
+    Args:
+        command (list): Command parts to execute.
+        timeout (int): Command timeout in seconds.
+
+    Returns:
+        subprocess.CompletedProcess with bytes stdout/stderr, or None if
+        the command timed out.
+    """
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
+            process = subprocess.Popen(
+                command,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                creationflags=_no_window_creation_flags(),
+                startupinfo=_hidden_startupinfo(),
+            )
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _terminate_process_tree(process)
+                return None
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout_bytes = stdout_file.read()
+            stderr_bytes = stderr_file.read()
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=process.returncode,
+            stdout=stdout_bytes,
+            stderr=stderr_bytes,
+        )
+    except OSError as e:
+        return subprocess.CompletedProcess(args=command, returncode=-1, stdout=b"", stderr=str(e).encode("utf-8"))
+
+
 def _iter_processes():
     """Yield (process, name, argv) for every inspectable process."""
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
