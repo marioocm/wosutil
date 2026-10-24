@@ -17,7 +17,11 @@ from wosutil.config import (
 )
 from wosutil.emulator.backends import MuMuBackend
 from wosutil.stop import ToolStopped, stop_signal
-from wosutil.utils import get_coordinates, log_message, run_process_robust
+from wosutil.utils import get_coordinates, log_message, run_process_robust, run_process_robust_bytes
+
+# PNG file signature: exec-out payloads must start with it, otherwise the
+# stream carried an error message instead of a screenshot.
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 # Successful ADB verifications per serial, cached for a short window
 # so per-screenshot checks don't re-run subprocesses or spam the log.
@@ -283,6 +287,11 @@ def is_wos_installed(instance_index, retries=3):
 def take_screenshot(instance_index):
     """Takes a screenshot from the emulator and saves it to a temporary file.
 
+    Streams the PNG through a single ``exec-out screencap`` round trip
+    instead of the historical screencap-to-file plus pull plus remote
+    cleanup (three trips). Same contract: callers get a local path and
+    must delete it with :func:`delete_temp_screenshot`.
+
     Args:
         instance_index (int): Emulator instance index.
 
@@ -294,41 +303,25 @@ def take_screenshot(instance_index):
         log_message(f"No active ADB connection on instance {instance_index}. Cannot take screenshot.", level="error")
         return None
 
-    local_full_path = None
-    remote_path = None
+    # Close the descriptor before writing the file. Keeping a
+    # NamedTemporaryFile open while writing the same path can fail on
+    # Windows because of the file sharing mode.
+    descriptor, local_full_path = tempfile.mkstemp(suffix=".png", prefix="wosutil_")
+    os.close(descriptor)
     screenshot_ready = False
     try:
-        # Close the descriptor before ADB writes the file. Keeping a
-        # NamedTemporaryFile open while ``adb pull`` opens the same path can
-        # fail on Windows because of the file sharing mode.
-        descriptor, local_full_path = tempfile.mkstemp(suffix=".png", prefix="wosutil_")
-        os.close(descriptor)
-        filename = os.path.basename(local_full_path)
-        remote_path = f"/sdcard/{filename}"
-
-        log_message(f"Taking remote screenshot on instance {instance_index}: {remote_path}", level="debug")
-        result_screencap = execute_adb_command(["shell", "screencap", "-p", remote_path], instance_index)
-
-        if not result_screencap or result_screencap.returncode != 0:
-            log_message(f"Failed to take screenshot on the emulator on instance {instance_index}.", level="error")
+        log_message(f"Taking screenshot on instance {instance_index} via exec-out.", level="debug")
+        full_command = get_active_backend().build_adb_command(["exec-out", "screencap", "-p"], instance_index)
+        result = run_process_robust_bytes(full_command, timeout=10)
+        if result is None or result.returncode != 0 or not result.stdout.startswith(_PNG_SIGNATURE):
+            log_message(f"Failed to take screenshot from the emulator on instance {instance_index}.", level="error")
             return None
-
-        log_message(f"Downloading screenshot to temporary file on instance {instance_index}: {local_full_path}", level="debug")
-        result_pull = execute_adb_command(["pull", remote_path, local_full_path], instance_index)
-
-        if not result_pull or result_pull.returncode != 0:
-            log_message(f"Failed to download screenshot from the emulator on instance {instance_index}.", level="error")
-            return None
-
+        with open(local_full_path, "wb") as screenshot_file:
+            screenshot_file.write(result.stdout)
         screenshot_ready = True
         log_message(f"Screenshot saved to temporary file on instance {instance_index}: {local_full_path}", level="debug")
         return local_full_path
     finally:
-        if remote_path:
-            # Cleanup must not hide the original screencap/pull result.
-            with contextlib.suppress(Exception):
-                log_message(f"Deleting screenshot from emulator on instance {instance_index}...", level="debug")
-                execute_adb_command(["shell", "rm", remote_path], instance_index)
         if not screenshot_ready:
             delete_temp_screenshot(local_full_path)
 
@@ -417,6 +410,35 @@ def click_on(coordinate_name, instance_index, delay=CLICK_DELAY, clicks=1):
         return False
 
 
+# Lateral pixels for the anti-fling wiggle at the end of a held scroll (see
+# _scroll_with_hold): a short sideways nudge and back, perpendicular to the
+# swipe direction, zeroes the release velocity like the classic mouse-drag
+# wiggle before letting go.
+SCROLL_WIGGLE_PX = 12
+
+
+def _anti_fling_wiggle_points(start_x, start_y, end_x, end_y):
+    """Return the sideways nudge-and-back points ending a held scroll.
+
+    The wiggle runs perpendicular to the swipe direction so it never extends
+    the scroll itself: sideways and back for a vertical swipe, up and back
+    for a horizontal one. Coordinates are clamped at zero; overshooting the
+    far screen edge by a few pixels is harmless (the system ignores it).
+
+    Args:
+        start_x (int): Starting X coordinate of the swipe.
+        start_y (int): Starting Y coordinate of the swipe.
+        end_x (int): Ending X coordinate of the swipe.
+        end_y (int): Ending Y coordinate of the swipe.
+
+    Returns:
+        list: Two (x, y) points: nudged, then back at the end point.
+    """
+    horizontal = abs(end_x - start_x) >= abs(end_y - start_y)
+    nudged = (end_x, max(0, end_y - SCROLL_WIGGLE_PX)) if horizontal else (max(0, end_x - SCROLL_WIGGLE_PX), end_y)
+    return [nudged, (end_x, end_y)]
+
+
 def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index, steps=8):
     """Scrolls while keeping the finger pressed at the end point.
 
@@ -425,6 +447,9 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
     ``input motionevent`` (DOWN -> several MOVEs -> hold -> UP): the finger
     reaches the end, stays still for ``hold_end_ms`` and only then lifts, which
     makes the release velocity zero and stops the scroll exactly where expected.
+    Before the hold, the finger wiggles a few pixels sideways and back
+    (perpendicular to the swipe): the direction reversal kills any residual
+    fling momentum, mirroring the mouse-drag trick of wiggling before release.
 
     On Android versions without ``motionevent`` the command fails and a slow
     swipe followed by a press at the end point is used as a fallback.
@@ -461,6 +486,9 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
             move = execute_adb_command(["shell", "input", "motionevent", "MOVE", str(mx), str(my)], instance_index)
             _require_adb_success(move, f"scroll move {i}/{steps}")
             time.sleep(duration_ms / steps / 1000.0)
+        for wx, wy in _anti_fling_wiggle_points(start_x, start_y, end_x, end_y):
+            wiggle = execute_adb_command(["shell", "input", "motionevent", "MOVE", str(wx), str(wy)], instance_index)
+            _require_adb_success(wiggle, "scroll anti-fling wiggle")
         time.sleep(hold_end_ms / 1000.0)
         up = execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
         _require_adb_success(up, "scroll release")

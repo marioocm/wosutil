@@ -3,7 +3,7 @@
 import subprocess
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import wosutil.emulator.emulator_manager as emulator_manager
 from wosutil.emulator.emulator_manager import (
@@ -153,17 +153,30 @@ class TestScrollScreen(unittest.TestCase):
         self.time_sleep.assert_called_with(0.5)
 
     def test_hold_uses_continuous_motionevent_gesture(self):
-        """A held scroll sends DOWN, moves, waits and lifts with a single continuous gesture."""
+        """A held scroll sends DOWN, moves, an anti-fling wiggle, waits and lifts."""
         self.execute_adb_command.return_value = _ok()
         _scroll_with_hold(13, 500, 13, 0, 400, 150, 0, steps=4)
         commands = [c.args[0] for c in self.execute_adb_command.call_args_list]
         self.assertEqual(commands[0], [SHELL, INPUT, "motionevent", "DOWN", "13", "500"])
         self.assertEqual(commands[-1], [SHELL, INPUT, "motionevent", "UP", "13", "0"])
         moves = [c for c in commands if c[1] == INPUT and c[2] == "motionevent" and c[3] == "MOVE"]
-        self.assertEqual(len(moves), 4)
+        self.assertEqual(len(moves), 6)
         self.assertEqual(moves[0][4:], ["13", "375"])
+        self.assertEqual(moves[-3][4:], ["13", "0"])
+        self.assertEqual(moves[-2][4:], ["1", "0"])
         self.assertEqual(moves[-1][4:], ["13", "0"])
         self.time_sleep.assert_called()
+
+    def test_hold_wiggle_runs_perpendicular_on_horizontal_swipes(self):
+        """A horizontal held scroll wiggles vertically instead of sideways."""
+        self.execute_adb_command.return_value = _ok()
+        _scroll_with_hold(0, 500, 400, 500, 400, 150, 0, steps=2)
+        commands = [c.args[0] for c in self.execute_adb_command.call_args_list]
+        self.assertEqual(commands[-1], [SHELL, INPUT, "motionevent", "UP", "400", "500"])
+        moves = [c for c in commands if c[1] == INPUT and c[2] == "motionevent" and c[3] == "MOVE"]
+        self.assertEqual(len(moves), 4)
+        self.assertEqual(moves[-2][4:], ["400", "488"])
+        self.assertEqual(moves[-1][4:], ["400", "500"])
 
     def test_hold_falls_back_when_motionevent_unsupported(self):
         """When motionevent fails a slow swipe plus a press at the end is used."""
@@ -211,28 +224,42 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
         with patch("wosutil.emulator.emulator_manager.execute_adb_command", return_value=failed), self.assertRaisesRegex(AdbCommandError, "permission denied"):
             force_stop_game(0)
 
-    def test_take_screenshot_removes_local_file_when_screencap_fails(self):
-        """A failed remote capture removes the local placeholder and remote path."""
+    def test_take_screenshot_removes_local_file_when_exec_out_fails(self):
+        """A failed exec-out removes the local placeholder and returns None."""
         local_path = "temporary/wosutil_test.png"
-        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="capture failed")
-        cleanup = subprocess.CompletedProcess(args=[], returncode=0)
         with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
             "wosutil.emulator.emulator_manager.os.close"
-        ), patch("wosutil.emulator.emulator_manager.execute_adb_command", side_effect=[failed, cleanup]) as execute, patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
+        ), patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=None), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
             self.assertIsNone(take_screenshot(0))
 
         delete.assert_called_once_with(local_path)
-        self.assertEqual(execute.call_args_list[1].args[0], ["shell", "rm", "/sdcard/wosutil_test.png"])
 
-    def test_take_screenshot_keeps_local_file_after_success(self):
-        """A successful capture keeps the downloaded file for its caller."""
+    def test_take_screenshot_rejects_non_png_payload(self):
+        """An exec-out payload without the PNG signature is not kept."""
         local_path = "temporary/wosutil_test.png"
-        success = subprocess.CompletedProcess(args=[], returncode=0)
+        garbage = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"error: device offline", stderr=b"")
         with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
             "wosutil.emulator.emulator_manager.os.close"
-        ), patch("wosutil.emulator.emulator_manager.execute_adb_command", side_effect=[success, success, success]), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
+        ), patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=garbage), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
+            self.assertIsNone(take_screenshot(0))
+
+        delete.assert_called_once_with(local_path)
+
+    def test_take_screenshot_keeps_local_file_after_success(self):
+        """A successful exec-out writes the PNG bytes for its caller."""
+        local_path = "temporary/wosutil_test.png"
+        png = b"\x89PNG\r\n\x1a\n" + b"fake-image-bytes"
+        success = subprocess.CompletedProcess(args=[], returncode=0, stdout=png, stderr=b"")
+        file_handle = mock_open()
+        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
+            "wosutil.emulator.emulator_manager.os.close"
+        ), patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=success), patch("builtins.open", file_handle), patch(
+            "wosutil.emulator.emulator_manager.delete_temp_screenshot"
+        ) as delete:
             self.assertEqual(take_screenshot(0), local_path)
 
+        file_handle.assert_any_call(local_path, "wb")
+        file_handle().write.assert_called_once_with(png)
         delete.assert_not_called()
 
 
