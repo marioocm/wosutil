@@ -417,6 +417,35 @@ def click_on(coordinate_name, instance_index, delay=CLICK_DELAY, clicks=1):
         return False
 
 
+# Lateral pixels for the anti-fling wiggle at the end of a held scroll (see
+# _scroll_with_hold): a short sideways nudge and back, perpendicular to the
+# swipe direction, zeroes the release velocity like the classic mouse-drag
+# wiggle before letting go.
+SCROLL_WIGGLE_PX = 12
+
+
+def _anti_fling_wiggle_points(start_x, start_y, end_x, end_y):
+    """Return the sideways nudge-and-back points ending a held scroll.
+
+    The wiggle runs perpendicular to the swipe direction so it never extends
+    the scroll itself: sideways and back for a vertical swipe, up and back
+    for a horizontal one. Coordinates are clamped at zero; overshooting the
+    far screen edge by a few pixels is harmless (the system ignores it).
+
+    Args:
+        start_x (int): Starting X coordinate of the swipe.
+        start_y (int): Starting Y coordinate of the swipe.
+        end_x (int): Ending X coordinate of the swipe.
+        end_y (int): Ending Y coordinate of the swipe.
+
+    Returns:
+        list: Two (x, y) points: nudged, then back at the end point.
+    """
+    horizontal = abs(end_x - start_x) >= abs(end_y - start_y)
+    nudged = (end_x, max(0, end_y - SCROLL_WIGGLE_PX)) if horizontal else (max(0, end_x - SCROLL_WIGGLE_PX), end_y)
+    return [nudged, (end_x, end_y)]
+
+
 def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, instance_index, steps=8):
     """Scrolls while keeping the finger pressed at the end point.
 
@@ -425,6 +454,9 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
     ``input motionevent`` (DOWN -> several MOVEs -> hold -> UP): the finger
     reaches the end, stays still for ``hold_end_ms`` and only then lifts, which
     makes the release velocity zero and stops the scroll exactly where expected.
+    Before the hold, the finger wiggles a few pixels sideways and back
+    (perpendicular to the swipe): the direction reversal kills any residual
+    fling momentum, mirroring the mouse-drag trick of wiggling before release.
 
     On Android versions without ``motionevent`` the command fails and a slow
     swipe followed by a press at the end point is used as a fallback.
@@ -461,6 +493,9 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
             move = execute_adb_command(["shell", "input", "motionevent", "MOVE", str(mx), str(my)], instance_index)
             _require_adb_success(move, f"scroll move {i}/{steps}")
             time.sleep(duration_ms / steps / 1000.0)
+        for wx, wy in _anti_fling_wiggle_points(start_x, start_y, end_x, end_y):
+            wiggle = execute_adb_command(["shell", "input", "motionevent", "MOVE", str(wx), str(wy)], instance_index)
+            _require_adb_success(wiggle, "scroll anti-fling wiggle")
         time.sleep(hold_end_ms / 1000.0)
         up = execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
         _require_adb_success(up, "scroll release")
