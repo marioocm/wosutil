@@ -12,6 +12,7 @@ from wosutil.tool.tasks.task_automation import (
     _bear_trap_prepare_and_join,
     _next_bear_hunt_start,
     activate_daily_pet_skills,
+    claim_storehouse_stamina,
     play_bear_trap,
     turn_on_autojoin,
 )
@@ -61,6 +62,49 @@ class TestActivateDailyPetSkills(unittest.TestCase):
         self.assertEqual(go_pet_skill.call_count, 2)
         self.assertEqual(click_first_found.call_count, 2)
         click_use.assert_called_once()
+
+
+class TestClaimStorehouseStamina(unittest.TestCase):
+    """Test the storehouse stamina flow through the city shortcut."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_automation.ensure_city_screen", return_value=True),
+            patch("wosutil.tool.tasks.task_automation.click_on"),
+            patch("wosutil.tool.tasks.task_automation.click_on_template", return_value=False),
+            patch("wosutil.tool.tasks.task_automation.get_roi", return_value=(0, 0, 1, 1)),
+            patch("wosutil.tool.tasks.task_automation.read_screen_time", return_value=500),
+            patch("wosutil.tool.tasks.task_automation.press_android_back_button"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.ensure_city,
+            self.click_on,
+            self.click_on_template,
+            self.get_roi,
+            self.read_screen_time,
+            self.back_button,
+        ) = self.mocks
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_uses_city_stamina_shortcut(self):
+        """The stamina shortcut is clicked directly and one back press returns to the city."""
+        result = claim_storehouse_stamina(0)
+
+        self.assertEqual(result, (True, 500))
+        self.click_on.assert_called_once_with("stamina", 0, delay=0.7)
+        self.click_on_template.assert_called_once_with("storehouse_claim_stamina", 0, roi="storehouse_claim_stamina", delay=0.7)
+        self.back_button.assert_called_once_with(0)
+
+    def test_aborts_when_city_screen_is_not_reached(self):
+        """No clicks happen when the city screen cannot be reached."""
+        self.ensure_city.return_value = False
+
+        self.assertFalse(claim_storehouse_stamina(0))
+        self.click_on.assert_not_called()
+        self.click_on_template.assert_not_called()
+        self.back_button.assert_not_called()
 
 
 class TestNextBearHuntStart(unittest.TestCase):

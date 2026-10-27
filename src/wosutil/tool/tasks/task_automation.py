@@ -373,7 +373,7 @@ def claim_storehouse_stamina(instance_index):
     """Claims stamina from the storehouse.
 
     1. Ensures the main menu is active.
-    2. Opens the profile screen.
+    2. Clicks the stamina shortcut below the profile icon.
     3. Takes a screenshot and searches for the template.
     4. Searches for a timer using read_screen_time.
     5. Presses the back button to return to the main menu.
@@ -384,8 +384,7 @@ def claim_storehouse_stamina(instance_index):
     if not ensure_city_screen(instance_index):
         return False
 
-    click_on("profile", instance_index, delay=0.7)
-    click_on_coordinates(235, 1112, instance_index, delay=0.7)
+    click_on("stamina", instance_index, delay=0.7)
 
     if not click_on_template("storehouse_claim_stamina", instance_index, roi="storehouse_claim_stamina", delay=0.7):
         log_message("Stamina was already claimed, reescheduling task.", level="info")
@@ -400,7 +399,6 @@ def claim_storehouse_stamina(instance_index):
         log_message("No timer detected on screen, using default value (4 hours).", level="warning")
         return False
 
-    press_android_back_button(instance_index)
     press_android_back_button(instance_index)
     return True, reschedule
 

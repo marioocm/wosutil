@@ -123,7 +123,7 @@ def get_task_definitions():
         "claim_storehouse_stamina": {
             "id": "claim_storehouse_stamina",
             "name": "Claim Storehouse Stamina",
-            "description": "Claims stamina from the storehouse by opening the profile and searching for the stamina icon and timer.",
+            "description": "Claims stamina from the storehouse using the stamina shortcut on the city screen and reschedules from the on-screen timer.",
             "function": claim_storehouse_stamina,
             "priority": 6,
             "reschedule_seconds": 4 * 60 * 60,  # 4 hours
