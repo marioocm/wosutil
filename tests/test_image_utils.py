@@ -195,6 +195,32 @@ class TestImageUtils(unittest.TestCase):
                 self.assertFalse(found)
                 self.assertIsNone(center)
 
+    def test_find_template_center_rejects_desaturated_match(self):
+        """A gray (disabled) copy is rejected when min_saturation is set."""
+        template = np.zeros((20, 20, 3), dtype=np.uint8)
+        template[:, :10] = (40, 180, 60)  # green (BGR)
+        template[:, 10:] = (255, 255, 255)  # white label
+        cv2.imwrite(self.template_path, template)
+
+        gray_template = cv2.cvtColor(cv2.cvtColor(template, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+        screenshot = np.full((60, 60, 3), 128, dtype=np.uint8)
+        screenshot[20:40, 20:40] = gray_template
+        cv2.imwrite(self.screenshot_path, screenshot)
+
+        found, center = find_template_center_on_screen(self.template_path, self.screenshot_path, threshold=0.8)
+        self.assertTrue(found)
+        self.assertEqual(center, (30, 30))
+
+        found, center = find_template_center_on_screen(self.template_path, self.screenshot_path, threshold=0.8, min_saturation=60)
+        self.assertFalse(found)
+        self.assertIsNone(center)
+
+        screenshot[20:40, 20:40] = template
+        cv2.imwrite(self.screenshot_path, screenshot)
+        found, center = find_template_center_on_screen(self.template_path, self.screenshot_path, threshold=0.8, min_saturation=60)
+        self.assertTrue(found)
+        self.assertEqual(center, (30, 30))
+
     def test_find_template_center_with_roi(self):
         """Template finding with ROI returns the full-screen center."""
         for grayscale in (False, True):

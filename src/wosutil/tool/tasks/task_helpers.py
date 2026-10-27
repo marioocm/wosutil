@@ -13,6 +13,7 @@ from wosutil.config import (
     INTEL_BEAST_MAX_RETRIES,
     INTEL_BEAST_MAX_WAIT_SECONDS,
     INTEL_BEAST_TIMER_MAX_SECONDS,
+    INTEL_CLAIM_ALL_MIN_SATURATION,
 )
 from wosutil.emulator.emulator_manager import (
     click_on_coordinates,
@@ -906,6 +907,11 @@ def call_bear_rally(instance_index):
 def _click_intel_template(instance_index, templates):
     """After navigating to the intel screen, claims the rewards and clicks the first matching template.
 
+    The 'intel_claim_all' button is only clicked when it is drawn in color
+    (mean HSV saturation above INTEL_CLAIM_ALL_MIN_SATURATION); the disabled
+    button keeps the same artwork in gray, which color matching alone still
+    finds.
+
     Takes a single screenshot and reuses it across the intel screen check, the
     'intel_claim_all' search and the template search. A fresh screenshot is only
     captured right after an action that redraws the screen (navigating to the
@@ -933,14 +939,20 @@ def _click_intel_template(instance_index, templates):
             if not screenshot_path:
                 return None
 
-        if click_on_template("intel_claim_all", instance_index, roi="intel_claim_all", screenshot_path=screenshot_path):
+        if click_on_template(
+            "intel_claim_all",
+            instance_index,
+            roi="intel_claim_all",
+            screenshot_path=screenshot_path,
+            min_saturation=INTEL_CLAIM_ALL_MIN_SATURATION,
+        ):
             press_android_back_button(instance_index)
             delete_temp_screenshot(screenshot_path)
             screenshot_path = take_screenshot(instance_index)
             if not screenshot_path:
                 return None
         else:
-            log_message("'intel_claim_all' not found on the screen.", level="info")
+            log_message("'intel_claim_all' not found or disabled on the screen.", level="info")
 
         return click_first_found_template(instance_index, templates, roi="intel", screenshot_path=screenshot_path)
     finally:

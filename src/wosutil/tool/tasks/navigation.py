@@ -761,7 +761,7 @@ def _click_leftmost_template(instance_index, template_name, delay=CLICK_DELAY):
         delete_temp_screenshot(screenshot_path)
 
 
-def _locate_template_center(template_name, screenshot_path, roi, gray, threshold):
+def _locate_template_center(template_name, screenshot_path, roi, gray, threshold, min_saturation=None):
     """Find a template on a screenshot and return its center.
 
     Args:
@@ -770,6 +770,8 @@ def _locate_template_center(template_name, screenshot_path, roi, gray, threshold
         roi (tuple or None): Region of interest (x, y, w, h).
         gray (bool): Use gray-scale matching when True.
         threshold (float): Minimum confidence threshold for a match.
+        min_saturation (float, optional): Minimum mean HSV saturation (0-255)
+            of the matched area, used to reject disabled (gray) buttons.
 
     Returns:
         tuple or None: (cx, cy) center of the match, or None when not found.
@@ -777,7 +779,7 @@ def _locate_template_center(template_name, screenshot_path, roi, gray, threshold
     template_path = get_template_path(template_name)
     if not template_path:
         return None
-    found, center = find_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi, grayscale=gray)
+    found, center = find_template_center_on_screen(template_path, screenshot_path, threshold=threshold, roi=roi, grayscale=gray, min_saturation=min_saturation)
     if not found or not center:
         return None
     return center[0], center[1]
@@ -837,7 +839,17 @@ def click_first_found_template(instance_index, templates, roi=None, delay=CLICK_
             delete_temp_screenshot(screenshot_path)
 
 
-def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY, gray=False, screenshot_path=None, threshold=SCREEN_CHECK_THRESHOLD, clicks=1):
+def click_on_template(
+    template_name,
+    instance_index,
+    roi=None,
+    delay=CLICK_DELAY,
+    gray=False,
+    screenshot_path=None,
+    threshold=SCREEN_CHECK_THRESHOLD,
+    clicks=1,
+    min_saturation=None,
+):
     """Takes a screenshot and clicks the center of the given template if found.
 
     Generic helper that replaces the repeated "screenshot -> find template ->
@@ -859,6 +871,8 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
             no click between captures).
         threshold (float): Minimum confidence threshold for a match.
         clicks (int): Number of times to click the found center.
+        min_saturation (float, optional): Minimum mean HSV saturation (0-255)
+            of the matched area, used to reject disabled (gray) buttons.
 
     Returns:
         bool: True if the template was found and clicked, False otherwise.
@@ -879,7 +893,7 @@ def click_on_template(template_name, instance_index, roi=None, delay=CLICK_DELAY
         return False
 
     try:
-        center = _locate_template_center(template_name, screenshot_path, roi=resolved_roi, gray=gray, threshold=threshold)
+        center = _locate_template_center(template_name, screenshot_path, roi=resolved_roi, gray=gray, threshold=threshold, min_saturation=min_saturation)
         if center is None:
             return False
         for _ in range(clicks):
