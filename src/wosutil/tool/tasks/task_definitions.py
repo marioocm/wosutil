@@ -132,7 +132,7 @@ def get_task_definitions():
         "do_intel_missions": {
             "id": "do_intel_missions",
             "name": "Do Intel Missions",
-            "description": "Completes all missions in the intel tab (beasts, survivors and exploration), prioritizing the beast, and reschedules based on the intel timer or 4 hours by default.",
+            "description": "Completes intel missions using the mode selected in Preferences: Execute All (instant) or Classic (beasts, survivors, exploration).",
             "function": do_intel_missions,
             "priority": 11,
             "reschedule_seconds": 4 * 60 * 60,  # 4 hours

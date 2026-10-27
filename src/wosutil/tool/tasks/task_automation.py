@@ -21,10 +21,12 @@ from wosutil.emulator.image_utils import (
     read_screen_time,
 )
 from wosutil.preferences import (
+    INTEL_MODE_EXECUTE_ALL,
     MYSTERY_SHOP_LEVEL_WIDGETS_20,
     MYSTERY_SHOP_LEVEL_WIDGETS_50,
     get_bear_trap_marches,
     get_gather_resource,
+    get_intel_mode,
     get_mystery_shop_level,
 )
 from wosutil.stop import stop_signal
@@ -60,6 +62,7 @@ from wosutil.tool.tasks.task_helpers import (
     detect_pet_adventure_chests,
     do_intel_exploration,
     end_tundra_trek_idle_if_active,
+    execute_all_intel_missions,
     gather_tile,
     join_bear_rally,
     kill_intel_beast,
@@ -1012,14 +1015,41 @@ def train_troops(instance_index):
     return True, reschedule
 
 
-def do_intel_missions(instance_index):
-    """Completes all missions in the intel tab: beast, survivors, and exploration.
+def _read_intel_reschedule(instance_index):
+    """Read the intel refresh timer and return the reschedule delay.
 
-    The beast is always prioritized: whenever it is available, its march is sent
-    before anything else. While that march takes to go and come back,
-    rescue_intel_survivor and do_intel_exploration are run to fill the gap, but
-    the moment the march returns those tasks are skipped (even if they still have
-    entries remaining) and the next beast march is sent to optimize the time.
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Seconds until the next intel refresh, or 4 hours when the timer
+            cannot be read reliably.
+    """
+    if is_game_on_intel_screen(instance_index):
+        # Try both timer locations without saving debug captures yet: the timer can
+        # legitimately live in the second location, so a miss on the first is expected.
+        timer = read_screen_time(instance_index, roi=get_roi("intel_timer"))
+        if timer is None:
+            timer = read_screen_time(instance_index, roi=get_roi("intel_timer2"))
+        if timer is None:
+            # Not found in any location: this is a real read failure, so save the
+            # debug captures for both ROIs now.
+            for roi_name in ("intel_timer", "intel_timer2"):
+                read_screen_time(instance_index, roi=get_roi(roi_name), debug_label=roi_name)
+        if timer is not None and timer >= INTEL_TIMER_MIN_SECONDS:
+            return timer
+    log_message("No reliable intel timer detected, using default value (4 hours).", level="warning")
+    return 4 * 60 * 60
+
+
+def do_intel_missions(instance_index):
+    """Completes the missions in the intel tab using the selected mode.
+
+    The default 'execute all' mode claims the completed missions, clicks the
+    game's Execute All button (which completes every available mission
+    instantly) and claims the new rewards. The classic mode keeps the original
+    behavior: the beast is always prioritized, and survivors and exploration
+    fill the time while its march is in flight.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -1027,6 +1057,10 @@ def do_intel_missions(instance_index):
     Returns:
         tuple: (True, reschedule_seconds)
     """
+    if get_intel_mode() == INTEL_MODE_EXECUTE_ALL:
+        success = execute_all_intel_missions(instance_index)
+        return success, _read_intel_reschedule(instance_index)
+
     while True:
         # Highest priority: kill the beast whenever it is available
         seconds = kill_intel_beast(instance_index)
@@ -1079,21 +1113,7 @@ def do_intel_missions(instance_index):
         if not did_any:
             break
     # Only trust the intel refresh timer when on the intel screen and the read is plausible
-    if is_game_on_intel_screen(instance_index):
-        # Try both timer locations without saving debug captures yet: the timer can
-        # legitimately live in the second location, so a miss on the first is expected.
-        timer = read_screen_time(instance_index, roi=get_roi("intel_timer"))
-        if timer is None:
-            timer = read_screen_time(instance_index, roi=get_roi("intel_timer2"))
-        if timer is None:
-            # Not found in any location: this is a real read failure, so save the
-            # debug captures for both ROIs now.
-            for roi_name in ("intel_timer", "intel_timer2"):
-                read_screen_time(instance_index, roi=get_roi(roi_name), debug_label=roi_name)
-        if timer is not None and timer >= INTEL_TIMER_MIN_SECONDS:
-            return True, timer
-    log_message("No reliable intel timer detected, using default value (4 hours).", level="warning")
-    return True, 4 * 60 * 60
+    return True, _read_intel_reschedule(instance_index)
 
 
 # --- Bear trap ---

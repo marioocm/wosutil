@@ -198,6 +198,8 @@ INTEL_BEAST_TIMER_MAX_SECONDS = 30 * 60  # Max plausible beast march timer; long
 INTEL_BEAST_MARCH_SENT_WAIT_SECONDS = 240  # Reschedule when the march was sent but the timer could not be read
 INTEL_BEAST_MAX_RETRIES = 3  # Max attempts to confirm the send-march screen before giving up
 INTEL_CLAIM_ALL_MIN_SATURATION = 60  # Min HSV saturation (0-255) of 'intel_claim_all'; the disabled button is gray (0) and the enabled one green (136)
+INTEL_EXECUTE_ALL_WAIT_SECONDS = 3  # Wait after clicking 'Execute All' before claiming the completed missions
+INTEL_EXECUTE_ALL_MAX_ROUNDS = 5  # Safety cap for claiming new missions in a row; prevents an endless Execute All loop
 
 # --- City Coordinates (main screen specific points) ---
 COORDINATES = {
@@ -229,7 +231,7 @@ ROI = {
     "recruit_free_chest_timer": (137, 771, 179, 33),
     "hero_recruit_screen": (583, 164, 134, 414),
     "intel": (12, 158, 695, 976),
-    "intel_claim_all": (7, 997, 702, 282),
+    "intel_buttons": (7, 997, 702, 282),
     "intel_screen": (0, 0, 324, 98),
     "intel_timer": (357, 105, 168, 42),
     "intel_timer2": (370, 585, 171, 49),

@@ -41,6 +41,11 @@ DEFAULT_MYSTERY_SHOP_LEVEL = MYSTERY_SHOP_LEVEL_FREE
 GATHER_RESOURCES = ("meat", "wood", "coal", "iron")
 DEFAULT_GATHER_RESOURCE = "meat"
 
+INTEL_MODE_CLASSIC = "classic"
+INTEL_MODE_EXECUTE_ALL = "execute_all"
+INTEL_MODES = (INTEL_MODE_CLASSIC, INTEL_MODE_EXECUTE_ALL)
+DEFAULT_INTEL_MODE = INTEL_MODE_EXECUTE_ALL
+
 DEBUG_MODE_ENV = "WOSUTIL_DEBUG"
 
 DEFAULT_EMULATOR_PATHS = {
@@ -333,6 +338,28 @@ def get_gather_resource(preferences=None):
     if resource not in GATHER_RESOURCES:
         return DEFAULT_GATHER_RESOURCE
     return resource
+
+
+def get_intel_mode(preferences=None):
+    """Get the selected intel mission mode.
+
+    ``classic`` sends marches for the individual missions (beasts, survivors
+    and exploration), while ``execute_all`` uses the game's Execute All button
+    to complete every available mission instantly.
+
+    Args:
+        preferences (dict, optional): Preferences data. If None, loads from disk.
+
+    Returns:
+        str: One of ``INTEL_MODES``. Defaults to ``DEFAULT_INTEL_MODE`` when
+            unset or invalid.
+    """
+    if preferences is None:
+        preferences = load_preferences()
+    mode = preferences.get("intel_mode", DEFAULT_INTEL_MODE)
+    if mode not in INTEL_MODES:
+        return DEFAULT_INTEL_MODE
+    return mode
 
 
 def save_emulator(emulator):

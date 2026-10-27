@@ -1088,28 +1088,31 @@ def read_words_on_image(
     return words
 
 
-def read_text_lines_on_image(img: Image.Image) -> List[Tuple[str, Tuple[int, int, int, int]]]:
+def read_text_lines_on_image(img: Image.Image, psm: int = _TEXT_PSM) -> List[Tuple[str, Tuple[int, int, int, int]]]:
     """Read the text lines of an image with OCR.
 
     Args:
         img (PIL.Image): Source image containing text.
+        psm (int): Tesseract page segmentation mode.
 
     Returns:
         list: (line text, (x, y, w, h)) pairs for every recognized text line,
             in original image coordinates.
     """
-    return [(" ".join(word for word, _ in line), _union_boxes([box for _, box in line])) for line in _ocr_lines(img)]
+    return [(" ".join(word for word, _ in line), _union_boxes([box for _, box in line])) for line in _ocr_lines(img, psm=psm)]
 
 
 def read_text_lines_on_screen(
     screenshot_path: str,
     roi: Optional[Tuple[int, int, int, int]] = None,
+    psm: int = _TEXT_PSM,
 ) -> List[Tuple[str, Tuple[int, int, int, int]]]:
     """Read the text lines of a screenshot, optionally within an ROI.
 
     Args:
         screenshot_path (str): Path to the screenshot image file.
         roi (tuple, optional): Region of interest as (x, y, w, h).
+        psm (int): Tesseract page segmentation mode.
 
     Returns:
         list: (line text, (x, y, w, h)) pairs for every recognized text line,
@@ -1122,7 +1125,7 @@ def read_text_lines_on_screen(
         x, y, w, h = roi
         img_bgr = img_bgr[y : y + h, x : x + w]
     img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
-    lines = read_text_lines_on_image(img)
+    lines = read_text_lines_on_image(img, psm=psm)
     if roi:
         lines = [(text, (box[0] + x, box[1] + y, box[2], box[3])) for text, box in lines]
     return lines

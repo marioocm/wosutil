@@ -14,6 +14,8 @@ from wosutil.config import (
     INTEL_BEAST_MAX_WAIT_SECONDS,
     INTEL_BEAST_TIMER_MAX_SECONDS,
     INTEL_CLAIM_ALL_MIN_SATURATION,
+    INTEL_EXECUTE_ALL_MAX_ROUNDS,
+    INTEL_EXECUTE_ALL_WAIT_SECONDS,
 )
 from wosutil.emulator.emulator_manager import (
     click_on_coordinates,
@@ -28,6 +30,7 @@ from wosutil.emulator.image_utils import (
     find_template_center_on_screen,
     find_text_center_on_screen,
     find_text_on_screen,
+    get_box_center,
     read_screen_time,
     read_text_lines_on_screen,
 )
@@ -904,6 +907,68 @@ def call_bear_rally(instance_index):
     return wait
 
 
+_INTEL_EXECUTE_ALL_OCR_PSM = 11  # Tesseract mode that keeps the button label and its (N) counter on one line
+_INTEL_EXECUTE_ALL_RE = re.compile(r"execute\s+all\s*\(?\s*(\d+)", re.IGNORECASE)
+
+
+def _ensure_intel_screenshot(instance_index, screenshot_path):
+    """Ensure the intel screen is open and return a screenshot of it.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        screenshot_path (str): Current screenshot path to reuse when already on
+            the intel screen.
+
+    Returns:
+        str or None: Path to a screenshot of the intel screen, or None when the
+            screen could not be reached or captured.
+    """
+    if is_game_on_screen(instance_index, "intel_screen", "intel_screen", screenshot_path=screenshot_path):
+        return screenshot_path
+    if not ensure_intel_screen(instance_index):
+        log_message("Could not reach the intel screen, skipping the collection.", level="warning")
+        return None
+    delete_temp_screenshot(screenshot_path)
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        log_message("Could not take a screenshot for the intel template search.", level="error")
+        return None
+    return screenshot_path
+
+
+def _claim_intel_rewards(instance_index, screenshot_path):
+    """Claim the completed intel missions when the Claim All button is enabled.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        screenshot_path (str): Screenshot to use for the Claim All search.
+
+    Returns:
+        str or None: Screenshot to keep using after the claim, or None when the
+            intel screen could not be reached or captured.
+    """
+    screenshot_path = _ensure_intel_screenshot(instance_index, screenshot_path)
+    if not screenshot_path:
+        return None
+
+    if click_on_template(
+        "intel_claim_all",
+        instance_index,
+        roi="intel_buttons",
+        screenshot_path=screenshot_path,
+        min_saturation=INTEL_CLAIM_ALL_MIN_SATURATION,
+    ):
+        press_android_back_button(instance_index)
+        delete_temp_screenshot(screenshot_path)
+        screenshot_path = take_screenshot(instance_index)
+        if not screenshot_path:
+            log_message("Could not take a screenshot after claiming the intel missions.", level="error")
+            return None
+    else:
+        log_message("'intel_claim_all' not found or disabled on the screen.", level="info")
+    return screenshot_path
+
+
 def _click_intel_template(instance_index, templates):
     """After navigating to the intel screen, claims the rewards and clicks the first matching template.
 
@@ -930,31 +995,98 @@ def _click_intel_template(instance_index, templates):
         return None
 
     try:
-        if not is_game_on_screen(instance_index, "intel_screen", "intel_screen", screenshot_path=screenshot_path):
-            if not ensure_intel_screen(instance_index):
-                log_message("Could not reach the intel screen, skipping the collection.", level="warning")
-                return None
-            delete_temp_screenshot(screenshot_path)
-            screenshot_path = take_screenshot(instance_index)
-            if not screenshot_path:
-                return None
-
-        if click_on_template(
-            "intel_claim_all",
-            instance_index,
-            roi="intel_claim_all",
-            screenshot_path=screenshot_path,
-            min_saturation=INTEL_CLAIM_ALL_MIN_SATURATION,
-        ):
-            press_android_back_button(instance_index)
-            delete_temp_screenshot(screenshot_path)
-            screenshot_path = take_screenshot(instance_index)
-            if not screenshot_path:
-                return None
-        else:
-            log_message("'intel_claim_all' not found or disabled on the screen.", level="info")
-
+        screenshot_path = _claim_intel_rewards(instance_index, screenshot_path)
+        if not screenshot_path:
+            return None
         return click_first_found_template(instance_index, templates, roi="intel", screenshot_path=screenshot_path)
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+
+def _read_execute_all_button(screenshot_path):
+    """Read the Execute All button label, its mission count and its center.
+
+    The game draws the button as 'Execute All (N)', where N is the number of
+    missions available to run. The mission count is used to skip the click when
+    the button is enabled but there is nothing to execute.
+
+    Args:
+        screenshot_path (str): Path to a screenshot of the intel screen.
+
+    Returns:
+        tuple: (mission_count, (cx, cy)). ``mission_count`` is None when the
+            button could not be found. When only the label (not the count) is
+            recognized, the count is reported as 1 so the click is still tried.
+    """
+    roi = get_roi("intel_buttons")
+    if roi is None:
+        log_message("Could not get the intel_buttons ROI.", level="error")
+        return None, None
+
+    for text, box in read_text_lines_on_screen(screenshot_path, roi=roi, psm=_INTEL_EXECUTE_ALL_OCR_PSM):
+        match = _INTEL_EXECUTE_ALL_RE.search(text)
+        if match:
+            return int(match.group(1)), get_box_center(box)
+
+    found, box = find_text_on_screen(screenshot_path, "Execute All", roi=roi)
+    if found and box:
+        return 1, get_box_center(box)
+    return None, None
+
+
+def execute_all_intel_missions(instance_index):
+    """Use the game's Execute All button to complete the intel missions.
+
+    Claims the completed missions, then repeatedly clicks Execute All, waits
+    INTEL_EXECUTE_ALL_WAIT_SECONDS and claims the new rewards until the button
+    no longer reports any mission available. Claiming can reveal more missions,
+    so the button is re-read after every claim. When the button is missing or
+    has no missions, nothing is clicked.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        bool: True when the intel flow finished (even with nothing to execute),
+            False when the intel screen or a screenshot could not be obtained.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        log_message("Could not take a screenshot for the intel mission execution.", level="error")
+        return False
+
+    try:
+        screenshot_path = _claim_intel_rewards(instance_index, screenshot_path)
+        if not screenshot_path:
+            return False
+
+        for round_number in range(1, INTEL_EXECUTE_ALL_MAX_ROUNDS + 1):
+            missions, center = _read_execute_all_button(screenshot_path)
+            if missions is None:
+                log_message("'Execute All' not found on the intel screen.", level="info")
+                return True
+            if missions <= 0 or center is None:
+                log_message("No intel missions left to execute.", level="info")
+                return True
+
+            log_message(f"'Execute All' found with {missions} mission(s) (round {round_number}); executing them.", level="info")
+            click_on_coordinates(center[0], center[1], instance_index, delay=INTEL_EXECUTE_ALL_WAIT_SECONDS)
+
+            delete_temp_screenshot(screenshot_path)
+            screenshot_path = take_screenshot(instance_index)
+            if not screenshot_path:
+                log_message("Could not take a screenshot after executing the intel missions.", level="error")
+                return False
+
+            screenshot_path = _claim_intel_rewards(instance_index, screenshot_path)
+            if not screenshot_path:
+                return False
+
+        log_message(
+            f"Stopping the Execute All loop after {INTEL_EXECUTE_ALL_MAX_ROUNDS} rounds; missions are still available.",
+            level="warning",
+        )
+        return True
     finally:
         delete_temp_screenshot(screenshot_path)
 
