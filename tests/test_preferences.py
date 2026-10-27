@@ -11,13 +11,17 @@ from wosutil.preferences import (
     BEAR_TRAP_MARCH_MAX,
     BEAR_TRAP_MARCH_MIN,
     DEFAULT_EMULATOR_PATHS,
+    DEFAULT_INTEL_MODE,
     GATHER_RESOURCES,
+    INTEL_MODE_CLASSIC,
+    INTEL_MODE_EXECUTE_ALL,
     MYSTERY_SHOP_LEVEL_FREE,
     MYSTERY_SHOP_LEVELS,
     get_bear_rally_call_march,
     get_bear_trap_marches,
     get_emulator_paths,
     get_gather_resource,
+    get_intel_mode,
     get_kill_beast_march,
     get_kill_beast_march_assignment,
     get_mystery_shop_level,
@@ -124,6 +128,31 @@ class TestPreferences(unittest.TestCase):
         """Test that invalid resource preferences fall back to meat."""
         self.assertEqual(get_gather_resource({"gather_resource": "gold"}), "meat")
         self.assertEqual(get_gather_resource({"gather_resource": None}), "meat")
+
+    def test_get_intel_mode_defaults_to_execute_all(self):
+        """Missing intel mode preferences use the Execute All mode."""
+        self.assertEqual(get_intel_mode({}), INTEL_MODE_EXECUTE_ALL)
+        self.assertEqual(DEFAULT_INTEL_MODE, INTEL_MODE_EXECUTE_ALL)
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            self.assertEqual(get_intel_mode(None), INTEL_MODE_EXECUTE_ALL)
+
+    def test_get_intel_mode_accepts_known_modes(self):
+        """Both supported intel modes are returned unchanged."""
+        for mode in (INTEL_MODE_CLASSIC, INTEL_MODE_EXECUTE_ALL):
+            self.assertEqual(get_intel_mode({"intel_mode": mode}), mode)
+
+    def test_get_intel_mode_invalid_falls_back(self):
+        """Unknown intel modes fall back to the default."""
+        self.assertEqual(get_intel_mode({"intel_mode": "unknown"}), DEFAULT_INTEL_MODE)
+        self.assertEqual(get_intel_mode({"intel_mode": None}), DEFAULT_INTEL_MODE)
+
+    def test_intel_mode_persists_across_sessions(self):
+        """The selected intel mode is saved and reloaded."""
+        with patch("wosutil.preferences.PREFERENCES_FILE", self.prefs_file):
+            preferences = load_preferences() or {}
+            preferences["intel_mode"] = INTEL_MODE_CLASSIC
+            self.assertTrue(save_preferences(preferences))
+            self.assertEqual(get_intel_mode(None), INTEL_MODE_CLASSIC)
 
     def test_get_kill_beast_march_valid(self):
         """Test that a valid march number is returned."""

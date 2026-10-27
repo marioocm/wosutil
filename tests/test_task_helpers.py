@@ -9,6 +9,8 @@ from wosutil.config import (
     INTEL_BEAST_MAX_RETRIES,
     INTEL_BEAST_MAX_WAIT_SECONDS,
     INTEL_CLAIM_ALL_MIN_SATURATION,
+    INTEL_EXECUTE_ALL_MAX_ROUNDS,
+    INTEL_EXECUTE_ALL_WAIT_SECONDS,
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.tool.tasks.navigation import (
@@ -40,9 +42,11 @@ from wosutil.tool.tasks.task_helpers import (
     KILL_BEAST_MARCH_SCROLL_START,
     _click_intel_template,
     _pick_valid_rally,
+    _read_execute_all_button,
     _read_join_rally_buttons,
     _read_rally_countdowns,
     call_bear_rally,
+    execute_all_intel_missions,
     gather_tile,
     join_bear_rally,
     kill_beast,
@@ -831,7 +835,7 @@ class TestClickIntelTemplate(unittest.TestCase):
         self.click_on_template.assert_called_once_with(
             "intel_claim_all",
             0,
-            roi="intel_claim_all",
+            roi="intel_buttons",
             screenshot_path="/tmp/shot.png",
             min_saturation=INTEL_CLAIM_ALL_MIN_SATURATION,
         )
@@ -850,6 +854,127 @@ class TestClickIntelTemplate(unittest.TestCase):
         self.click_first_found_template.assert_called_once_with(0, ["intel_survivor"], roi="intel", screenshot_path="/tmp/shot2.png")
         self.delete_screenshot.assert_any_call("/tmp/shot1.png")
         self.delete_screenshot.assert_any_call("/tmp/shot2.png")
+
+
+class TestReadExecuteAllButton(unittest.TestCase):
+    """Test the OCR parsing of the Execute All button."""
+
+    def test_reads_mission_count_and_center(self):
+        """The (N) mission counter and the label center are returned."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch(
+            "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen",
+            return_value=[("Execute All (8)", (100, 100, 120, 20)), ("Claim All (0)", (400, 100, 120, 20))],
+        ) as read_lines:
+            missions, center = _read_execute_all_button("/tmp/shot.png")
+
+        self.assertEqual(missions, 8)
+        self.assertEqual(center, (160, 110))
+        read_lines.assert_called_once_with("/tmp/shot.png", roi=(0, 0, 720, 282), psm=11)
+
+    def test_reads_zero_missions(self):
+        """A disabled button with no missions reports a zero count."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch(
+            "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen",
+            return_value=[("Execute All (0)", (100, 100, 120, 20))],
+        ):
+            missions, center = _read_execute_all_button("/tmp/shot.png")
+
+        self.assertEqual(missions, 0)
+        self.assertEqual(center, (160, 110))
+
+    def test_falls_back_to_the_label_when_the_count_is_unreadable(self):
+        """A recognizable label is clicked even if the counter OCR fails."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch(
+            "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen", return_value=[("Claim All (0)", (400, 100, 120, 20))]
+        ), patch("wosutil.tool.tasks.task_helpers.find_text_on_screen", return_value=(True, (100, 100, 120, 20))) as find_text:
+            missions, center = _read_execute_all_button("/tmp/shot.png")
+
+        self.assertEqual(missions, 1)
+        self.assertEqual(center, (160, 110))
+        find_text.assert_called_once_with("/tmp/shot.png", "Execute All", roi=(0, 0, 720, 282))
+
+    def test_returns_none_when_the_button_is_missing(self):
+        """No label and no counter means the button is not on screen."""
+        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch("wosutil.tool.tasks.task_helpers.read_text_lines_on_screen", return_value=[]), patch(
+            "wosutil.tool.tasks.task_helpers.find_text_on_screen", return_value=(False, None)
+        ):
+            self.assertEqual(_read_execute_all_button("/tmp/shot.png"), (None, None))
+
+
+class TestExecuteAllIntelMissions(unittest.TestCase):
+    """Test the Execute All intel flow."""
+
+    def test_executes_and_claims_when_missions_are_available(self):
+        """The button is clicked, then the new rewards are claimed."""
+        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=["/tmp/shot1.png", "/tmp/shot2.png"]) as take_screenshot, patch(
+            "wosutil.tool.tasks.task_helpers.delete_temp_screenshot"
+        ) as delete_screenshot, patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=["/tmp/shot1.png", "/tmp/shot2.png"]) as claim_rewards, patch(
+            "wosutil.tool.tasks.task_helpers._read_execute_all_button", side_effect=[(8, (100, 200)), (0, (100, 200))]
+        ) as read_button, patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+            result = execute_all_intel_missions(0)
+
+        self.assertTrue(result)
+        self.assertEqual(take_screenshot.call_count, 2)
+        self.assertEqual(claim_rewards.call_args_list, [call(0, "/tmp/shot1.png"), call(0, "/tmp/shot2.png")])
+        self.assertEqual(read_button.call_args_list, [call("/tmp/shot1.png"), call("/tmp/shot2.png")])
+        click.assert_called_once_with(100, 200, 0, delay=INTEL_EXECUTE_ALL_WAIT_SECONDS)
+        self.assertEqual(delete_screenshot.call_args_list, [call("/tmp/shot1.png"), call("/tmp/shot2.png")])
+
+    def test_repeats_after_claiming_more_missions(self):
+        """A claim that reveals more missions triggers another Execute All round."""
+        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=["/tmp/shot1.png", "/tmp/shot2.png", "/tmp/shot3.png"]) as take_screenshot, patch(
+            "wosutil.tool.tasks.task_helpers.delete_temp_screenshot"
+        ), patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=["/tmp/shot1.png", "/tmp/shot2.png", "/tmp/shot3.png"]) as claim_rewards, patch(
+            "wosutil.tool.tasks.task_helpers._read_execute_all_button", side_effect=[(8, (100, 200)), (5, (300, 400)), (0, (300, 400))]
+        ), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+            result = execute_all_intel_missions(0)
+
+        self.assertTrue(result)
+        self.assertEqual(take_screenshot.call_count, 3)
+        self.assertEqual(claim_rewards.call_count, 3)
+        self.assertEqual(click.call_args_list, [call(100, 200, 0, delay=INTEL_EXECUTE_ALL_WAIT_SECONDS), call(300, 400, 0, delay=INTEL_EXECUTE_ALL_WAIT_SECONDS)])
+
+    def test_stops_after_the_round_cap(self):
+        """An always-available button cannot keep the task looping forever."""
+        shots = [f"/tmp/shot{i}.png" for i in range(INTEL_EXECUTE_ALL_MAX_ROUNDS + 1)]
+        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=shots), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
+            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=shots
+        ), patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(8, (100, 200))), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+            result = execute_all_intel_missions(0)
+
+        self.assertTrue(result)
+        self.assertEqual(click.call_count, INTEL_EXECUTE_ALL_MAX_ROUNDS)
+
+    def test_skips_the_click_when_there_are_no_missions(self):
+        """A zero mission count only claims and reschedules."""
+        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
+            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value="/tmp/shot.png"
+        ) as claim_rewards, patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(0, (100, 200))), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+            result = execute_all_intel_missions(0)
+
+        self.assertTrue(result)
+        claim_rewards.assert_called_once_with(0, "/tmp/shot.png")
+        click.assert_not_called()
+
+    def test_skips_the_click_when_the_button_is_missing(self):
+        """A missing Execute All button only claims and reschedules."""
+        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
+            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value="/tmp/shot.png"
+        ), patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(None, None)), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+            result = execute_all_intel_missions(0)
+
+        self.assertTrue(result)
+        click.assert_not_called()
+
+    def test_returns_false_when_the_intel_screen_cannot_be_reached(self):
+        """A failed claim/navigation aborts the flow without reading the button."""
+        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
+            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value=None
+        ), patch("wosutil.tool.tasks.task_helpers._read_execute_all_button") as read_button:
+            result = execute_all_intel_missions(0)
+
+        self.assertFalse(result)
+        read_button.assert_not_called()
 
 
 class TestClickFirstFoundTemplate(unittest.TestCase):

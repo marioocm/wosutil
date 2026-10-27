@@ -4,6 +4,7 @@ import calendar
 import unittest
 from unittest.mock import patch
 
+from wosutil.preferences import INTEL_MODE_CLASSIC, INTEL_MODE_EXECUTE_ALL
 from wosutil.tool.tasks.task_automation import (
     BEAR_TRAP_DURATION_SECONDS,
     BEAR_TRAP_PREP_SECONDS,
@@ -13,6 +14,7 @@ from wosutil.tool.tasks.task_automation import (
     _next_bear_hunt_start,
     activate_daily_pet_skills,
     claim_storehouse_stamina,
+    do_intel_missions,
     play_bear_trap,
     turn_on_autojoin,
 )
@@ -105,6 +107,48 @@ class TestClaimStorehouseStamina(unittest.TestCase):
         self.click_on.assert_not_called()
         self.click_on_template.assert_not_called()
         self.back_button.assert_not_called()
+
+
+class TestDoIntelMissionsMode(unittest.TestCase):
+    """Test the intel mission mode dispatch."""
+
+    def test_execute_all_mode_runs_the_execute_all_flow(self):
+        """The default Execute All mode uses the new instant flow."""
+        with patch("wosutil.tool.tasks.task_automation.get_intel_mode", return_value=INTEL_MODE_EXECUTE_ALL), patch(
+            "wosutil.tool.tasks.task_automation.execute_all_intel_missions", return_value=True
+        ) as execute, patch("wosutil.tool.tasks.task_automation._read_intel_reschedule", return_value=1234) as read_reschedule:
+            result = do_intel_missions(0)
+
+        self.assertEqual(result, (True, 1234))
+        execute.assert_called_once_with(0)
+        read_reschedule.assert_called_once_with(0)
+
+    def test_execute_all_mode_reports_failure(self):
+        """A failed Execute All flow is reported while still rescheduling."""
+        with patch("wosutil.tool.tasks.task_automation.get_intel_mode", return_value=INTEL_MODE_EXECUTE_ALL), patch(
+            "wosutil.tool.tasks.task_automation.execute_all_intel_missions", return_value=False
+        ), patch("wosutil.tool.tasks.task_automation._read_intel_reschedule", return_value=1234):
+            result = do_intel_missions(0)
+
+        self.assertEqual(result, (False, 1234))
+
+    def test_classic_mode_keeps_the_original_flow(self):
+        """Classic mode still uses the individual mission helpers."""
+        with patch("wosutil.tool.tasks.task_automation.get_intel_mode", return_value=INTEL_MODE_CLASSIC), patch(
+            "wosutil.tool.tasks.task_automation.kill_intel_beast", return_value=False
+        ) as kill_beast, patch("wosutil.tool.tasks.task_automation.rescue_intel_survivor", return_value=False) as rescue, patch(
+            "wosutil.tool.tasks.task_automation.do_intel_exploration", return_value=False
+        ) as exploration, patch("wosutil.tool.tasks.task_automation._read_intel_reschedule", return_value=999) as read_reschedule, patch(
+            "wosutil.tool.tasks.task_automation.execute_all_intel_missions"
+        ) as execute:
+            result = do_intel_missions(0)
+
+        self.assertEqual(result, (True, 999))
+        kill_beast.assert_called_once_with(0)
+        rescue.assert_called_once_with(0)
+        exploration.assert_called_once_with(0)
+        execute.assert_not_called()
+        read_reschedule.assert_called_once_with(0)
 
 
 class TestNextBearHuntStart(unittest.TestCase):

@@ -21,6 +21,9 @@ from wosutil.preferences import (
     BEAR_TRAP_MARCH_MAX,
     BEAR_TRAP_MARCH_MIN,
     GATHER_RESOURCES,
+    INTEL_MODE_CLASSIC,
+    INTEL_MODE_EXECUTE_ALL,
+    INTEL_MODES,
     KILL_BEAST_MARCH_MAX,
     KILL_BEAST_MARCH_MIN,
     MYSTERY_SHOP_LEVEL_FREE,
@@ -33,6 +36,7 @@ from wosutil.preferences import (
     get_emulator,
     get_emulator_paths,
     get_gather_resource,
+    get_intel_mode,
     get_kill_beast_march,
     get_mystery_shop_level,
     get_remember_schedule,
@@ -65,6 +69,11 @@ _MYSTERY_SHOP_LEVEL_LABELS = {
 }
 
 _GATHER_RESOURCE_LABELS = {resource: resource.title() for resource in GATHER_RESOURCES}
+
+_INTEL_MODE_LABELS = {
+    INTEL_MODE_CLASSIC: "Intel Classic (use Gina for beast)",
+    INTEL_MODE_EXECUTE_ALL: "Intel Execute All",
+}
 
 
 def _ordered_tasks(TASK_DEFINITIONS):
@@ -328,6 +337,30 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         width=12,
     ).pack(side="left", padx=5)
 
+    # --- Intel mission mode ---
+    intel_frame = ttk.LabelFrame(scrollable_frame, text="Intel")
+    intel_frame.pack(pady=10, padx=10, fill="x")
+
+    intel_row = ttk.Frame(intel_frame)
+    intel_row.pack(anchor="w", padx=10, pady=10)
+
+    intel_mode_var = tk.StringVar(value=_INTEL_MODE_LABELS[get_intel_mode()])
+    ttk.Label(intel_row, text="Complete intel missions with:").pack(side="left", padx=5)
+    ttk.Combobox(
+        intel_row,
+        textvariable=intel_mode_var,
+        values=[_INTEL_MODE_LABELS[mode] for mode in INTEL_MODES],
+        state="readonly",
+        width=35,
+    ).pack(side="left", padx=5)
+
+    ttk.Label(
+        intel_frame,
+        text="Execute All completes every available mission instantly using extra stamina; Classic sends marches for each mission.",
+        wraplength=600,
+        justify="left",
+    ).pack(anchor="w", padx=15, pady=(0, 10))
+
     # --- Mystery shop redemption level ---
     mystery_shop_frame = ttk.LabelFrame(scrollable_frame, text="Mystery Shop")
     mystery_shop_frame.pack(pady=10, padx=10, fill="x")
@@ -441,6 +474,10 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
             get_gather_resource(prefs),
         )
         prefs["gather_resource"] = resource
+        prefs["intel_mode"] = next(
+            (mode for mode, label in _INTEL_MODE_LABELS.items() if label == intel_mode_var.get()),
+            get_intel_mode(prefs),
+        )
         level = next(
             (level for level, label in _MYSTERY_SHOP_LEVEL_LABELS.items() if label == mystery_shop_var.get()),
             get_mystery_shop_level(prefs),
