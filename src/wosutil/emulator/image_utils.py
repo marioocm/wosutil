@@ -798,6 +798,7 @@ def find_template_center_on_screen(
     threshold: float = SCREEN_CHECK_THRESHOLD,
     roi: Optional[Tuple[int, int, int, int]] = None,
     grayscale: bool = False,
+    min_saturation: Optional[float] = None,
 ) -> Tuple[bool, Optional[Tuple[int, int]]]:
     """Search for a template and return the center of the match.
 
@@ -812,6 +813,10 @@ def find_template_center_on_screen(
         threshold (float): Minimum confidence threshold for a match.
         roi (tuple, optional): Region of interest as (x, y, w, h) to search within the screenshot.
         grayscale (bool): Match in gray scale when True, in color otherwise.
+        min_saturation (float, optional): Minimum mean HSV saturation (0-255)
+            of the matched area. Used to reject disabled buttons that keep the
+            same artwork but are drawn in gray. When None, saturation is not
+            checked.
 
     Returns:
         tuple: (True, (cx, cy)) if found, (False, None) if not.
@@ -830,6 +835,7 @@ def find_template_center_on_screen(
 
         template_name = os.path.basename(template_path)
         prefix = "[GRAY] " if grayscale else ""
+        color_img = img
 
         if grayscale:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -841,6 +847,15 @@ def find_template_center_on_screen(
         if max_val >= threshold:
             top_left = max_loc
             h, w = template.shape[:2]
+
+            if min_saturation is not None:
+                matched = color_img[top_left[1] : top_left[1] + h, top_left[0] : top_left[0] + w]
+                saturation = float(cv2.cvtColor(matched, cv2.COLOR_BGR2HSV)[:, :, 1].mean())
+                if saturation < min_saturation:
+                    msg = f"{prefix}Template '{template_name}' matches but is too desaturated ({saturation:.0f} < {min_saturation:.0f}), treating it as disabled."
+                    log_message(msg, level="info")
+                    return False, None
+
             if roi:
                 top_left = (top_left[0] + roi[0], top_left[1] + roi[1])
             msg = f"{prefix}Template '{template_name}' found at {top_left} with confidence {max_val:.2f}"

@@ -197,6 +197,7 @@ INTEL_BEAST_MAX_WAIT_SECONDS = 1000  # Max wait for a beast march (timer read * 
 INTEL_BEAST_TIMER_MAX_SECONDS = 30 * 60  # Max plausible beast march timer; longer reads are treated as OCR errors
 INTEL_BEAST_MARCH_SENT_WAIT_SECONDS = 240  # Reschedule when the march was sent but the timer could not be read
 INTEL_BEAST_MAX_RETRIES = 3  # Max attempts to confirm the send-march screen before giving up
+INTEL_CLAIM_ALL_MIN_SATURATION = 60  # Min HSV saturation (0-255) of 'intel_claim_all'; the disabled button is gray (0) and the enabled one green (136)
 
 # --- City Coordinates (main screen specific points) ---
 COORDINATES = {

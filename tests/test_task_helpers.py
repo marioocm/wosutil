@@ -8,6 +8,7 @@ from wosutil.config import (
     INTEL_BEAST_MARCH_SENT_WAIT_SECONDS,
     INTEL_BEAST_MAX_RETRIES,
     INTEL_BEAST_MAX_WAIT_SECONDS,
+    INTEL_CLAIM_ALL_MIN_SATURATION,
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.tool.tasks.navigation import (
@@ -37,6 +38,7 @@ from wosutil.tool.tasks.task_helpers import (
     KILL_BEAST_MARCH_POSITIONS,
     KILL_BEAST_MARCH_SCROLL_END,
     KILL_BEAST_MARCH_SCROLL_START,
+    _click_intel_template,
     _pick_valid_rally,
     _read_join_rally_buttons,
     _read_rally_countdowns,
@@ -736,6 +738,14 @@ class TestClickOnTemplate(unittest.TestCase):
         _args, kwargs = self.find_center.call_args
         self.assertTrue(kwargs.get("grayscale"))
 
+    def test_min_saturation_is_forwarded_to_the_finder(self):
+        """The color guard is passed through to the template finder."""
+        self.find_center.return_value = (True, (10, 20))
+        self.assertTrue(click_on_template("my_template", 0, min_saturation=42))
+        _args, kwargs = self.find_center.call_args
+        self.assertEqual(kwargs.get("min_saturation"), 42)
+        self.click_coords.assert_called_once_with(10, 20, 0, delay=CLICK_DELAY)
+
     def test_resolves_roi_name(self):
         """An ROI name is resolved via get_roi before searching."""
         self.find_center.return_value = (True, (10, 20))
@@ -768,6 +778,7 @@ class TestClickOnTemplate(unittest.TestCase):
             threshold=SCREEN_CHECK_THRESHOLD,
             roi=(1, 2, 3, 4),
             grayscale=False,
+            min_saturation=None,
         )
         self.assertEqual(self.click_coords.call_count, 10)
         self.assertTrue(all(call_args == call(50, 60, 0, delay=0.1) for call_args in self.click_coords.call_args_list))
@@ -779,6 +790,66 @@ class TestClickOnTemplate(unittest.TestCase):
         self.assertTrue(click_on_template("my_template", 0, delay=0.1))
 
         self.assertEqual(self.click_coords.call_count, 1)
+
+
+class TestClickIntelTemplate(unittest.TestCase):
+    """Test cases for the shared intel claim and template click helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers.is_game_on_screen"),
+            patch("wosutil.tool.tasks.task_helpers.ensure_intel_screen"),
+            patch("wosutil.tool.tasks.task_helpers.click_on_template"),
+            patch("wosutil.tool.tasks.task_helpers.click_first_found_template"),
+            patch("wosutil.tool.tasks.task_helpers.press_android_back_button"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.take_screenshot,
+            self.delete_screenshot,
+            self.is_game_on_screen,
+            self.ensure_intel_screen,
+            self.click_on_template,
+            self.click_first_found_template,
+            self.back_button,
+        ) = self.mocks
+        self.take_screenshot.return_value = "/tmp/shot.png"
+        self.is_game_on_screen.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_claim_all_click_requires_color(self):
+        """The claim-all click only happens for a colored (enabled) button."""
+        self.click_on_template.return_value = False
+        self.click_first_found_template.return_value = "intel_beast"
+
+        result = _click_intel_template(0, [("intel_beast", True)])
+
+        self.assertEqual(result, "intel_beast")
+        self.click_on_template.assert_called_once_with(
+            "intel_claim_all",
+            0,
+            roi="intel_claim_all",
+            screenshot_path="/tmp/shot.png",
+            min_saturation=INTEL_CLAIM_ALL_MIN_SATURATION,
+        )
+        self.back_button.assert_not_called()
+        self.click_first_found_template.assert_called_once_with(0, [("intel_beast", True)], roi="intel", screenshot_path="/tmp/shot.png")
+        self.delete_screenshot.assert_called_once_with("/tmp/shot.png")
+
+    def test_claim_all_retakes_screenshot_after_claiming(self):
+        """A successful claim redraws the list, so a fresh screenshot is taken."""
+        self.click_on_template.return_value = True
+        self.take_screenshot.side_effect = ["/tmp/shot1.png", "/tmp/shot2.png"]
+
+        _click_intel_template(0, ["intel_survivor"])
+
+        self.back_button.assert_called_once_with(0)
+        self.click_first_found_template.assert_called_once_with(0, ["intel_survivor"], roi="intel", screenshot_path="/tmp/shot2.png")
+        self.delete_screenshot.assert_any_call("/tmp/shot1.png")
+        self.delete_screenshot.assert_any_call("/tmp/shot2.png")
 
 
 class TestClickFirstFoundTemplate(unittest.TestCase):
