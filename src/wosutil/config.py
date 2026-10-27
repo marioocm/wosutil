@@ -208,6 +208,7 @@ COORDINATES = {
     "exploration": (70, 1218),
     "vip": (500, 70),
     "profile": (50, 45),
+    "stamina": (50, 106),
     "sidemenu": (13, 550),
     "intel": (664, 864),
     "world_schedule": (98, 24),
