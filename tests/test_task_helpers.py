@@ -340,8 +340,8 @@ class TestGatherTile(unittest.TestCase):
         self.assertEqual(result, 60)
         self.go_search.assert_called_once_with(0)
         self.click_template.assert_any_call("worldmap_search_wood", 0, roi="worldmap_search")
-        self.click_text.assert_any_call("Search", 0, roi="worldmap_search", delay=3.0, last=True, fuzzy=True)
-        self.click_text.assert_any_call("Gather", 0, roi="gathering_tile_info", last=True, fuzzy=True)
+        self.click_text.assert_any_call("Search", 0, roi="worldmap_search", delay=3.0, last=True)
+        self.click_text.assert_any_call("Gather", 0, roi="gathering_tile_info", last=True)
         self.send_march.assert_called_once_with(0)
         self.click_template.assert_any_call(
             "gather_tile_increase_level",
@@ -357,7 +357,6 @@ class TestGatherTile(unittest.TestCase):
             instance_index=0,
             debug_label="gathering_tile_time",
         )
-        self.assertEqual(self.read_time.call_args_list[0].kwargs["ocr_psms"], (6, 7, 8, 11, 12, 13))
         self.click_coords.assert_any_call(215, 115, 0, delay=1.0)
 
     def test_meat_uses_the_resource_icon_template(self):
@@ -861,21 +860,27 @@ class TestReadExecuteAllButton(unittest.TestCase):
 
     def test_reads_mission_count_and_center(self):
         """The (N) mission counter and the label center are returned."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch(
-            "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen",
-            return_value=[("Execute All (8)", (100, 100, 120, 20)), ("Claim All (0)", (400, 100, 120, 20))],
-        ) as read_lines:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)),
+            patch(
+                "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen",
+                return_value=[("Execute All (8)", (100, 100, 120, 20)), ("Claim All (0)", (400, 100, 120, 20))],
+            ) as read_lines,
+        ):
             missions, center = _read_execute_all_button("/tmp/shot.png")
 
         self.assertEqual(missions, 8)
         self.assertEqual(center, (160, 110))
-        read_lines.assert_called_once_with("/tmp/shot.png", roi=(0, 0, 720, 282), psm=11)
+        read_lines.assert_called_once_with("/tmp/shot.png", roi=(0, 0, 720, 282))
 
     def test_reads_zero_missions(self):
         """A disabled button with no missions reports a zero count."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch(
-            "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen",
-            return_value=[("Execute All (0)", (100, 100, 120, 20))],
+        with (
+            patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)),
+            patch(
+                "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen",
+                return_value=[("Execute All (0)", (100, 100, 120, 20))],
+            ),
         ):
             missions, center = _read_execute_all_button("/tmp/shot.png")
 
@@ -884,9 +889,11 @@ class TestReadExecuteAllButton(unittest.TestCase):
 
     def test_falls_back_to_the_label_when_the_count_is_unreadable(self):
         """A recognizable label is clicked even if the counter OCR fails."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch(
-            "wosutil.tool.tasks.task_helpers.read_text_lines_on_screen", return_value=[("Claim All (0)", (400, 100, 120, 20))]
-        ), patch("wosutil.tool.tasks.task_helpers.find_text_on_screen", return_value=(True, (100, 100, 120, 20))) as find_text:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)),
+            patch("wosutil.tool.tasks.task_helpers.read_text_lines_on_screen", return_value=[("Claim All (0)", (400, 100, 120, 20))]),
+            patch("wosutil.tool.tasks.task_helpers.find_text_on_screen", return_value=(True, (100, 100, 120, 20))) as find_text,
+        ):
             missions, center = _read_execute_all_button("/tmp/shot.png")
 
         self.assertEqual(missions, 1)
@@ -895,8 +902,10 @@ class TestReadExecuteAllButton(unittest.TestCase):
 
     def test_returns_none_when_the_button_is_missing(self):
         """No label and no counter means the button is not on screen."""
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)), patch("wosutil.tool.tasks.task_helpers.read_text_lines_on_screen", return_value=[]), patch(
-            "wosutil.tool.tasks.task_helpers.find_text_on_screen", return_value=(False, None)
+        with (
+            patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=(0, 0, 720, 282)),
+            patch("wosutil.tool.tasks.task_helpers.read_text_lines_on_screen", return_value=[]),
+            patch("wosutil.tool.tasks.task_helpers.find_text_on_screen", return_value=(False, None)),
         ):
             self.assertEqual(_read_execute_all_button("/tmp/shot.png"), (None, None))
 
@@ -906,11 +915,13 @@ class TestExecuteAllIntelMissions(unittest.TestCase):
 
     def test_executes_and_claims_when_missions_are_available(self):
         """The button is clicked, then the new rewards are claimed."""
-        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=["/tmp/shot1.png", "/tmp/shot2.png"]) as take_screenshot, patch(
-            "wosutil.tool.tasks.task_helpers.delete_temp_screenshot"
-        ) as delete_screenshot, patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=["/tmp/shot1.png", "/tmp/shot2.png"]) as claim_rewards, patch(
-            "wosutil.tool.tasks.task_helpers._read_execute_all_button", side_effect=[(8, (100, 200)), (0, (100, 200))]
-        ) as read_button, patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=["/tmp/shot1.png", "/tmp/shot2.png"]) as take_screenshot,
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot") as delete_screenshot,
+            patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=["/tmp/shot1.png", "/tmp/shot2.png"]) as claim_rewards,
+            patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", side_effect=[(8, (100, 200)), (0, (100, 200))]) as read_button,
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click,
+        ):
             result = execute_all_intel_missions(0)
 
         self.assertTrue(result)
@@ -922,11 +933,13 @@ class TestExecuteAllIntelMissions(unittest.TestCase):
 
     def test_repeats_after_claiming_more_missions(self):
         """A claim that reveals more missions triggers another Execute All round."""
-        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=["/tmp/shot1.png", "/tmp/shot2.png", "/tmp/shot3.png"]) as take_screenshot, patch(
-            "wosutil.tool.tasks.task_helpers.delete_temp_screenshot"
-        ), patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=["/tmp/shot1.png", "/tmp/shot2.png", "/tmp/shot3.png"]) as claim_rewards, patch(
-            "wosutil.tool.tasks.task_helpers._read_execute_all_button", side_effect=[(8, (100, 200)), (5, (300, 400)), (0, (300, 400))]
-        ), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=["/tmp/shot1.png", "/tmp/shot2.png", "/tmp/shot3.png"]) as take_screenshot,
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=["/tmp/shot1.png", "/tmp/shot2.png", "/tmp/shot3.png"]) as claim_rewards,
+            patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", side_effect=[(8, (100, 200)), (5, (300, 400)), (0, (300, 400))]),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click,
+        ):
             result = execute_all_intel_missions(0)
 
         self.assertTrue(result)
@@ -937,9 +950,13 @@ class TestExecuteAllIntelMissions(unittest.TestCase):
     def test_stops_after_the_round_cap(self):
         """An always-available button cannot keep the task looping forever."""
         shots = [f"/tmp/shot{i}.png" for i in range(INTEL_EXECUTE_ALL_MAX_ROUNDS + 1)]
-        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=shots), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
-            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=shots
-        ), patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(8, (100, 200))), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot", side_effect=shots),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", side_effect=shots),
+            patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(8, (100, 200))),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click,
+        ):
             result = execute_all_intel_missions(0)
 
         self.assertTrue(result)
@@ -947,9 +964,13 @@ class TestExecuteAllIntelMissions(unittest.TestCase):
 
     def test_skips_the_click_when_there_are_no_missions(self):
         """A zero mission count only claims and reschedules."""
-        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
-            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value="/tmp/shot.png"
-        ) as claim_rewards, patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(0, (100, 200))), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value="/tmp/shot.png") as claim_rewards,
+            patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(0, (100, 200))),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click,
+        ):
             result = execute_all_intel_missions(0)
 
         self.assertTrue(result)
@@ -958,9 +979,13 @@ class TestExecuteAllIntelMissions(unittest.TestCase):
 
     def test_skips_the_click_when_the_button_is_missing(self):
         """A missing Execute All button only claims and reschedules."""
-        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
-            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value="/tmp/shot.png"
-        ), patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(None, None)), patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value="/tmp/shot.png"),
+            patch("wosutil.tool.tasks.task_helpers._read_execute_all_button", return_value=(None, None)),
+            patch("wosutil.tool.tasks.task_helpers.click_on_coordinates") as click,
+        ):
             result = execute_all_intel_missions(0)
 
         self.assertTrue(result)
@@ -968,9 +993,12 @@ class TestExecuteAllIntelMissions(unittest.TestCase):
 
     def test_returns_false_when_the_intel_screen_cannot_be_reached(self):
         """A failed claim/navigation aborts the flow without reading the button."""
-        with patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"), patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"), patch(
-            "wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value=None
-        ), patch("wosutil.tool.tasks.task_helpers._read_execute_all_button") as read_button:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.take_screenshot", return_value="/tmp/shot.png"),
+            patch("wosutil.tool.tasks.task_helpers.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_helpers._claim_intel_rewards", return_value=None),
+            patch("wosutil.tool.tasks.task_helpers._read_execute_all_button") as read_button,
+        ):
             result = execute_all_intel_missions(0)
 
         self.assertFalse(result)
@@ -1225,9 +1253,12 @@ class TestEnsureCityScreenNotInstalled(unittest.TestCase):
 
     def test_aborts_without_launching_when_game_missing(self):
         """Missing game: clear error and no launch/restart of the emulator."""
-        with patch("wosutil.tool.tasks.navigation.is_wos_running", return_value=False), patch("wosutil.tool.tasks.navigation.is_wos_installed", return_value=False), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen"
-        ) as mock_launch, patch("wosutil.tool.tasks.navigation.get_multi_instance_manager") as mock_manager:
+        with (
+            patch("wosutil.tool.tasks.navigation.is_wos_running", return_value=False),
+            patch("wosutil.tool.tasks.navigation.is_wos_installed", return_value=False),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
+            patch("wosutil.tool.tasks.navigation.get_multi_instance_manager") as mock_manager,
+        ):
             from wosutil.tool.tasks.navigation import ensure_city_screen
 
             result = ensure_city_screen(0)
@@ -1301,9 +1332,11 @@ class TestReadRallyHelpers(unittest.TestCase):
         """Join button centers are returned top to bottom, matched in color at 0.9."""
         roi = (393, 173, 323, 817)
         boxes = [(617, 778, 48, 44), (617, 371, 48, 44)]
-        with patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=roi), patch("wosutil.tool.tasks.task_helpers.get_template_path", return_value="/tmp/join.png"), patch(
-            "wosutil.tool.tasks.task_helpers.find_multiple_templates", return_value=boxes
-        ) as mock_find:
+        with (
+            patch("wosutil.tool.tasks.task_helpers.get_roi", return_value=roi),
+            patch("wosutil.tool.tasks.task_helpers.get_template_path", return_value="/tmp/join.png"),
+            patch("wosutil.tool.tasks.task_helpers.find_multiple_templates", return_value=boxes) as mock_find,
+        ):
             buttons = _read_join_rally_buttons("/tmp/shot.png")
 
         self.assertEqual(buttons, [(641, 393), (641, 800)])
@@ -1315,9 +1348,12 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_clicks_alliance_when_on_city_screen(self):
         """On the city screen it clicks alliance without ensuring the screen."""
-        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=True), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen") as is_world, patch(
-            "wosutil.tool.tasks.navigation.ensure_city_screen"
-        ) as ensure_city, patch("wosutil.tool.tasks.navigation.click_on") as click_on:
+        with (
+            patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=True),
+            patch("wosutil.tool.tasks.navigation.is_game_on_world_screen") as is_world,
+            patch("wosutil.tool.tasks.navigation.ensure_city_screen") as ensure_city,
+            patch("wosutil.tool.tasks.navigation.click_on") as click_on,
+        ):
             result = go_alliance_tab(0)
 
         self.assertTrue(result)
@@ -1327,9 +1363,12 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_clicks_alliance_when_on_world_screen(self):
         """On the world screen it clicks alliance without ensuring the city screen."""
-        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=True), patch(
-            "wosutil.tool.tasks.navigation.ensure_city_screen"
-        ) as ensure_city, patch("wosutil.tool.tasks.navigation.click_on") as click_on:
+        with (
+            patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=True),
+            patch("wosutil.tool.tasks.navigation.ensure_city_screen") as ensure_city,
+            patch("wosutil.tool.tasks.navigation.click_on") as click_on,
+        ):
             result = go_alliance_tab(0)
 
         self.assertTrue(result)
@@ -1338,9 +1377,12 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_ensures_city_screen_when_on_neither_screen(self):
         """When on neither screen it ensures the city screen first."""
-        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=False), patch(
-            "wosutil.tool.tasks.navigation.ensure_city_screen", return_value=True
-        ) as ensure_city, patch("wosutil.tool.tasks.navigation.click_on") as click_on:
+        with (
+            patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.ensure_city_screen", return_value=True) as ensure_city,
+            patch("wosutil.tool.tasks.navigation.click_on") as click_on,
+        ):
             result = go_alliance_tab(0)
 
         self.assertTrue(result)
@@ -1349,9 +1391,12 @@ class TestGoAllianceTab(unittest.TestCase):
 
     def test_returns_false_when_city_screen_unreachable(self):
         """When the city screen cannot be reached it returns False without clicking."""
-        with patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False), patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=False), patch(
-            "wosutil.tool.tasks.navigation.ensure_city_screen", return_value=False
-        ), patch("wosutil.tool.tasks.navigation.click_on") as click_on:
+        with (
+            patch("wosutil.tool.tasks.navigation.is_game_on_city_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.is_game_on_world_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.ensure_city_screen", return_value=False),
+            patch("wosutil.tool.tasks.navigation.click_on") as click_on,
+        ):
             result = go_alliance_tab(0)
 
         self.assertFalse(result)

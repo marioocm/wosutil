@@ -30,7 +30,7 @@ class TestParseUtcText(unittest.TestCase):
         self.assertEqual(parse_utc_text("4 UTC 08-10 11:12:26"), (8, 10, 11, 12, 26))
 
     def test_parses_clock_without_spaces(self):
-        """Tesseract often merges the fields; the parser must handle that."""
+        """OCR often merges the fields; the parser must handle that."""
         self.assertEqual(parse_utc_text("44UTC08-1011:12:26"), (8, 10, 11, 12, 26))
 
     def test_parses_single_digit_fields(self):
@@ -226,12 +226,19 @@ class TestParseTaskListSchedule(unittest.TestCase):
         self.assertEqual(events, [(2026, 8, 25, 19, 0)])
         self.assertEqual(headers, [(2026, 8, 25)])
 
-    def test_misread_today_banner(self):
-        """The banner font makes Tesseract read 'Today' as e.g. 'ioday,'."""
-        words = [("ioday,", (280, 90, 80, 25))] + self._bear_hunt_row(200)
+    def test_today_banner_with_trailing_punctuation(self):
+        """Punctuation around the 'Today' banner is stripped before matching."""
+        words = [("Today,", (280, 90, 80, 25))] + self._bear_hunt_row(200)
         events, headers = parse_task_list_schedule(words, self.TODAY)
         self.assertEqual(events, [(2026, 8, 25, 19, 0)])
         self.assertEqual(headers, [(2026, 8, 25)])
+
+    def test_misread_today_banner_is_not_today(self):
+        """A misspelled banner is not treated as 'Today'."""
+        words = [("ioday,", (280, 90, 80, 25))] + self._bear_hunt_row(200)
+        events, headers = parse_task_list_schedule(words, self.TODAY)
+        self.assertEqual(events, [])
+        self.assertEqual(headers, [])
 
     def test_explicit_date_headers_and_chronological_sort(self):
         """Bear Hunts under date banners get those dates, sorted chronologically."""
@@ -240,8 +247,8 @@ class TestParseTaskListSchedule(unittest.TestCase):
         self.assertEqual(events, [(2026, 8, 26, 19, 0), (2026, 8, 27, 1, 0)])
         self.assertEqual(headers, [(2026, 8, 26), (2026, 8, 27)])
 
-    def test_duplicate_words_from_both_ocr_passes_dedupe(self):
-        """The raw and bright OCR passes may read the same row; it is read once."""
+    def test_duplicate_row_reads_dedupe(self):
+        """The same row read twice is reported once."""
         words = [("2026/08/26", (282, 100, 154, 23))] + self._bear_hunt_row(200) + self._bear_hunt_row(201)
         events, _headers = parse_task_list_schedule(words, self.TODAY)
         self.assertEqual(events, [(2026, 8, 26, 19, 0)])
@@ -321,17 +328,24 @@ class TestTasksRescheduleToUtcMidnight(unittest.TestCase):
 
     def test_claim_pet_adventure_ally_treasure_returns_utc_midnight(self):
         """The ally treasure task reschedules to the next 00:00 UTC on success."""
-        with patch("wosutil.tool.tasks.task_automation.go_pet_adventure", return_value=True), patch("wosutil.tool.tasks.task_automation.click_on_coordinates"), patch(
-            "wosutil.tool.tasks.task_automation.press_android_back_button"
-        ), patch("wosutil.tool.tasks.task_automation.get_seconds_until_utc_midnight", return_value=43200.0):
+        with (
+            patch("wosutil.tool.tasks.task_automation.go_pet_adventure", return_value=True),
+            patch("wosutil.tool.tasks.task_automation.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_automation.press_android_back_button"),
+            patch("wosutil.tool.tasks.task_automation.get_seconds_until_utc_midnight", return_value=43200.0),
+        ):
             result = claim_pet_adventure_ally_treasure(0)
         self.assertEqual(result, (True, 43200.0))
 
     def test_claim_vip_daily_rewards_returns_utc_midnight(self):
         """The VIP daily rewards task reschedules to the next 00:00 UTC on success."""
-        with patch("wosutil.tool.tasks.task_automation.ensure_city_screen", return_value=True), patch("wosutil.tool.tasks.task_automation.click_on"), patch(
-            "wosutil.tool.tasks.task_automation.click_on_coordinates"
-        ), patch("wosutil.tool.tasks.task_automation.press_android_back_button"), patch("wosutil.tool.tasks.task_automation.get_seconds_until_utc_midnight", return_value=3600.0):
+        with (
+            patch("wosutil.tool.tasks.task_automation.ensure_city_screen", return_value=True),
+            patch("wosutil.tool.tasks.task_automation.click_on"),
+            patch("wosutil.tool.tasks.task_automation.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_automation.press_android_back_button"),
+            patch("wosutil.tool.tasks.task_automation.get_seconds_until_utc_midnight", return_value=3600.0),
+        ):
             result = claim_vip_daily_rewards(0)
         self.assertEqual(result, (True, 3600.0))
 

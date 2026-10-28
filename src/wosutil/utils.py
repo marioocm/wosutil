@@ -124,6 +124,8 @@ def setup_logging(log_to_file: bool = True) -> None:
     # Handlers are DEBUG-level: debug messages are gated in log_message based
     # on the debug mode, so normal sessions never emit them.
     root_logger.setLevel(logging.DEBUG)
+    # Pillow logs every PNG chunk at DEBUG; keep it out of the application log.
+    logging.getLogger("PIL").setLevel(logging.WARNING)
 
     # Avoid duplicate handlers if something else already configured logging
     if not root_logger.handlers:
@@ -310,10 +312,9 @@ def retry_operation(
 def _no_window_creation_flags():
     """Return CREATE_NO_WINDOW on Windows (0 elsewhere).
 
-    Every console helper (adb, taskkill, ldconsole, tesseract via
-    pytesseract helpers) must use it: the exe is built windowed
-    (``console=False``), but a child console process still flashes its own
-    CMD window unless this flag is set.
+    Every console helper (adb, taskkill, ldconsole) must use it: the exe is
+    built windowed (``console=False``), but a child console process still
+    flashes its own CMD window unless this flag is set.
     """
     if os.name != "nt":
         return 0

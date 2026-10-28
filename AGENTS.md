@@ -9,15 +9,15 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - `templates/` → PNG images for OpenCV template matching
 - `data/` → JSON config (instance_cache.json, profiles.json, etc.), auto-created at runtime
 - `tests/` → pytest-based tests
-- `wosutil.spec` + `scripts/build.ps1` → single-file exe build (bundles Tesseract)
+- `wosutil.spec` + `scripts/build.ps1` → single-file exe build (bundles RapidOCR + ONNX Runtime)
 
 ## Key quirks
-- Pip-installable: `pip install -e .` (see `pyproject.toml`).
+- Pip-installable: `pip install -e .` (see `pyproject.toml`). Requires Python >= 3.11 (ONNX Runtime).
 - `data/*` is gitignored; the `data/` directory and its JSON files are auto-created at runtime (`save_json_file` in `src/wosutil/utils.py`).
 - Linting/formatter: ruff, typechecking: mypy (see `pyproject.toml`).
 - Agents **must run** full check after code changes.
 - Emulator paths hardcoded to default installs (MuMu at `C:\Program Files\Netease\MuMuPlayer\`, BlueStacks at `C:\Program Files\BlueStacks_nxt\`, LDPlayer at `C:\LDPlayer\LDPlayer14\`).
-- Dev mode requires system-installed Tesseract OCR (pytesseract wrapper); the built exe bundles its own copy (resolved in `src/wosutil/emulator/image_utils.py:resolve_tesseract_cmd`).
+- OCR runs in-process through RapidOCR (`src/wosutil/emulator/ocr.py`) and ONNX Runtime; no system OCR installation is required. The models and YAML routing tables are package data bundled by `wosutil.spec`.
 - In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil`.
 - Virtual env at `.venv/`.
 - Every change PR bumps `version` in `pyproject.toml` (in the same branch). The exe is built automatically by the Release workflow when a `v*` tag is pushed (see `.github/workflows/release.yml`).

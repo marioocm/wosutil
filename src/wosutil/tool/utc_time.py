@@ -20,11 +20,8 @@ can be scheduled to those instants.
 
 import re
 import time
-from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import cv2
-import numpy as np
 from PIL import Image
 
 from wosutil.config import COORDINATES, ROI
@@ -50,20 +47,15 @@ _BEAR_HUNT_CACHE: Dict[int, List[Tuple[int, int, int, int, int]]] = {}
 
 UTC_SECONDS_PER_DAY = 24 * 60 * 60
 
-# Task list OCR settings. The panel draws the event names in dark blue over
-# light blue rows (read with a plain upscale pass), while the date banners
-# ('Today', '2026/08/26') are slightly off-white text over saturated
-# orange/blue banners (read with a loose brightness mask).
-_TASK_LIST_SCALE = 3
-_TASK_LIST_BRIGHT_VAL_MIN = 200
-_TASK_LIST_BRIGHT_SAT_MAX = 140
+# Task list OCR settings. The panel draws event names in dark blue over light
+# blue rows and date banners ('Today', '2026/08/26') in off-white over
+# saturated banners; the OCR backend reads both from the raw color crop.
 _TASK_LIST_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 _TASK_LIST_DATE_RE = re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})")
 _TASK_LIST_WORD_RE = re.compile(r"[^a-z0-9]")
-_TASK_LIST_TODAY_MIN_SIMILARITY = 0.8  # the banner font makes Tesseract read e.g. 'ioday'
 _TASK_LIST_MODE_STRIP_HEIGHT = 65  # px: the 'UTC/Local Time' label sits at the top of the panel
 _TASK_LIST_MODE_MAX_ATTEMPTS = 3  # mode label reads + toggle clicks before giving up
-_TASK_LIST_HEADER_MERGE_Y = 12  # px: the same banner read by both OCR passes lands this close
+_TASK_LIST_HEADER_MERGE_Y = 12  # px: duplicate banner reads land this close
 _TASK_LIST_WORD_ROW_Y = 12  # px: words of the same event name share their vertical center
 _TASK_LIST_TIME_MAX_Y_DELTA = 45  # px: an event time sits at most this far from its name
 _TASK_LIST_TIME_MIN_X = 500  # px: event times are right-aligned past this x
@@ -80,33 +72,8 @@ def _normalize_task_list_word(word: str) -> str:
     return _TASK_LIST_WORD_RE.sub("", word.lower())
 
 
-def _preprocess_task_list_raw(img: Image.Image) -> Image.Image:
-    """Upscale without binarization: the event rows are dark text on a light background."""
-    return img.resize((img.width * _TASK_LIST_SCALE, img.height * _TASK_LIST_SCALE), resample=Image.Resampling.LANCZOS)
-
-
-def _preprocess_task_list_bright(img: Image.Image) -> Image.Image:
-    """Isolate bright text as dark glyphs on a light background.
-
-    The date banners ('Today', '2026/08/26') draw slightly off-white text over
-    saturated orange/blue banners; a loose saturation threshold keeps those
-    glyphs while dropping the banner colors.
-    """
-    arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
-    arr = cv2.resize(arr, (arr.shape[1] * _TASK_LIST_SCALE, arr.shape[0] * _TASK_LIST_SCALE), interpolation=cv2.INTER_LANCZOS4)
-    hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)
-    mask = ((hsv[:, :, 2] >= _TASK_LIST_BRIGHT_VAL_MIN) & (hsv[:, :, 1] <= _TASK_LIST_BRIGHT_SAT_MAX)).astype(np.uint8) * 255
-    return Image.fromarray(255 - mask)
-
-
-def _is_today_banner_word(word: str) -> bool:
-    """Return True when an OCR word is a (possibly misread) 'Today' banner."""
-    normalized = _normalize_task_list_word(word)
-    return len(normalized) >= 4 and SequenceMatcher(None, normalized, "today").ratio() >= _TASK_LIST_TODAY_MIN_SIMILARITY
-
-
 def _merge_task_list_headers(headers: List[Tuple[int, Tuple[int, int, int]]]) -> List[Tuple[int, Tuple[int, int, int]]]:
-    """Drop duplicate date banners read by both OCR passes (same date at nearly the same y)."""
+    """Drop duplicate date banners read at nearly the same y coordinate."""
     merged: List[Tuple[int, Tuple[int, int, int]]] = []
     for y, date in sorted(headers):
         if merged and merged[-1][1] == date and abs(y - merged[-1][0]) <= _TASK_LIST_HEADER_MERGE_Y:
@@ -148,7 +115,7 @@ def parse_task_list_schedule(
         date_match = _TASK_LIST_DATE_RE.search(word)
         if date_match:
             headers.append((y, (int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))))
-        elif _is_today_banner_word(word):
+        elif _normalize_task_list_word(word) == "today":
             headers.append((y, today))
     headers = _merge_task_list_headers(headers)
 
@@ -200,7 +167,7 @@ def _task_list_uses_utc_time(panel: Image.Image) -> Optional[bool]:
             the label could not be read.
     """
     strip = panel.crop((0, 0, panel.width, _TASK_LIST_MODE_STRIP_HEIGHT))
-    words = read_words_on_image(strip, preprocess=_preprocess_task_list_raw)
+    words = read_words_on_image(strip)
     normalized = {_normalize_task_list_word(word) for word, _box in words}
     if "local" in normalized:
         return False
@@ -306,8 +273,7 @@ def _read_task_list_bear_hunt_times(instance_index: int, utc: Tuple[int, int, in
         panel = _take_task_list_panel_image(instance_index)
         if panel is None:
             break
-        words = read_words_on_image(panel, preprocess=_preprocess_task_list_raw)
-        words += read_words_on_image(panel, preprocess=_preprocess_task_list_bright)
+        words = read_words_on_image(panel)
         found, headers = parse_task_list_schedule(words, today, infer_leading_today=scroll_index == 0)
         events.update(found)
         signature = (tuple(headers), frozenset(found))
