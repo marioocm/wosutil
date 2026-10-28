@@ -450,7 +450,7 @@ def setup_instances_tab(
                 break
             show_centered_dialog(notebook, title, text)
         # Retry launching queued instances whose next task is already within the
-        # startup window (<= 120 seconds) or already due.
+        # startup window (<= 60 seconds) or already due.
         if getattr(controller, "tool_running", False):
             controller.launch_next_instances()
         instance_list_frame.after(1000, periodic_update)
