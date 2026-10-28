@@ -29,6 +29,14 @@ from wosutil.utils import instance_log_context, load_json_file, retry_operation,
 # order wins instead of the task that was read a second earlier.
 TASK_GROUPING_WINDOW_SECONDS = 5.0
 
+# Seconds before a scheduled task when its instance is launched so the
+# emulator and the game are ready by the time the task runs.
+TASK_STARTUP_WINDOW_SECONDS = 60
+
+# A running instance keeps its emulator open when the next task is closer
+# than this; otherwise the emulator is closed to free the slot.
+INSTANCE_KEEPALIVE_WINDOW_SECONDS = 120
+
 # Seconds an instance waits before being retried after exhausting its
 # consecutive launch attempts. The retry is delayed instead of being dropped
 # so transient emulator/hypervisor failures (e.g. a crashed virtualization
@@ -451,7 +459,7 @@ class MultiInstanceToolController:
                     next_run_time = None
                     if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
                         next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
-                    if next_run_time is not None and next_run_time - now > 120:
+                    if next_run_time is not None and next_run_time - now > TASK_STARTUP_WINDOW_SECONDS:
                         # The queue is sorted by task time, so every remaining
                         # instance has an even later task: nothing to launch.
                         return
@@ -762,10 +770,10 @@ class MultiInstanceToolController:
                         break
                     if wait_until is not None:
                         sleep_time = max(1, int(wait_until - now))
-                        # If the next task is more than 120 seconds away, close the emulator, free the slot and requeue
-                        if wait_until - now > 120:
+                        # If the next task is more than INSTANCE_KEEPALIVE_WINDOW_SECONDS away, close the emulator, free the slot and requeue
+                        if wait_until - now > INSTANCE_KEEPALIVE_WINDOW_SECONDS:
                             self.log_message(
-                                f"The next task for instance {index} is more than 120 seconds away. Closing the emulator, freeing the slot and requeuing.",
+                                f"The next task for instance {index} is more than {INSTANCE_KEEPALIVE_WINDOW_SECONDS} seconds away. Closing the emulator, freeing the slot and requeuing.",
                                 "info",
                             )
                             with self._intentional_stop(index):
