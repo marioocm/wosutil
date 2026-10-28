@@ -243,6 +243,8 @@ ROI = {
     "tundra_trek_supplies_timer": (520, 587, 112, 33),
     "tundra_trek_idle": (526, 1126, 194, 154),
     "pet_adventure_screen": (0, 0, 595, 80),
+    "ally_treasure_tabs": (360, 180, 355, 110),
+    "ally_treasure_shares": (30, 280, 665, 875),
     "pet_skill_screen": (354, 0, 364, 231),
     "pet_skill_buttons": (0, 163, 717, 651),
     "pet_skill_use": (22, 855, 676, 401),

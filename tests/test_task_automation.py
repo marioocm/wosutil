@@ -2,7 +2,7 @@
 
 import calendar
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from wosutil.preferences import INTEL_MODE_CLASSIC, INTEL_MODE_EXECUTE_ALL
 from wosutil.tool.tasks.task_automation import (
@@ -14,6 +14,7 @@ from wosutil.tool.tasks.task_automation import (
     _next_bear_hunt_start,
     _read_intel_reschedule,
     activate_daily_pet_skills,
+    claim_pet_adventure_ally_treasure,
     claim_storehouse_stamina,
     do_intel_missions,
     play_bear_trap,
@@ -118,6 +119,91 @@ class TestClaimStorehouseStamina(unittest.TestCase):
         self.click_on.assert_not_called()
         self.click_on_template.assert_not_called()
         self.back_button.assert_not_called()
+
+
+class TestClaimPetAdventureAllyTreasure(unittest.TestCase):
+    """Test the ally treasure sharing step before claiming."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.task_automation.go_pet_adventure", return_value=True),
+            patch("wosutil.tool.tasks.task_automation.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_automation.take_screenshot", return_value="shot.png"),
+            patch("wosutil.tool.tasks.task_automation.find_all_text_on_screen", return_value=[]),
+            patch("wosutil.tool.tasks.task_automation.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_automation.click_on_text", return_value=True),
+            patch("wosutil.tool.tasks.task_automation.press_android_back_button"),
+            patch("wosutil.tool.tasks.task_automation.get_seconds_until_utc_midnight", return_value=43200.0),
+            patch("wosutil.tool.tasks.task_automation.get_roi", return_value=(30, 280, 665, 875)),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        (
+            self.go_pet_adventure,
+            self.click,
+            self.take_screenshot,
+            self.find_all_text,
+            self.delete_screenshot,
+            self.click_on_text,
+            self.back_button,
+            self.get_seconds,
+            self.get_roi,
+        ) = self.mocks
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_shares_every_visible_treasure_before_claiming(self):
+        """All the Share buttons from one capture are clicked before switching tabs."""
+        self.find_all_text.return_value = [(528, 322, 92, 42), (528, 459, 88, 46)]
+
+        result = claim_pet_adventure_ally_treasure(0)
+
+        self.assertEqual(result, (True, 43200.0))
+        self.take_screenshot.assert_called_once_with(0)
+        self.find_all_text.assert_called_once_with("shot.png", "Share", roi=(30, 280, 665, 875))
+        self.delete_screenshot.assert_called_once_with("shot.png")
+        self.assertEqual(
+            self.click.call_args_list,
+            [
+                call(634, 1201, 0, delay=1.0),
+                call(574, 343, 0, delay=0.7),
+                call(572, 482, 0, delay=0.7),
+                call(363, 1083, 0),
+                call(359, 1254, 0, clicks=3),
+            ],
+        )
+        self.click_on_text.assert_called_once_with("Alliance Shares", 0, roi="ally_treasure_tabs", delay=1.0)
+        self.back_button.assert_called_once_with(0)
+
+    def test_claims_without_sharing_when_no_share_button_is_visible(self):
+        """No Share click happens when the panel has nothing left to share."""
+        result = claim_pet_adventure_ally_treasure(0)
+
+        self.assertEqual(result, (True, 43200.0))
+        self.assertEqual(
+            self.click.call_args_list,
+            [
+                call(634, 1201, 0, delay=1.0),
+                call(363, 1083, 0),
+                call(359, 1254, 0, clicks=3),
+            ],
+        )
+
+    def test_falls_back_to_fixed_tab_position_when_text_is_not_found(self):
+        """The Alliance Shares tab is still clicked when OCR misses its label."""
+        self.click_on_text.return_value = False
+
+        result = claim_pet_adventure_ally_treasure(0)
+
+        self.assertEqual(result, (True, 43200.0))
+        self.assertEqual(
+            self.click.call_args_list,
+            [
+                call(634, 1201, 0, delay=1.0),
+                call(521, 235, 0, delay=1.0),
+                call(363, 1083, 0),
+                call(359, 1254, 0, clicks=3),
+            ],
+        )
 
 
 class TestDoIntelMissionsMode(unittest.TestCase):
@@ -489,9 +575,9 @@ class TestReadIntelReschedule(unittest.TestCase):
         take_shot.assert_called_once_with(0)
         delete_shot.assert_called_once_with("/tmp/intel.png")
         self.assertEqual(read_time.call_count, 2)
-        for call in read_time.call_args_list:
-            self.assertEqual(call.kwargs["screenshot_path"], "/tmp/intel.png")
-            self.assertTrue(call.kwargs["quiet"])
+        for read_call in read_time.call_args_list:
+            self.assertEqual(read_call.kwargs["screenshot_path"], "/tmp/intel.png")
+            self.assertTrue(read_call.kwargs["quiet"])
 
     def test_returns_default_when_both_rois_miss(self):
         """A miss in both locations falls back to the four-hour delay."""

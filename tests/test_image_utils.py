@@ -15,6 +15,7 @@ from wosutil.emulator.image_utils import (
     _parse_timer_text,
     _preprocess_timer_red_text,
     clear_template_cache,
+    find_all_text_on_image,
     find_multiple_templates,
     find_template_center_on_screen,
     find_text_on_image,
@@ -522,6 +523,33 @@ class TestTextOcr(unittest.TestCase):
 
         self.assertTrue(found)
         self.assertEqual(result, button_box)
+
+    @patch("wosutil.emulator.image_utils._ocr_word_lines")
+    def test_finds_every_exact_word_match(self, word_lines):
+        """All the Share buttons are returned and the tab labels are ignored."""
+        image = Image.new("RGB", (100, 200), "black")
+        first_box = (70, 50, 25, 12)
+        second_box = (70, 120, 25, 12)
+        word_lines.return_value = [
+            [("My", (20, 20, 15, 12)), ("Shares", (40, 20, 40, 12))],
+            [("Share", first_box)],
+            [("Alliance", (20, 90, 40, 12)), ("Shares", (65, 90, 40, 12))],
+            [("Share", second_box)],
+        ]
+
+        matches = find_all_text_on_image(image, "Share")
+
+        self.assertEqual(matches, [first_box, second_box])
+        word_lines.assert_called_once_with(image)
+
+    @patch("wosutil.emulator.image_utils._ocr_word_lines")
+    def test_returns_empty_list_when_no_text_matches(self, word_lines):
+        """An image without the target text returns no boxes."""
+        word_lines.return_value = [[("View", (10, 10, 30, 10))]]
+
+        matches = find_all_text_on_image(Image.new("RGB", (50, 50), "black"), "Share")
+
+        self.assertEqual(matches, [])
 
 
 if __name__ == "__main__":

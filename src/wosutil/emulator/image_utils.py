@@ -767,6 +767,28 @@ def read_text_lines_on_screen(
     return lines
 
 
+def find_all_text_on_image(img: Image.Image, target: str) -> List[Tuple[int, int, int, int]]:
+    """Search every occurrence of a piece of text inside an image with OCR.
+
+    Words are normalized (lowercased, punctuation stripped) and matched as a
+    consecutive run of words within a single OCR line, just like
+    :func:`find_text_on_image`, but every match is returned instead of a single
+    one. Useful to click all the buttons sharing the same label (e.g. every
+    'Share' button of a list).
+
+    Args:
+        img (PIL.Image): Source image containing text.
+        target (str): Text to search for, e.g. 'Share' or 'Claim All'.
+
+    Returns:
+        list: Every matched (x, y, w, h) box in original image coordinates.
+    """
+    target_words = [w for w in (_normalize_word(word) for word in target.split()) if w]
+    if not target_words:
+        return []
+    return _find_text_matches(_ocr_word_lines(img), target_words)
+
+
 def find_text_on_image(img: Image.Image, target: str, last: bool = False) -> Tuple[bool, Optional[Tuple[int, int, int, int]]]:
     """Search a piece of text (one or several words) inside an image with OCR.
 
@@ -788,10 +810,7 @@ def find_text_on_image(img: Image.Image, target: str, last: bool = False) -> Tup
         tuple: (True, (x, y, w, h)) with the matched text position in original
             image coordinates, or (False, None) when not found.
     """
-    target_words = [w for w in (_normalize_word(word) for word in target.split()) if w]
-    if not target_words:
-        return False, None
-    matches = _find_text_matches(_ocr_word_lines(img), target_words)
+    matches = find_all_text_on_image(img, target)
     if not matches:
         return False, None
     if last:
@@ -851,6 +870,42 @@ def find_text_on_screen(
         msg = f"Error in text search: {e}"
         log_message(msg, level="error")
         return False, None
+
+
+def find_all_text_on_screen(
+    screenshot_path: str,
+    target: str,
+    roi: Optional[Tuple[int, int, int, int]] = None,
+) -> List[Tuple[int, int, int, int]]:
+    """Search every occurrence of a piece of text inside a screenshot.
+
+    Args:
+        screenshot_path (str): Path to the screenshot image file.
+        target (str): Text to search for, e.g. 'Share' or 'Claim All'.
+        roi (tuple, optional): Region of interest (x, y, w, h) to search within
+            the screenshot.
+
+    Returns:
+        list: Every matched (x, y, w, h) box in full-screen coordinates.
+    """
+    try:
+        img_bgr = cv2.imread(screenshot_path)
+        if img_bgr is None:
+            msg = f"Error loading screenshot: {screenshot_path}"
+            log_message(msg, level="error")
+            return []
+        offset_x = offset_y = 0
+        if roi:
+            x, y, w, h = roi
+            img_bgr = img_bgr[y : y + h, x : x + w]
+            offset_x, offset_y = x, y
+        img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        boxes = find_all_text_on_image(img, target)
+        return [(box[0] + offset_x, box[1] + offset_y, box[2], box[3]) for box in boxes]
+    except Exception as e:
+        msg = f"Error in text search: {e}"
+        log_message(msg, level="error")
+        return []
 
 
 def find_text_center_on_screen(
