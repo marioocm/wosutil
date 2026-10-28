@@ -10,6 +10,7 @@ from wosutil.tool.tasks.task_automation import (
     claim_vip_daily_rewards,
 )
 from wosutil.tool.utc_time import (
+    _TASK_LIST_POPUP_MAX_CLOSES,
     clear_cached_utc_times,
     get_cached_bear_hunt_times,
     get_cached_utc_time,
@@ -142,12 +143,13 @@ class TestSyncUtcTime(unittest.TestCase):
         self.patchers = [
             patch("wosutil.tool.utc_time.ensure_world_screen"),
             patch("wosutil.tool.utc_time.click_on_coordinates"),
+            patch("wosutil.tool.utc_time.click_on_template", return_value=False),
             patch("wosutil.tool.utc_time.read_screen_utc_time"),
             patch("wosutil.tool.utc_time.press_android_back_button"),
             patch("wosutil.tool.utc_time._read_task_list_bear_hunt_times"),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.ensure_world_screen, self.click_on_coordinates, self.read_screen_utc_time, self.press_back, self.read_bear_hunts = self.mocks
+        self.ensure_world_screen, self.click_on_coordinates, self.click_on_template, self.read_screen_utc_time, self.press_back, self.read_bear_hunts = self.mocks
         self.ensure_world_screen.return_value = True
         self.read_screen_utc_time.return_value = (8, 10, 11, 12, 26)
         self.read_bear_hunts.return_value = [(2026, 8, 11, 19, 0)]
@@ -167,6 +169,33 @@ class TestSyncUtcTime(unittest.TestCase):
         self.assertTrue(sync_utc_time(0))
         self.read_bear_hunts.assert_called_once_with(0, (8, 10, 11, 12, 26))
         self.assertEqual(get_cached_bear_hunt_times(0), [(2026, 8, 11, 19, 0)])
+
+    def test_popups_closed_before_reading_clock(self):
+        """Popups over the panel are closed, including the ones revealed below."""
+        events = []
+
+        def fake_click(*_args, **_kwargs):
+            events.append("popup")
+            return len(events) < 3
+
+        def fake_read(*_args, **_kwargs):
+            events.append("read")
+            return (8, 10, 11, 12, 26)
+
+        self.click_on_template.side_effect = fake_click
+        self.read_screen_utc_time.side_effect = fake_read
+        self.assertTrue(sync_utc_time(0))
+        self.assertEqual(events[:3], ["popup", "popup", "popup"])
+        self.assertEqual(events[3], "read")
+        self.assertEqual(self.click_on_template.call_count, 3)
+        self.assertEqual(self.click_on_template.call_args.kwargs["roi"], "task_list_close_popup")
+
+    def test_popup_close_gives_up_after_cap(self):
+        """An endlessly found close button does not loop forever."""
+        self.click_on_template.return_value = True
+        self.assertTrue(sync_utc_time(0))
+        self.assertEqual(self.click_on_template.call_count, _TASK_LIST_POPUP_MAX_CLOSES)
+        self.read_screen_utc_time.assert_called_once()
 
     def test_failure_when_not_on_world_screen(self):
         """The sync aborts without clicking when the world screen is unreachable."""
