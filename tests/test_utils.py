@@ -339,9 +339,12 @@ class TestNoConsoleFlash(unittest.TestCase):
 
         import wosutil.utils as utils
 
-        with patch.object(utils.os, "name", "nt"), patch.object(subprocess, "DETACHED_PROCESS", 0x8, create=True), patch.object(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True
-        ), patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
+        with (
+            patch.object(utils.os, "name", "nt"),
+            patch.object(subprocess, "DETACHED_PROCESS", 0x8, create=True),
+            patch.object(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True),
+            patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True),
+        ):
             flags = _detached_creation_flags()
         self.assertTrue(flags & 0x08000000)
 
@@ -356,9 +359,12 @@ class TestNoConsoleFlash(unittest.TestCase):
                 self.dwFlags = 0
                 self.wShowWindow = None
 
-        with patch.object(utils.os, "name", "nt"), patch.object(subprocess, "STARTUPINFO", FakeStartupInfo, create=True), patch.object(
-            subprocess, "STARTF_USESHOWWINDOW", 1, create=True
-        ), patch.object(subprocess, "SW_HIDE", 0, create=True):
+        with (
+            patch.object(utils.os, "name", "nt"),
+            patch.object(subprocess, "STARTUPINFO", FakeStartupInfo, create=True),
+            patch.object(subprocess, "STARTF_USESHOWWINDOW", 1, create=True),
+            patch.object(subprocess, "SW_HIDE", 0, create=True),
+        ):
             info = _hidden_startupinfo()
         self.assertIsNotNone(info)
         self.assertTrue(info.dwFlags & 1)
@@ -373,9 +379,11 @@ class TestNoConsoleFlash(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
         mock_proc.returncode = 0
-        with patch.object(utils, "_no_window_creation_flags", return_value=sentinel_flags), patch.object(utils, "_hidden_startupinfo", return_value=sentinel_info), patch(
-            "subprocess.Popen", return_value=mock_proc
-        ) as mock_popen:
+        with (
+            patch.object(utils, "_no_window_creation_flags", return_value=sentinel_flags),
+            patch.object(utils, "_hidden_startupinfo", return_value=sentinel_info),
+            patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+        ):
             run_process_robust(["adb", "devices"], timeout=5)
         _, kwargs = mock_popen.call_args
         self.assertEqual(kwargs.get("creationflags"), sentinel_flags)
@@ -389,9 +397,14 @@ class TestNoConsoleFlash(unittest.TestCase):
         sentinel_info = object()
         proc = MagicMock()
         proc.pid = 1234
-        with patch.object(utils.os, "name", "nt"), patch.object(utils, "_no_window_creation_flags", return_value=sentinel_flags), patch.object(
-            utils, "_hidden_startupinfo", return_value=sentinel_info
-        ), patch("subprocess.Popen"), patch("subprocess.run") as mock_run, patch("subprocess.DEVNULL", MagicMock()):
+        with (
+            patch.object(utils.os, "name", "nt"),
+            patch.object(utils, "_no_window_creation_flags", return_value=sentinel_flags),
+            patch.object(utils, "_hidden_startupinfo", return_value=sentinel_info),
+            patch("subprocess.Popen"),
+            patch("subprocess.run") as mock_run,
+            patch("subprocess.DEVNULL", MagicMock()),
+        ):
             _terminate_process_tree(proc)
         _, kwargs = mock_run.call_args
         self.assertEqual(kwargs.get("creationflags"), sentinel_flags)

@@ -51,10 +51,13 @@ class TestProfileManagerDefaultProfile(unittest.TestCase):
 
     def test_invalid_top_level_json_creates_a_default_profile(self):
         """A valid JSON list must not be treated as a profile mapping."""
-        with patch(
-            "wosutil.tool.profiles.profile_manager.load_json_file",
-            return_value=["not", "profiles"],
-        ), patch("wosutil.tool.profiles.profile_manager.save_json_file", return_value=True):
+        with (
+            patch(
+                "wosutil.tool.profiles.profile_manager.load_json_file",
+                return_value=["not", "profiles"],
+            ),
+            patch("wosutil.tool.profiles.profile_manager.save_json_file", return_value=True),
+        ):
             pm = ProfileManager(log_func=lambda *args, **kwargs: None)
 
         self.assertEqual(pm.profiles, {DEFAULT_PROFILE_NAME: get_all_task_ids()})

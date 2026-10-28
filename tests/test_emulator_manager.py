@@ -114,9 +114,12 @@ class TestRestartAdbServerRateLimit(unittest.TestCase):
     def test_verify_does_not_restart_server_when_restart_is_recent(self):
         """A missing device with a recently restarted server only reconnects."""
         emulator_manager._last_adb_restart_time = time.time()
-        with patch("wosutil.emulator.emulator_manager.get_active_backend") as backend, patch("wosutil.emulator.emulator_manager._list_adb_devices", return_value={"127.0.0.1:9999": "device"}), patch(
-            "wosutil.emulator.emulator_manager._connect_adb_device"
-        ), patch("wosutil.emulator.emulator_manager.time.sleep"):
+        with (
+            patch("wosutil.emulator.emulator_manager.get_active_backend") as backend,
+            patch("wosutil.emulator.emulator_manager._list_adb_devices", return_value={"127.0.0.1:9999": "device"}),
+            patch("wosutil.emulator.emulator_manager._connect_adb_device"),
+            patch("wosutil.emulator.emulator_manager.time.sleep"),
+        ):
             self.assertFalse(verify_adb_connected(0, max_attempts=1, wait=0))
             backend.return_value.restart_server.assert_not_called()
 
@@ -212,8 +215,10 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
     def test_click_raises_when_adb_fails(self):
         """A failed ADB tap is surfaced to the caller."""
         failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="device offline")
-        with patch("wosutil.emulator.emulator_manager.execute_adb_command", return_value=failed), patch("wosutil.emulator.emulator_manager.time.sleep") as sleep, self.assertRaisesRegex(
-            AdbCommandError, "device offline"
+        with (
+            patch("wosutil.emulator.emulator_manager.execute_adb_command", return_value=failed),
+            patch("wosutil.emulator.emulator_manager.time.sleep") as sleep,
+            self.assertRaisesRegex(AdbCommandError, "device offline"),
         ):
             click_on_coordinates(10, 20, 0)
         sleep.assert_not_called()
@@ -227,9 +232,13 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
     def test_take_screenshot_removes_local_file_when_exec_out_fails(self):
         """A failed exec-out removes the local placeholder and returns None."""
         local_path = "temporary/wosutil_test.png"
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
-            "wosutil.emulator.emulator_manager.os.close"
-        ), patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=None), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)),
+            patch("wosutil.emulator.emulator_manager.os.close"),
+            patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=None),
+            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete,
+        ):
             self.assertIsNone(take_screenshot(0))
 
         delete.assert_called_once_with(local_path)
@@ -238,9 +247,13 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
         """An exec-out payload without the PNG signature is not kept."""
         local_path = "temporary/wosutil_test.png"
         garbage = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"error: device offline", stderr=b"")
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
-            "wosutil.emulator.emulator_manager.os.close"
-        ), patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=garbage), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)),
+            patch("wosutil.emulator.emulator_manager.os.close"),
+            patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=garbage),
+            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete,
+        ):
             self.assertIsNone(take_screenshot(0))
 
         delete.assert_called_once_with(local_path)
@@ -251,11 +264,14 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
         png = b"\x89PNG\r\n\x1a\n" + b"fake-image-bytes"
         success = subprocess.CompletedProcess(args=[], returncode=0, stdout=png, stderr=b"")
         file_handle = mock_open()
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)), patch(
-            "wosutil.emulator.emulator_manager.os.close"
-        ), patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=success), patch("builtins.open", file_handle), patch(
-            "wosutil.emulator.emulator_manager.delete_temp_screenshot"
-        ) as delete:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)),
+            patch("wosutil.emulator.emulator_manager.os.close"),
+            patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=success),
+            patch("builtins.open", file_handle),
+            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete,
+        ):
             self.assertEqual(take_screenshot(0), local_path)
 
         file_handle.assert_any_call(local_path, "wb")
@@ -285,9 +301,12 @@ class TestForceRestartEmulator(unittest.TestCase):
         def fake_health(_index):
             return next(health, True)
 
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
-            "wosutil.emulator.emulator_manager.time.sleep"
-        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
+        with (
+            patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health),
+            patch("wosutil.emulator.emulator_manager._connect_adb_device"),
+            patch("wosutil.emulator.emulator_manager.time.sleep"),
+            patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False),
+        ):
             result = force_restart_emulator(0, manager, boot_timeout=60)
 
         self.assertTrue(result)
@@ -301,9 +320,12 @@ class TestForceRestartEmulator(unittest.TestCase):
         def fake_health(_index):
             return True
 
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health), patch("wosutil.emulator.emulator_manager._connect_adb_device") as connect, patch(
-            "wosutil.emulator.emulator_manager.time.sleep"
-        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
+        with (
+            patch("wosutil.emulator.emulator_manager.check_emulator_health", side_effect=fake_health),
+            patch("wosutil.emulator.emulator_manager._connect_adb_device") as connect,
+            patch("wosutil.emulator.emulator_manager.time.sleep"),
+            patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False),
+        ):
             force_restart_emulator(0, manager, boot_timeout=60)
 
         connect.assert_called()
@@ -313,9 +335,12 @@ class TestForceRestartEmulator(unittest.TestCase):
     def test_restart_gives_up_after_timeout(self):
         """A restart that never boots within the timeout is a failure."""
         manager = self._manager()
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
-            "wosutil.emulator.emulator_manager.time.sleep"
-        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
+        with (
+            patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False),
+            patch("wosutil.emulator.emulator_manager._connect_adb_device"),
+            patch("wosutil.emulator.emulator_manager.time.sleep"),
+            patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False),
+        ):
             result = force_restart_emulator(0, manager, boot_timeout=1)
 
         self.assertFalse(result)
@@ -327,18 +352,25 @@ class TestForceRestartEmulator(unittest.TestCase):
         from wosutil.stop import ToolStopped
 
         manager = self._manager()
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
-            "wosutil.emulator.emulator_manager.time.sleep"
-        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", side_effect=[True]), self.assertRaises(ToolStopped):
+        with (
+            patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=False),
+            patch("wosutil.emulator.emulator_manager._connect_adb_device"),
+            patch("wosutil.emulator.emulator_manager.time.sleep"),
+            patch("wosutil.emulator.emulator_manager.stop_signal.wait", side_effect=[True]),
+            self.assertRaises(ToolStopped),
+        ):
             force_restart_emulator(0, manager, boot_timeout=60)
 
     def test_restart_reports_manager_errors(self):
         """A failing stop/start is surfaced as a failed restart."""
         manager = self._manager()
         manager.start_instance.side_effect = RuntimeError("boom")
-        with patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=True), patch("wosutil.emulator.emulator_manager._connect_adb_device"), patch(
-            "wosutil.emulator.emulator_manager.time.sleep"
-        ), patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False):
+        with (
+            patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=True),
+            patch("wosutil.emulator.emulator_manager._connect_adb_device"),
+            patch("wosutil.emulator.emulator_manager.time.sleep"),
+            patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False),
+        ):
             result = force_restart_emulator(0, manager, boot_timeout=60)
 
         self.assertFalse(result)

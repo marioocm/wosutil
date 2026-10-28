@@ -137,8 +137,9 @@ class TestWindowUtils(unittest.TestCase):
         }
         user32 = FakeUser32(windows)
         enable_fake_win32(user32)
-        with patch.object(window_utils, "_load_win32", return_value=True), patch(
-            "psutil.Process", side_effect=lambda pid: type("P", (), {"name": lambda self: "HD-Player.exe" if pid == 100 else "chrome.exe"})()
+        with (
+            patch.object(window_utils, "_load_win32", return_value=True),
+            patch("psutil.Process", side_effect=lambda pid: type("P", (), {"name": lambda self: "HD-Player.exe" if pid == 100 else "chrome.exe"})()),
         ):
             count = minimize_process_windows(("HD-Player",))
         self.assertEqual(count, 1)
@@ -201,8 +202,10 @@ class TestWindowUtils(unittest.TestCase):
         window_utils._user32 = FakeUser32({1: {"visible": True, "iconic": False, "tool": False, "pid": 100}})
         window_utils._dwmapi = FakeDwmapi()
         window_utils._wnd_enum_proc = identity
-        with patch.object(window_utils, "_load_win32", return_value=True), patch.object(window_utils, "_is_cloaked", return_value=True), patch(
-            "psutil.Process", side_effect=lambda pid: type("P", (), {"name": lambda self: "MuMuPlayer.exe"})()
+        with (
+            patch.object(window_utils, "_load_win32", return_value=True),
+            patch.object(window_utils, "_is_cloaked", return_value=True),
+            patch("psutil.Process", side_effect=lambda pid: type("P", (), {"name": lambda self: "MuMuPlayer.exe"})()),
         ):
             count = minimize_process_windows(("MuMuPlayer",))
         self.assertEqual(count, 0)
