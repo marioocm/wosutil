@@ -55,6 +55,7 @@ _TASK_LIST_DATE_RE = re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})")
 _TASK_LIST_WORD_RE = re.compile(r"[^a-z0-9]")
 _TASK_LIST_MODE_STRIP_HEIGHT = 65  # px: the 'UTC/Local Time' label sits at the top of the panel
 _TASK_LIST_MODE_MAX_ATTEMPTS = 3  # mode label reads + toggle clicks before giving up
+_TASK_LIST_POPUP_MAX_CLOSES = 8  # stacked popups closed before giving up
 _TASK_LIST_HEADER_MERGE_Y = 12  # px: duplicate banner reads land this close
 _TASK_LIST_WORD_ROW_Y = 12  # px: words of the same event name share their vertical center
 _TASK_LIST_TIME_MAX_Y_DELTA = 45  # px: an event time sits at most this far from its name
@@ -194,6 +195,25 @@ def _take_task_list_panel_image(instance_index: int) -> Optional[Image.Image]:
             return opened_img.crop((x, y, x + w, y + h))
     finally:
         delete_temp_screenshot(screenshot_path)
+
+
+def _close_task_list_popups(instance_index: int) -> None:
+    """Close the popups covering the task list panel before reading it.
+
+    Some game popups open over the schedule panel and hide the UTC clock and
+    the top of the task list, which breaks both OCR reads. Every popup draws a
+    close button in the 'task_list_close_popup' ROI; the button is clicked as
+    long as it is found, since a dismissed popup can reveal another one below.
+
+    Args:
+        instance_index (int): Emulator instance index.
+    """
+    for _ in range(_TASK_LIST_POPUP_MAX_CLOSES):
+        stop_signal.check()
+        if not click_on_template("task_list_close_popup", instance_index, roi="task_list_close_popup", delay=1.0):
+            return
+        log_message("Closed a popup covering the task list.", level="info")
+    log_message("Too many popups over the task list; stopping the close attempts.", level="warning")
 
 
 def _ensure_task_list_utc_time(instance_index: int) -> bool:
@@ -382,6 +402,7 @@ def sync_utc_time(instance_index: int) -> bool:
         return False
 
     click_on_coordinates(*COORDINATES["world_schedule"], instance_index, delay=1.0)
+    _close_task_list_popups(instance_index)
 
     utc = read_screen_utc_time(instance_index, roi=ROI["world_schedule_utc"], debug_label="world_schedule_utc")
     set_cached_utc_time(instance_index, utc)
