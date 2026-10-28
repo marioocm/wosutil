@@ -15,9 +15,11 @@ from wosutil.emulator.emulator_manager import (
     take_screenshot,
 )
 from wosutil.emulator.image_utils import (
+    find_all_text_on_screen,
     find_multiple_templates,
     find_template_center_on_screen,
     find_text_center_on_screen,
+    get_box_center,
     read_screen_time,
 )
 from wosutil.preferences import (
@@ -678,14 +680,52 @@ def start_tundra_trek_idle(instance_index):
     return True
 
 
+def _share_ally_treasures(instance_index):
+    """Shares every visible ally treasure from a single screenshot.
+
+    The 'Share' buttons are located with OCR inside the treasure list ROI.
+    Only the exact word is matched, so the 'My Shares' and 'Alliance Shares'
+    tabs at the top of the panel are never clicked. Sharing keeps the panel
+    unchanged, so every detected button is clicked from the same capture.
+
+    Args:
+        instance_index (int): Emulator instance index.
+
+    Returns:
+        int: Number of Share buttons clicked.
+    """
+    screenshot_path = take_screenshot(instance_index)
+    if not screenshot_path:
+        log_message("Could not take a screenshot to share the ally treasures.", level="error")
+        return 0
+
+    try:
+        boxes = find_all_text_on_screen(screenshot_path, "Share", roi=get_roi("ally_treasure_shares"))
+    finally:
+        delete_temp_screenshot(screenshot_path)
+
+    for box in boxes:
+        cx, cy = get_box_center(box)
+        click_on_coordinates(cx, cy, instance_index, delay=0.7)
+
+    if boxes:
+        log_message(f"Shared {len(boxes)} ally treasure(s).", level="success")
+    else:
+        log_message("No ally treasures to share.", level="info")
+    return len(boxes)
+
+
 def claim_pet_adventure_ally_treasure(instance_index):
     """Claims the ally treasure from the pet adventure screen.
 
     1. Ensures the main city screen is active.
     2. Navigates to the pet adventure via the side menu.
-    3. Clicks on the treasure entries and claims the rewards.
-    4. Presses back to return.
-    5. Reschedules to the next 00:00 UTC on the game clock (12 hours as a
+    3. Opens the Ally Treasure panel from the bottom-right button.
+    4. Shares every visible ally treasure: the panel may open on the
+       'My Shares' tab, where the claim button is not available.
+    5. Switches to the 'Alliance Shares' tab and claims the rewards.
+    6. Presses back to return.
+    7. Reschedules to the next 00:00 UTC on the game clock (12 hours as a
        fallback when the UTC clock was not read yet).
 
     Returns:
@@ -695,7 +735,12 @@ def claim_pet_adventure_ally_treasure(instance_index):
     if not go_pet_adventure(instance_index):
         return False, 12 * 60 * 60
 
-    click_on_coordinates(634, 1201, instance_index)
+    click_on_coordinates(634, 1201, instance_index, delay=1.0)
+    _share_ally_treasures(instance_index)
+    if not click_on_text("Alliance Shares", instance_index, roi="ally_treasure_tabs", delay=1.0):
+        log_message("Alliance Shares tab NOT found by text, using its fixed position.", level="warning")
+        click_on_coordinates(521, 235, instance_index, delay=1.0)
+
     click_on_coordinates(363, 1083, instance_index)
     click_on_coordinates(359, 1254, instance_index, clicks=3)
     press_android_back_button(instance_index)

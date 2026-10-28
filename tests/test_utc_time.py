@@ -360,6 +360,10 @@ class TestTasksRescheduleToUtcMidnight(unittest.TestCase):
         with (
             patch("wosutil.tool.tasks.task_automation.go_pet_adventure", return_value=True),
             patch("wosutil.tool.tasks.task_automation.click_on_coordinates"),
+            patch("wosutil.tool.tasks.task_automation.take_screenshot", return_value="shot.png"),
+            patch("wosutil.tool.tasks.task_automation.find_all_text_on_screen", return_value=[]),
+            patch("wosutil.tool.tasks.task_automation.delete_temp_screenshot"),
+            patch("wosutil.tool.tasks.task_automation.click_on_text", return_value=True),
             patch("wosutil.tool.tasks.task_automation.press_android_back_button"),
             patch("wosutil.tool.tasks.task_automation.get_seconds_until_utc_midnight", return_value=43200.0),
         ):
