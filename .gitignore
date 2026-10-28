@@ -20,6 +20,7 @@ data/*
 
 # Local test captures
 tests/data/
+tests/fixtures/ocr_captures/
 
 # Temp files
 tests/.tmp/
