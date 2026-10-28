@@ -159,9 +159,11 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         """
         manager = FakeManagerRunning()
         controller = self._make_controller(manager)
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen"
-        ) as mock_launch:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
+        ):
             controller.run_profile_on_instance_with_slot(0, "profile_x")
         mock_launch.assert_not_called()
         self.assertEqual(manager.stop_calls, 1)
@@ -176,9 +178,11 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         dialogs = queue.Queue()
         controller = self._make_controller(manager)
         controller.dialog_queue = dialogs
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen"
-        ) as mock_launch:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
+        ):
             controller.run_profile_on_instance_with_slot(0, "profile_x")
         mock_launch.assert_not_called()
         title, text = dialogs.get_nowait()
@@ -189,9 +193,11 @@ class TestGameNotInstalledAbort(unittest.TestCase):
         """The launch-attempt counter stays untouched for a missing game."""
         manager = FakeManagerRunning()
         controller = self._make_controller(manager)
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen"
-        ) as mock_launch:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
+        ):
             controller.run_profile_on_instance_with_slot(0, "profile_x")
             controller.run_profile_on_instance_with_slot(0, "profile_x")
         mock_launch.assert_not_called()
@@ -382,9 +388,13 @@ class TestScheduleMemory(unittest.TestCase):
         """Run start_tool with the remember-schedule preference and a fake ProfileManager."""
         pm_mock = MagicMock()
         pm_mock.profiles = {profile_name: list(task_names)}
-        with patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock), patch.object(controller, "launch_next_instances"), patch(
-            "wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True
-        ), patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved_schedule), patch("wosutil.tool.tool_instances_controller.save_task_schedule"):
+        with (
+            patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock),
+            patch.object(controller, "launch_next_instances"),
+            patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved_schedule),
+            patch("wosutil.tool.tool_instances_controller.save_task_schedule"),
+        ):
             controller.instance_widgets.append(self._checked_instance(profile_name))
             self.assertTrue(controller.start_tool())
         return controller.instances_profile_managers[0].running_tasks_state
@@ -436,9 +446,13 @@ class TestScheduleMemory(unittest.TestCase):
         saved = {"0": {"a": {"next_run_time": 5000.0}, "z": {"next_run_time": 7000.0}}}
         pm_mock = MagicMock()
         pm_mock.profiles = {"All": ["a", "b"]}
-        with patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock), patch.object(controller, "launch_next_instances"), patch(
-            "wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True
-        ), patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved), patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save:
+        with (
+            patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock),
+            patch.object(controller, "launch_next_instances"),
+            patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved),
+            patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save,
+        ):
             controller.instance_widgets.append(self._checked_instance())
             self.assertTrue(controller.start_tool())
         persisted = mock_save.call_args.args[0]
@@ -449,9 +463,11 @@ class TestScheduleMemory(unittest.TestCase):
     def test_start_tool_does_not_wipe_schedule_without_selected_instances(self):
         """Starting with no instances selected never writes an empty schedule."""
         controller = self._make_controller(FakeManagerOpen())
-        with patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True), patch(
-            "wosutil.tool.tool_instances_controller.load_task_schedule", return_value={"0": {"a": {"next_run_time": 1.0}}}
-        ), patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save:
+        with (
+            patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value={"0": {"a": {"next_run_time": 1.0}}}),
+            patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save,
+        ):
             self.assertTrue(controller.start_tool())
         mock_save.assert_not_called()
 
@@ -460,9 +476,12 @@ class TestScheduleMemory(unittest.TestCase):
         controller = self._make_controller(FakeManagerOpen())
         pm_mock = MagicMock()
         pm_mock.profiles = {"All": ["a", "b"]}
-        with patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock), patch.object(controller, "launch_next_instances"), patch(
-            "wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=False
-        ), patch("wosutil.tool.tool_instances_controller.load_task_schedule") as mock_load:
+        with (
+            patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock),
+            patch.object(controller, "launch_next_instances"),
+            patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=False),
+            patch("wosutil.tool.tool_instances_controller.load_task_schedule") as mock_load,
+        ):
             controller.instance_widgets.append(self._checked_instance())
             self.assertTrue(controller.start_tool())
         mock_load.assert_not_called()
@@ -504,9 +523,12 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         """Run the instance worker synchronously with the emulator stack stubbed."""
         controller.instances_profile_managers[0] = pm
         controller._selected_instances = {0}
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True
-        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"):
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
+        ):
             controller.run_profile_on_instance_with_slot(0, "All")
 
     def test_worker_persists_rescheduled_task_after_run(self):
@@ -550,10 +572,16 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
 
     def _run_crashing_worker(self, controller):
         """Run the worker with a game launch that always blows up on ADB."""
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen",
-            side_effect=AdbCommandError("ADB operation 'force-stop game' failed with exit code 1"),
-        ), patch("wosutil.tool.tool_instances_controller.time.sleep"), patch.object(controller, "launch_next_instances"):
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
+            patch(
+                "wosutil.tool.tasks.navigation.launch_and_reach_city_screen",
+                side_effect=AdbCommandError("ADB operation 'force-stop game' failed with exit code 1"),
+            ),
+            patch("wosutil.tool.tool_instances_controller.time.sleep"),
+            patch.object(controller, "launch_next_instances"),
+        ):
             controller.run_profile_on_instance_with_slot(0, "All")
 
     def test_worker_error_counts_toward_retry_attempts(self):
@@ -579,9 +607,12 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         pm = MagicMock()
         pm.running_tasks_state = [{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}]
         controller.instances_profile_managers[0] = pm
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True
-        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"):
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
+        ):
             controller.run_profile_on_instance_with_slot(0, profile_name)
 
     def test_duplicate_worker_yields_without_touching_the_slot(self):
@@ -592,9 +623,12 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         other = MagicMock()
         other.is_alive.return_value = True
         controller.instance_threads[0] = other
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen"
-        ) as mock_launch, patch("wosutil.tool.tool_instances_controller.sync_utc_time"):
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
+            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
+        ):
             controller.run_profile_on_instance_with_slot(0, "All")
         mock_launch.assert_not_called()
         self.assertEqual(manager.start_calls, 0)
@@ -639,11 +673,14 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         controller.instances_profile_managers[0] = MagicMock()
         controller._stopping_instances.add(0)
         self.addCleanup(controller._stopping_instances.discard, 0)
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True
-        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"), patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False), patch(
-            "wosutil.tool.tool_instances_controller.force_restart_emulator"
-        ) as mock_restart:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
+            patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False),
+            patch("wosutil.tool.tool_instances_controller.force_restart_emulator") as mock_restart,
+        ):
             controller.run_profile_on_instance_with_slot(0, "All")
         mock_restart.assert_not_called()
         self.assertEqual(manager.stop_calls, 0)
@@ -659,11 +696,14 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
         pm = MagicMock()
         pm.running_tasks_state = [{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}]
         controller.instances_profile_managers[0] = pm
-        with patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True), patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True), patch(
-            "wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True
-        ), patch("wosutil.tool.tool_instances_controller.sync_utc_time"), patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False), patch(
-            "wosutil.tool.tool_instances_controller.force_restart_emulator", return_value=True
-        ) as mock_restart:
+        with (
+            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
+            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
+            patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False),
+            patch("wosutil.tool.tool_instances_controller.force_restart_emulator", return_value=True) as mock_restart,
+        ):
             controller.run_profile_on_instance_with_slot(0, "All")
         mock_restart.assert_called_once()
         self.assertGreaterEqual(manager.stop_calls, 1)

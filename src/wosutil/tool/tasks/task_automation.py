@@ -1026,18 +1026,26 @@ def _read_intel_reschedule(instance_index):
             cannot be read reliably.
     """
     if is_game_on_intel_screen(instance_index):
-        # Try both timer locations without saving debug captures yet: the timer can
-        # legitimately live in the second location, so a miss on the first is expected.
-        timer = read_screen_time(instance_index, roi=get_roi("intel_timer"))
-        if timer is None:
-            timer = read_screen_time(instance_index, roi=get_roi("intel_timer2"))
-        if timer is None:
-            # Not found in any location: this is a real read failure, so save the
-            # debug captures for both ROIs now.
+        screenshot_path = take_screenshot(instance_index)
+        if not screenshot_path:
+            log_message("Could not take a screenshot to read the intel timer.", level="error")
+            return 4 * 60 * 60
+        try:
+            timers = []
             for roi_name in ("intel_timer", "intel_timer2"):
-                read_screen_time(instance_index, roi=get_roi(roi_name), debug_label=roi_name)
-        if timer is not None and timer >= INTEL_TIMER_MIN_SECONDS:
-            return timer
+                timer = read_screen_time(instance_index, roi=get_roi(roi_name), screenshot_path=screenshot_path, quiet=True)
+                if timer is not None:
+                    timers.append((roi_name, timer))
+            valid = [timer for _roi_name, timer in timers if timer >= INTEL_TIMER_MIN_SECONDS]
+            if valid:
+                return valid[0]
+            if timers:
+                log_message(f"Intel timer read too low: {timers}.", level="warning")
+            else:
+                for roi_name in ("intel_timer", "intel_timer2"):
+                    read_screen_time(instance_index, roi=get_roi(roi_name), screenshot_path=screenshot_path, debug_label=roi_name, quiet=True)
+        finally:
+            delete_temp_screenshot(screenshot_path)
     log_message("No reliable intel timer detected, using default value (4 hours).", level="warning")
     return 4 * 60 * 60
 

@@ -423,7 +423,6 @@ def _read_gathering_tile_time(instance_index):
         instance_index,
         roi=timer_roi,
         debug_label="gathering_tile_timer",
-        ocr_psms=(6, 7, 8, 11, 12, 13),
     )
 
 
@@ -457,7 +456,7 @@ def gather_tile(instance_index, resource):
 
     click_on_template("gather_tile_increase_level", instance_index, roi="worldmap_search", gray=False, threshold=0.92, clicks=10)
 
-    if not click_on_text("Search", instance_index, roi="worldmap_search", delay=3.0, last=True, fuzzy=True):
+    if not click_on_text("Search", instance_index, roi="worldmap_search", delay=3.0, last=True):
         log_message("Search button NOT found in the world-map search.", level="warning")
         return None
 
@@ -465,7 +464,7 @@ def gather_tile(instance_index, resource):
     if gathering_time is None:
         return None
 
-    if not click_on_text("Gather", instance_index, roi="gathering_tile_info", last=True, fuzzy=True):
+    if not click_on_text("Gather", instance_index, roi="gathering_tile_info", last=True):
         log_message("Gather button NOT found on the resource tile.", level="warning")
         return None
     if not _click_leftmost_template(instance_index, "remove_hero", delay=1.0):
@@ -907,7 +906,6 @@ def call_bear_rally(instance_index):
     return wait
 
 
-_INTEL_EXECUTE_ALL_OCR_PSM = 11  # Tesseract mode that keeps the button label and its (N) counter on one line
 _INTEL_EXECUTE_ALL_RE = re.compile(r"execute\s+all\s*\(?\s*(\d+)", re.IGNORECASE)
 
 
@@ -1023,7 +1021,7 @@ def _read_execute_all_button(screenshot_path):
         log_message("Could not get the intel_buttons ROI.", level="error")
         return None, None
 
-    for text, box in read_text_lines_on_screen(screenshot_path, roi=roi, psm=_INTEL_EXECUTE_ALL_OCR_PSM):
+    for text, box in read_text_lines_on_screen(screenshot_path, roi=roi):
         match = _INTEL_EXECUTE_ALL_RE.search(text)
         if match:
             return int(match.group(1)), get_box_center(box)

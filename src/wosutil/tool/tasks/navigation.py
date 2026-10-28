@@ -908,7 +908,7 @@ def click_on_template(
             delete_temp_screenshot(screenshot_path)
 
 
-def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False, fuzzy=False):
+def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_path=None, last=False):
     """Takes a screenshot and clicks the center of the given text if found.
 
     Text-based counterpart of :func:`click_on_template` for menus whose
@@ -927,8 +927,6 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
             no click between captures).
         last (bool): When True click the lowest occurrence of the text instead
             of the first one.
-        fuzzy (bool): Retry the OCR with a looser mask and small spelling
-            differences for decorative single-word labels.
 
     Returns:
         bool: True if the text was found and clicked, False otherwise.
@@ -955,8 +953,6 @@ def click_on_text(text, instance_index, roi=None, delay=CLICK_DELAY, screenshot_
             "debug_label": f"click_text_{text}",
             "last": last,
         }
-        if fuzzy:
-            text_search_kwargs["fuzzy"] = True
         found, center = find_text_center_on_screen(screenshot_path, text, **text_search_kwargs)
         if not found or not center:
             return False

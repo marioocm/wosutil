@@ -37,7 +37,7 @@ The project is open to any suggestion. Feel free to open an [issue](https://gith
 - 720p portrait resolution (`720x1280`) in every instance
 - Whiteout Survival installed and set to English (`com.gof.global`)
 
-The distributed `WosUtil.exe` bundles Tesseract OCR, so nothing else needs to be installed.
+The distributed `WosUtil.exe` bundles RapidOCR (PP-OCR models and ONNX Runtime), so nothing else needs to be installed.
 
 ## Installation
 

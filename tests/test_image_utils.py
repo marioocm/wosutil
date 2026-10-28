@@ -13,9 +13,7 @@ from wosutil.emulator.image_utils import (
     _TIME_RE,
     _find_first_non_zero_digit_on_image,
     _parse_timer_text,
-    _preprocess_fuzzy_text_image,
     _preprocess_timer_red_text,
-    _read_time_native,
     clear_template_cache,
     find_multiple_templates,
     find_template_center_on_screen,
@@ -24,7 +22,6 @@ from wosutil.emulator.image_utils import (
     load_template,
     non_max_suppression,
     read_screen_time,
-    resolve_tesseract_cmd,
 )
 
 
@@ -106,61 +103,71 @@ class TestImageUtils(unittest.TestCase):
                 # Template is at (20, 20) with size 10x10 -> center (25, 25)
                 self.assertEqual(center, (25, 25))
 
-    def test_read_screen_time_accepts_custom_ocr_modes(self):
-        """A caller can add OCR modes needed by a different timer rendering."""
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
-            "wosutil.emulator.image_utils.pytesseract.image_to_string",
-            side_effect=lambda _image, config: "12:24:29" if "--psm 11" in config else "",
-        ) as image_to_string:
-            result = read_screen_time(0, ocr_psms=(6, 11))
+    def _read_timer(self, side_effect=None, return_value=None, max_seconds=None):
+        """Call read_screen_time with the screenshot and OCR backend mocked."""
+        with (
+            patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path),
+            patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"),
+            patch(
+                "wosutil.emulator.image_utils.ocr.read_line",
+                side_effect=side_effect,
+                return_value=return_value,
+            ) as read_line,
+        ):
+            result = read_screen_time(0, max_seconds=max_seconds)
+        return result, read_line
+
+    def test_read_screen_time_reads_timer(self):
+        """A clean timer read by the OCR backend is converted to seconds."""
+        result, read_line = self._read_timer(return_value=("12:24:29", 0.99))
 
         self.assertEqual(result, 12 * 3600 + 24 * 60 + 29)
-        self.assertEqual(image_to_string.call_count, 2)
+        self.assertEqual(read_line.call_count, 1)
 
     def test_read_screen_time_adds_days_to_timer(self):
         """A timer with a day prefix (e.g. 1d 06:29:08) adds 24h per day."""
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
-            "wosutil.emulator.image_utils.pytesseract.image_to_string",
-            return_value="1d 06:29:08",
-        ) as image_to_string:
-            result = read_screen_time(0, ocr_psms=(11,))
+        result, _read_line = self._read_timer(return_value=("1d 06:29:08", 0.99))
 
         self.assertEqual(result, 1 * 86400 + 6 * 3600 + 29 * 60 + 8)
-        self.assertEqual(image_to_string.call_count, 1)
 
-    def test_read_screen_time_retries_on_red_text_mask(self):
-        """A timer the grayscale pass cannot parse is retried with the red-text mask."""
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
-            "wosutil.emulator.image_utils.pytesseract.image_to_string",
-            side_effect=["06:3116", "06:31:16", "06:31:16", "06:31:16", "06:31:16"],
-        ) as image_to_string:
-            result = read_screen_time(0, ocr_psms=(7,))
+    def test_read_screen_time_normalizes_ocr_letter_confusions(self):
+        """Common OCR letter/digit confusions are corrected before parsing."""
+        result, _read_line = self._read_timer(return_value=("O6:3I:I6", 0.99))
 
         self.assertEqual(result, 6 * 3600 + 31 * 60 + 16)
-        # The grayscale pass (psm 7) returns garbage, the red-mask retry (psm 7) succeeds.
-        self.assertEqual(image_to_string.call_count, 2)
 
-    def test_read_screen_time_red_retry_keeps_day_prefix(self):
-        """A red-text timer with a day prefix still adds 24h per day."""
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
-            "wosutil.emulator.image_utils.pytesseract.image_to_string",
-            side_effect=["", "1d 06:29:08", "1d 06:29:08", "1d 06:29:08", "1d 06:29:08"],
-        ) as image_to_string:
-            result = read_screen_time(0, ocr_psms=(7,))
+    def test_read_screen_time_retries_with_alternate_preprocessing(self):
+        """A timer the raw crop cannot parse is retried with other passes."""
+        result, read_line = self._read_timer(side_effect=[("garbage", 0.99), ("06:31:16", 0.99)])
+
+        self.assertEqual(result, 6 * 3600 + 31 * 60 + 16)
+        self.assertEqual(read_line.call_count, 2)
+
+    def test_read_screen_time_retry_keeps_day_prefix(self):
+        """An alternate pass with a day prefix still adds 24h per day."""
+        result, read_line = self._read_timer(side_effect=[("", 0.0), ("1d 06:29:08", 0.99)])
 
         self.assertEqual(result, 1 * 86400 + 6 * 3600 + 29 * 60 + 8)
-        self.assertEqual(image_to_string.call_count, 2)
+        self.assertEqual(read_line.call_count, 2)
 
-    def test_read_screen_time_does_not_hit_red_retry_when_grayscale_succeeds(self):
-        """The red-mask retry only runs when the grayscale pass parsed nothing."""
-        with patch("wosutil.emulator.emulator_manager.take_screenshot", return_value=self.screenshot_path), patch("wosutil.emulator.emulator_manager.delete_temp_screenshot"), patch(
-            "wosutil.emulator.image_utils.pytesseract.image_to_string",
-            return_value="12:24:29",
-        ) as image_to_string:
-            result = read_screen_time(0, ocr_psms=(7,))
+    def test_read_screen_time_does_not_retry_when_raw_text_succeeds(self):
+        """Alternate preprocessing only runs when the first pass fails."""
+        result, read_line = self._read_timer(return_value=("12:24:29", 0.99))
 
         self.assertEqual(result, 12 * 3600 + 24 * 60 + 29)
-        self.assertEqual(image_to_string.call_count, 1)
+        self.assertEqual(read_line.call_count, 1)
+
+    def test_read_screen_time_rejects_low_confidence_reads(self):
+        """A low-confidence OCR result is not accepted as a timer."""
+        result, _read_line = self._read_timer(return_value=("12:24:29", 0.1))
+
+        self.assertIsNone(result)
+
+    def test_read_screen_time_rejects_implausible_max_seconds(self):
+        """A parsed timer above max_seconds is treated as an OCR error."""
+        result, _read_line = self._read_timer(return_value=("01:00:00", 0.99), max_seconds=60)
+
+        self.assertIsNone(result)
 
     def test_preprocess_timer_red_text_isolates_red_digits(self):
         """The red-text mask keeps only saturated red (timer digits) pixels."""
@@ -367,8 +374,10 @@ class TestTemplateConfidence(unittest.TestCase):
             ],
             dtype=np.float32,
         )
-        with patch("wosutil.emulator.image_utils.cv2.imread", return_value=screenshot), patch("wosutil.emulator.image_utils.load_template", return_value=template), patch(
-            "wosutil.emulator.image_utils.cv2.matchTemplate", return_value=response
+        with (
+            patch("wosutil.emulator.image_utils.cv2.imread", return_value=screenshot),
+            patch("wosutil.emulator.image_utils.load_template", return_value=template),
+            patch("wosutil.emulator.image_utils.cv2.matchTemplate", return_value=response),
         ):
             matches = find_multiple_templates("template.png", "screenshot.png", threshold=0.5)
 
@@ -410,81 +419,37 @@ class TestTimeRegex(unittest.TestCase):
         self.assertEqual(_parse_timer_text("1d 06:29:08"), (6, 29, 8, 1 * 86400 + 6 * 3600 + 29 * 60 + 8))
 
 
-class TestNativeTimerOcr(unittest.TestCase):
-    """Test the Tesseract-free digit recognizer used as a fallback."""
-
-    def render_timer(self, text, font_path=r"C:\Windows\Fonts\arialbd.ttf", size=30, pad=6):
-        """Render a timer string as a white-on-black image using a TrueType font."""
-        from PIL import Image, ImageDraw, ImageFont
-
-        if not os.path.exists(font_path):
-            self.skipTest(f"Font not available: {font_path}")
-        font = ImageFont.truetype(font_path, size)
-        img = Image.fromarray(np.zeros((60, 300), dtype=np.uint8))
-        draw = ImageDraw.Draw(img)
-        draw.text((pad, pad), text, fill=255, font=font)
-        bbox = img.getbbox()
-        return img.crop(bbox)
-
-    def assert_reads(self, text):
-        """Assert the native recognizer reads the rendered timer correctly."""
-        img = self.render_timer(text)
-        h, m, s = text.split(":")
-        expected = int(h) * 3600 + int(m) * 60 + int(s)
-        result = _read_time_native(img)
-        self.assertEqual(result, expected, f"native OCR misread {text}")
-
-    def test_native_reads_rendered_timers(self):
-        """The native recognizer must read font-rendered timers without Tesseract."""
-        for text in ("12:34:56", "00:00:05", "99:59:59", "4:00:00", "08:02:23"):
-            self.assert_reads(text)
-
-
 class TestFirstNonZeroDigit(unittest.TestCase):
-    """Test the leftmost non-zero digit locator used to click on text."""
+    """Test the OCR-based leftmost non-zero digit locator used to click on text."""
 
-    def render_digits(self, text, font_path=r"C:\Windows\Fonts\arialbd.ttf", size=30, pad=6):
-        """Render a digit string as a white-on-black image using a TrueType font."""
-        from PIL import Image, ImageDraw, ImageFont
+    @patch("wosutil.emulator.image_utils.ocr.read_chars")
+    def test_finds_leftmost_non_zero_digit(self, read_chars):
+        """The first digit from 1 to 9 is returned, ignoring zeros and punctuation."""
+        image = Image.new("RGB", (100, 20), "black")
+        read_chars.return_value = [
+            ("0", (0, 0, 10, 10)),
+            (",", (10, 0, 5, 10)),
+            ("3", (20, 0, 10, 10)),
+            ("6", (30, 0, 10, 10)),
+        ]
 
-        if not os.path.exists(font_path):
-            self.skipTest(f"Font not available: {font_path}")
-        font = ImageFont.truetype(font_path, size)
-        img = Image.fromarray(np.zeros((60, 300), dtype=np.uint8))
-        draw = ImageDraw.Draw(img)
-        draw.text((pad, pad), text, fill=255, font=font)
-        bbox = img.getbbox()
-        return img.crop(bbox)
+        self.assertEqual(_find_first_non_zero_digit_on_image(image), (25, 5))
 
-    def test_finds_leftmost_non_zero_digit(self):
-        """'05' must locate the '5' on the right half of the image."""
-        img = self.render_digits("05")
-        pos = _find_first_non_zero_digit_on_image(img)
-        self.assertIsNotNone(pos)
-        if pos:
-            cx, _ = pos
-            self.assertGreater(cx, img.width // 2, "the '5' is the first non-zero digit and sits on the right")
-
-    def test_finds_digit_on_left_when_first(self):
-        """'50' must locate the '5' on the left half of the image."""
-        img = self.render_digits("50")
-        pos = _find_first_non_zero_digit_on_image(img)
-        self.assertIsNotNone(pos)
-        if pos:
-            cx, _ = pos
-            self.assertLess(cx, img.width // 2, "the '5' is the first non-zero digit and sits on the left")
-
-    def test_returns_none_when_all_zeros(self):
+    @patch("wosutil.emulator.image_utils.ocr.read_chars")
+    def test_returns_none_when_all_zeros(self, read_chars):
         """An image with only zeros must return None."""
-        img = self.render_digits("000")
-        self.assertIsNone(_find_first_non_zero_digit_on_image(img))
+        image = Image.new("RGB", (100, 20), "black")
+        read_chars.return_value = [("0", (0, 0, 10, 10)), ("0", (20, 0, 10, 10))]
 
-    def test_returns_none_on_blank_image(self):
-        """A blank image must return None."""
-        from PIL import Image as PILImage
+        self.assertIsNone(_find_first_non_zero_digit_on_image(image))
 
-        img = PILImage.fromarray(np.zeros((40, 80), dtype=np.uint8))
-        self.assertIsNone(_find_first_non_zero_digit_on_image(img))
+    @patch("wosutil.emulator.image_utils.ocr.read_chars")
+    def test_returns_none_on_empty_ocr(self, read_chars):
+        """No recognized characters must return None."""
+        image = Image.new("RGB", (100, 20), "black")
+        read_chars.return_value = []
+
+        self.assertIsNone(_find_first_non_zero_digit_on_image(image))
 
 
 class TestTextOcr(unittest.TestCase):
@@ -508,134 +473,55 @@ class TestTextOcr(unittest.TestCase):
         draw.text((150, 80), "Gather", fill=(255, 255, 255), font=font, anchor="mm", stroke_width=3, stroke_fill=(35, 35, 35))
         return img
 
-    def test_fuzzy_search_reads_white_label_on_blue_button(self):
-        """The Gather button label must be found on its blue button.
-
-        Regression: binarized masks leave the label as dark glyphs trapped in
-        a bright button-shaped island that Tesseract's layout analysis refuses
-        to segment; the grayscale-inverted OCR pass recovers it.
-        """
-        if not os.path.exists(resolve_tesseract_cmd()):
-            self.skipTest("Tesseract is not installed.")
+    def test_reads_white_label_on_blue_button(self):
+        """The Gather button label must be found on its blue button."""
         img = self.render_gather_button()
-        found, box = find_text_on_image(img, "Gather", last=True, fuzzy=True)
+        found, box = find_text_on_image(img, "Gather", last=True)
         self.assertTrue(found, "'Gather' should be readable on a blue button")
         self.assertIsNotNone(box)
         if box is not None:  # Type guard for linter
             self.assertGreater(box[2], 0)
             self.assertGreater(box[3], 0)
 
-    @patch("wosutil.emulator.image_utils._ocr_lines")
-    def test_retries_with_sparse_text_layout_when_primary_ocr_misses(self, ocr_lines):
-        """A sparse-text OCR pass must recover labels missed by the block-layout pass."""
+    @patch("wosutil.emulator.image_utils._ocr_word_lines")
+    def test_finds_multi_word_label_in_one_line(self, word_lines):
+        """Consecutive target words in one OCR line are matched as a phrase."""
         image = Image.new("RGB", (100, 40), "black")
-        box = (10, 10, 40, 10)
-        ocr_lines.side_effect = [
-            [[("ed", box), ("Arena", box)]],
-            [[("Mystery", box)]],
-        ]
+        first_box = (10, 10, 40, 10)
+        second_box = (55, 10, 30, 10)
+        word_lines.return_value = [[("Tundra", first_box), ("Trek", second_box)]]
 
-        found, result = find_text_on_image(image, "Mystery")
+        found, result = find_text_on_image(image, "Tundra Trek")
 
         self.assertTrue(found)
-        self.assertEqual(result, box)
-        self.assertEqual(ocr_lines.call_count, 2)
-        self.assertEqual(ocr_lines.call_args_list[1].kwargs, {"psm": 11})
+        self.assertEqual(result, (10, 10, 75, 10))
+        word_lines.assert_called_once_with(image)
 
-    @patch("wosutil.emulator.image_utils._ocr_lines")
-    def test_fuzzy_search_recovers_a_decorative_single_word_label(self, ocr_lines):
-        """A small OCR spelling error can still locate a fixed UI label."""
-        image = Image.new("RGB", (100, 40), "black")
-        box = (40, 10, 20, 10)
-        ocr_lines.side_effect = [
-            [[]],
-            [[]],
-            [[("ol", box)]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-        ]
-
-        found, result = find_text_on_image(image, "Coal", fuzzy=True)
-
-        self.assertTrue(found)
-        self.assertEqual(result, box)
-
-    @patch("wosutil.emulator.image_utils._ocr_lines")
-    def test_last_fuzzy_search_prefers_a_lower_alternative_match(self, ocr_lines):
-        """The lower OCR match wins even when the upper match was exact."""
+    @patch("wosutil.emulator.image_utils._ocr_word_lines")
+    def test_last_search_prefers_a_lower_alternative_match(self, word_lines):
+        """The lower OCR match wins when the same label appears twice."""
         image = Image.new("RGB", (100, 80), "black")
         upper_box = (10, 5, 30, 10)
         lower_box = (50, 60, 30, 10)
-        ocr_lines.side_effect = [
-            [[("Search", upper_box)]],
-            [[("Search", lower_box)]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-        ]
+        word_lines.return_value = [[("Search", upper_box)], [("Search", lower_box)]]
 
-        found, result = find_text_on_image(image, "Search", last=True, fuzzy=True)
+        found, result = find_text_on_image(image, "Search", last=True)
 
         self.assertTrue(found)
         self.assertEqual(result, lower_box)
 
-    @patch("wosutil.emulator.image_utils._ocr_lines")
-    def test_exact_gather_match_beats_lower_fuzzy_noise(self, ocr_lines):
-        """The Gather button wins over a lower unrelated fuzzy spelling."""
+    @patch("wosutil.emulator.image_utils._ocr_word_lines")
+    def test_exact_gather_match_ignores_lower_noise(self, word_lines):
+        """The Gather button wins over a lower unrelated spelling."""
         image = Image.new("RGB", (100, 100), "black")
         button_box = (40, 50, 30, 10)
         noise_box = (5, 85, 30, 10)
-        ocr_lines.side_effect = [
-            [[]],
-            [[]],
-            [[("Gather", button_box)]],
-            [[("ashery", noise_box)]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-            [[]],
-        ]
+        word_lines.return_value = [[("Gather", button_box)], [("ashery", noise_box)]]
 
-        found, result = find_text_on_image(image, "Gather", last=True, fuzzy=True)
+        found, result = find_text_on_image(image, "Gather", last=True)
 
         self.assertTrue(found)
         self.assertEqual(result, button_box)
-
-
-class TestFuzzyTextMask(unittest.TestCase):
-    """Test the fuzzy-search preprocessing color properties (no Tesseract needed)."""
-
-    def test_drops_tinted_bright_background(self):
-        """The fuzzy mask must keep neutral white glyphs but drop tinted highlights.
-
-        Deterministic root-cause guard: the light-cyan tile edge is bright
-        enough to pass a plain brightness mask, which merged it with the white
-        labels; only its low saturation distinguishes them.
-        """
-        img = Image.new("RGB", (3, 1))
-        img.putpixel((0, 0), (255, 255, 255))  # white glyph fill
-        img.putpixel((1, 0), (188, 231, 251))  # light-cyan tile edge
-        img.putpixel((2, 0), (70, 130, 180))  # blue world map
-        processed = np.array(_preprocess_fuzzy_text_image(img))
-        glyph, tile, map_bg = (int(processed[1, i * 3 + 1]) for i in range(3))
-        self.assertEqual(glyph, 0, "white glyph pixels must be kept as text")
-        self.assertEqual(tile, 255, "tinted tile highlights must be dropped")
-        self.assertEqual(map_bg, 255, "the blue map background must be dropped")
 
 
 if __name__ == "__main__":

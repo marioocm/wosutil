@@ -1,36 +1,42 @@
 # -*- mode: python ; coding: utf-8 -*-
-r"""PyInstaller spec: single-file, windowed WosUtil.exe with bundled Tesseract.
+r"""PyInstaller spec: single-file, windowed WosUtil.exe.
 
-Build:
-    .venv\Scripts\pyinstaller --noconfirm --clean wosutil.spec
-
-Tesseract OCR must first be staged into build/tesseract (tesseract.exe, its
-DLLs and tessdata/eng.traineddata) by scripts/build.ps1. The whole folder is
-bundled under the ``tesseract`` destination, so at runtime it is found at
-``<_MEIPASS>/tesseract/tesseract.exe`` and image_utils.resolve_tesseract_cmd()
-points TESSDATA_PREFIX at its tessdata folder. The templates folder is bundled
-under ``templates`` and resolved at runtime via sys._MEIPASS.
-
-Only what ships inside the exe is defined here; data/, logs/ and debug/ are
-written to %LOCALAPPDATA%\WosUtil at runtime (see config._app_dir).
+RapidOCR models, ONNX Runtime binaries and the templates folder are bundled.
+data/, logs/ and debug/ are written to %LOCALAPPDATA%\WosUtil at runtime (see
+config._app_dir).
 """
 
 import os
 
+from PyInstaller.utils.hooks import collect_data_files
+
 ROOT_DIR = os.path.abspath(SPECPATH)
+
+rapidocr_datas = collect_data_files("rapidocr")
 
 a = Analysis(
     [os.path.join(ROOT_DIR, "main.py")],
     pathex=[os.path.join(ROOT_DIR, "src")],
-    binaries=[(os.path.join(ROOT_DIR, "build", "tesseract"), "tesseract")],
-    datas=[(os.path.join(ROOT_DIR, "templates"), "templates")],
+    binaries=[],
+    datas=[
+        (os.path.join(ROOT_DIR, "templates"), "templates"),
+        *rapidocr_datas,
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        "rapidocr.inference_engine.mnn",
+        "rapidocr.inference_engine.openvino",
+        "rapidocr.inference_engine.paddle",
+        "rapidocr.inference_engine.pytorch",
+        "rapidocr.inference_engine.tensorrt",
+    ],
     noarchive=False,
 )
+
+a.binaries = [entry for entry in a.binaries if "opencv_videoio_ffmpeg" not in entry[0]]
 
 pyz = PYZ(a.pure)
 
