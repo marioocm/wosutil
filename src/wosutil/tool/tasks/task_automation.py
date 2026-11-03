@@ -1305,10 +1305,50 @@ def _next_bear_hunt_start(bear_hunt_times, now):
     """
     window_starts = []
     for year, month, day, hour, minute in bear_hunt_times:
-        start = calendar.timegm((year, month, day, hour, minute, 0, 0, 0, 0))
+        try:
+            start = calendar.timegm((year, month, day, hour, minute, 0, 0, 0, 0))
+        except (ValueError, OverflowError):
+            # A corrupted/OCR-misread time must never crash the task.
+            continue
         if start + BEAR_TRAP_DURATION_SECONDS > now:
             window_starts.append(start)
     return min(window_starts) if window_starts else None
+
+
+def reconcile_bear_trap_schedule(instance_index, tasks, now=None):
+    """Move a stale bear trap schedule forward to the next known hunt.
+
+    The task list read when an instance is opened is the source of truth for
+    the Bear Hunt times. When the persisted next run of ``play_bear_trap``
+    points farther into the future than the next joinable hunt (e.g. a value
+    produced by an old OCR misread), move it to the preparation time of that
+    hunt instead of waiting for the wrong date.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        tasks (list): Running task state dicts.
+        now (float, optional): Current epoch seconds. If None, uses time.time().
+
+    Returns:
+        bool: True when the play_bear_trap task was moved forward.
+    """
+    now = time.time() if now is None else now
+    hunt_start = _next_bear_hunt_start(get_cached_bear_hunt_times(instance_index), now)
+    if hunt_start is None:
+        return False
+    task = next((task for task in tasks if task.get("id") == "play_bear_trap"), None)
+    if task is None:
+        return False
+    current = task.get("next_run_time", 0)
+    expected = max(now, hunt_start - BEAR_TRAP_PREP_SECONDS)
+    if not isinstance(current, (int, float)) or expected >= current:
+        return False
+    task["next_run_time"] = expected
+    log_message(
+        f"Bear trap schedule corrected to {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(hunt_start))}, preparing in {max(0.0, expected - now):.0f} seconds.",
+        level="info",
+    )
+    return True
 
 
 def _bear_trap_prepare_and_join(instance_index, end):

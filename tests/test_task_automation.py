@@ -18,6 +18,7 @@ from wosutil.tool.tasks.task_automation import (
     claim_storehouse_stamina,
     do_intel_missions,
     play_bear_trap,
+    reconcile_bear_trap_schedule,
     turn_on_autojoin,
 )
 
@@ -278,6 +279,62 @@ class TestNextBearHuntStart(unittest.TestCase):
         """A hunt whose window fully ended is not returned."""
         now = NEXT_HUNT_START + BEAR_TRAP_DURATION_SECONDS
         self.assertIsNone(_next_bear_hunt_start([NEXT_HUNT], now))
+
+    def test_invalid_hunt_date_is_ignored(self):
+        """A corrupted hunt date is skipped instead of crashing the task."""
+        hunts = [(2026, 13, 26, 12, 0), NEXT_HUNT]
+        self.assertEqual(_next_bear_hunt_start(hunts, NEXT_HUNT_START - 3600), NEXT_HUNT_START)
+
+
+class TestReconcileBearTrapSchedule(unittest.TestCase):
+    """Test aligning a saved bear trap schedule with the fresh hunt times."""
+
+    @staticmethod
+    def _tasks(next_run_time):
+        return [{"id": "play_bear_trap", "next_run_time": next_run_time}]
+
+    def test_stale_future_schedule_moves_to_next_hunt_prep(self):
+        """A saved date beyond the next known hunt is brought forward."""
+        now = NEXT_HUNT_START - 24 * 60 * 60
+        tasks = self._tasks(NEXT_HUNT_START + 30 * 24 * 60 * 60)
+        with patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]):
+            moved = reconcile_bear_trap_schedule(0, tasks, now=now)
+        self.assertTrue(moved)
+        self.assertEqual(tasks[0]["next_run_time"], NEXT_HUNT_START - BEAR_TRAP_PREP_SECONDS)
+
+    def test_saved_time_before_next_hunt_is_kept(self):
+        """A retry earlier than the hunt preparation is not postponed."""
+        now = NEXT_HUNT_START - 24 * 60 * 60
+        saved = now + 3600
+        tasks = self._tasks(saved)
+        with patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]):
+            moved = reconcile_bear_trap_schedule(0, tasks, now=now)
+        self.assertFalse(moved)
+        self.assertEqual(tasks[0]["next_run_time"], saved)
+
+    def test_in_progress_hunt_moves_task_to_now(self):
+        """A hunt already in its attack window makes the task run immediately."""
+        now = NEXT_HUNT_START + 10 * 60
+        tasks = self._tasks(NEXT_HUNT_START + 30 * 24 * 60 * 60)
+        with patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]):
+            moved = reconcile_bear_trap_schedule(0, tasks, now=now)
+        self.assertTrue(moved)
+        self.assertEqual(tasks[0]["next_run_time"], now)
+
+    def test_no_hunt_keeps_saved_schedule(self):
+        """Without a fresh hunt time the saved schedule is left untouched."""
+        saved = NEXT_HUNT_START + 30 * 24 * 60 * 60
+        tasks = self._tasks(saved)
+        with patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[]):
+            moved = reconcile_bear_trap_schedule(0, tasks, now=NEXT_HUNT_START)
+        self.assertFalse(moved)
+        self.assertEqual(tasks[0]["next_run_time"], saved)
+
+    def test_task_not_in_profile_is_ignored(self):
+        """Profiles without the bear trap task keep their schedule untouched."""
+        with patch("wosutil.tool.tasks.task_automation.get_cached_bear_hunt_times", return_value=[NEXT_HUNT]):
+            moved = reconcile_bear_trap_schedule(0, [{"id": "claim_mail", "next_run_time": 0}], now=NEXT_HUNT_START)
+        self.assertFalse(moved)
 
 
 class TestPlayBearTrapScheduling(unittest.TestCase):

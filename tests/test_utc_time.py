@@ -345,6 +345,39 @@ class TestParseTaskListSchedule(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertEqual(headers, [(2026, 8, 21)])
 
+    def test_swapped_day_banner_repaired(self):
+        """A day read with its digits swapped is repaired instead of scheduled far away.
+
+        Reproduces the bug where '2026/10/17' was read as '2026/10/71':
+        ``calendar.timegm`` normalized October 71 to December 10 and the bear
+        trap was scheduled months in the future.
+        """
+        words = [("2026/10/71", (282, 100, 154, 23))] + self._bear_hunt_row(200)
+        events, headers = parse_task_list_schedule(words, self.TODAY)
+        self.assertEqual(events, [(2026, 10, 17, 19, 0)])
+        self.assertEqual(headers, [(2026, 10, 17)])
+
+    def test_unreadable_date_banner_blocks_entries_below(self):
+        """Entries below an unreadable banner are skipped, not dated with an older one."""
+        words = [("Today", (280, 90, 80, 25))] + self._bear_hunt_row(200, time_text="01:00") + [("2026/02/30", (282, 300, 154, 23))] + self._bear_hunt_row(400)
+        events, headers = parse_task_list_schedule(words, self.TODAY)
+        self.assertEqual(events, [(2026, 8, 25, 1, 0)])
+        self.assertEqual(headers, [(2026, 8, 25)])
+
+    def test_impossible_month_banner_dropped(self):
+        """Months outside 1-12 are invalid banner reads."""
+        words = [("2026/13/10", (282, 100, 154, 23))] + self._bear_hunt_row(200)
+        events, headers = parse_task_list_schedule(words, self.TODAY)
+        self.assertEqual(events, [])
+        self.assertEqual(headers, [])
+
+    def test_impossible_day_banner_dropped(self):
+        """A day that cannot be repaired is an invalid banner read."""
+        words = [("2026/10/00", (282, 100, 154, 23))] + self._bear_hunt_row(200)
+        events, headers = parse_task_list_schedule(words, self.TODAY)
+        self.assertEqual(events, [])
+        self.assertEqual(headers, [])
+
     def test_misread_past_header_only_drops_its_own_entries(self):
         """Real events below a misread past banner are still read on other pages."""
         words = [("2026/08/21", (284, 100, 152, 23))] + self._bear_hunt_row(200, time_text="01:00") + [("2026/08/27", (284, 300, 152, 23))] + self._bear_hunt_row(400, time_text="01:00")
