@@ -727,6 +727,15 @@ class MultiInstanceToolController:
                     pm.running_tasks_state = build_running_tasks_state(profile_name, pm.profiles, self.TASK_DEFINITIONS)
                 # If pm already exists, keep the existing task state to preserve scheduled times
 
+                # The Bear Hunt times just read from the task list are the
+                # source of truth: a stale saved schedule (e.g. produced by an
+                # old OCR misread) must not postpone the task to a wrong date.
+                from wosutil.tool.tasks.task_automation import reconcile_bear_trap_schedule
+
+                if pm.running_tasks_state and reconcile_bear_trap_schedule(index, pm.running_tasks_state):
+                    pm.next_run_time = min(t["next_run_time"] for t in pm.running_tasks_state)
+                    self._persist_schedules()
+
                 # Main task loop
                 last_health_check = time.time()
 

@@ -18,6 +18,7 @@ entry is cached with the UTC date and time at which it takes place, so tasks
 can be scheduled to those instants.
 """
 
+import datetime
 import re
 import time
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -73,10 +74,63 @@ def _normalize_task_list_word(word: str) -> str:
     return _TASK_LIST_WORD_RE.sub("", word.lower())
 
 
-def _merge_task_list_headers(headers: List[Tuple[int, Tuple[int, int, int]]]) -> List[Tuple[int, Tuple[int, int, int]]]:
-    """Drop duplicate date banners read at nearly the same y coordinate."""
-    merged: List[Tuple[int, Tuple[int, int, int]]] = []
-    for y, date in sorted(headers):
+def _is_valid_task_list_date(year: int, month: int, day: int) -> bool:
+    """Return whether a date banner is a real calendar date.
+
+    OCR often swaps digits (e.g. '2026/10/17' read as '2026/10/71'). Such a
+    date would otherwise be normalized by ``calendar.timegm`` into a different
+    day (October 71 becomes December 10), scheduling tasks months in the
+    future.
+
+    Args:
+        year (int): Four-digit year of the banner.
+        month (int): Banner month.
+        day (int): Banner day.
+
+    Returns:
+        bool: True when the three fields form a valid calendar date.
+    """
+    try:
+        datetime.date(year, month, day)
+    except ValueError:
+        return False
+    return True
+
+
+def _repair_task_list_date(year: int, month: int, day: int) -> Optional[Tuple[int, int, int]]:
+    """Return the date of a banner, undoing a common OCR digit swap.
+
+    The day digits are sometimes read in reverse ('2026/10/17' read as
+    '2026/10/71'). A day above 31 can never be real, so its reversed digits are
+    accepted when they form a valid calendar date. Any other unreadable date
+    is left as None so the caller can drop it instead of guessing.
+
+    Args:
+        year (int): Four-digit year of the banner.
+        month (int): Banner month.
+        day (int): Banner day.
+
+    Returns:
+        tuple or None: The valid (year, month, day) date, or None when the
+            banner cannot be recovered.
+    """
+    if _is_valid_task_list_date(year, month, day):
+        return (year, month, day)
+    if not 1 <= day <= 31:
+        reversed_day = int(str(day)[::-1])
+        if _is_valid_task_list_date(year, month, reversed_day):
+            return (year, month, reversed_day)
+    return None
+
+
+def _merge_task_list_headers(headers: List[Tuple[int, Optional[Tuple[int, int, int]]]]) -> List[Tuple[int, Optional[Tuple[int, int, int]]]]:
+    """Drop duplicate date banners read at nearly the same y coordinate.
+
+    Unreadable banners (stored as None) are kept as barriers so the entries
+    below them are not dated with an earlier banner.
+    """
+    merged: List[Tuple[int, Optional[Tuple[int, int, int]]]] = []
+    for y, date in sorted(headers, key=lambda header: header[0]):
         if merged and merged[-1][1] == date and abs(y - merged[-1][0]) <= _TASK_LIST_HEADER_MERGE_Y:
             continue
         merged.append((y, date))
@@ -97,7 +151,10 @@ def parse_task_list_schedule(
     (only valid before any scrolling, where the list always starts with the
     'Today' banner, even when OCR could not read it). Events dated before
     ``today`` are dropped: the list only shows upcoming events, so a past date
-    is a banner OCR misread.
+    is a banner OCR misread. Banners with swapped day digits (e.g. '2026/10/17'
+    read as '2026/10/71') are repaired; banners that still do not form a real
+    calendar date are treated as unreadable, so the entries below them are
+    skipped instead of being dated with an earlier banner.
 
     Args:
         words (list): (word, (x, y, w, h)) OCR pairs of the task list panel,
@@ -109,13 +166,14 @@ def parse_task_list_schedule(
     Returns:
         tuple: (events, headers); events is a sorted, deduplicated list of
             (year, month, day, hour, minute) Bear Hunt times and headers the
-            sorted (year, month, day) dates of the banners found.
+            sorted (year, month, day) dates of the readable banners found.
     """
-    headers: List[Tuple[int, Tuple[int, int, int]]] = []
+    headers: List[Tuple[int, Optional[Tuple[int, int, int]]]] = []
     for word, (_x, y, _w, _h) in words:
         date_match = _TASK_LIST_DATE_RE.search(word)
         if date_match:
-            headers.append((y, (int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))))
+            header = (int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
+            headers.append((y, _repair_task_list_date(*header)))
         elif _normalize_task_list_word(word) == "today":
             headers.append((y, today))
     headers = _merge_task_list_headers(headers)
@@ -127,7 +185,17 @@ def parse_task_list_schedule(
         row_y = y + h // 2
         if not any(_normalize_task_list_word(other) == "hunt" and abs((oy + oh // 2) - row_y) <= _TASK_LIST_WORD_ROW_Y and 0 < ox - x <= 130 for other, (ox, oy, _ow, oh) in words):
             continue
-        date = next((header_date for _hy, header_date in reversed(headers) if _hy < y), None)
+        date: Optional[Tuple[int, int, int]] = None
+        has_header = False
+        for _hy, header_date in reversed(headers):
+            if _hy < y:
+                date = header_date
+                has_header = True
+                break
+        if has_header and date is None:
+            # The closest banner above is unreadable: do not date the entry
+            # with a different, earlier banner.
+            continue
         if date is None:
             if not infer_leading_today:
                 continue
@@ -154,7 +222,7 @@ def parse_task_list_schedule(
             if (event[0], event[1], event[2]) < today:
                 continue
             events.add(event)
-    return sorted(events), [date for _y, date in headers]
+    return sorted(events), [date for _y, date in headers if date is not None]
 
 
 def _task_list_uses_utc_time(panel: Image.Image) -> Optional[bool]:
