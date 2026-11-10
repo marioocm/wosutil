@@ -41,6 +41,16 @@ WORLD_MAP_SEARCH_SCROLL_END = (86, 912)
 
 WORLD_MAP_SEARCH_SCROLL_DURATION_MS = 200
 
+SIDEMENU_SCROLL_START = (13, 500)
+
+SIDEMENU_SCROLL_END = (13, 0)
+
+SIDEMENU_SCROLL_DURATION_MS = 500
+
+SIDEMENU_SCROLL_HOLD_END_MS = 500
+
+SIDEMENU_SEARCH_MAX_SCROLLS = 1
+
 
 def is_game_on_screen(instance_index, template_name, roi_name=None, screenshot_path=None, threshold=SCREEN_CHECK_THRESHOLD):
     """Checks if the game is on the screen identified by a template and ROI.
@@ -241,8 +251,9 @@ def go_intel(instance_index):
 def go_island(instance_index):
     """Navigates to the island screen by opening the side menu on the Daily tab and clicking the Tree entry by text.
 
-    Scrolls the side menu to reveal the Tree entry, then dismisses the hand
-    tutorial overlay once the island is open.
+    Scrolls the side menu to reveal the Tree entry, retrying with another scroll
+    when it is not found, then dismisses the hand tutorial overlay once the
+    island is open.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -253,9 +264,9 @@ def go_island(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    scroll_screen(13, 500, 13, 0, 500, instance_index, hold_end_ms=500, delay=1.0)
+    scroll_sidemenu(instance_index)
 
-    if not click_on_text("Tree", instance_index, roi="sidemenu", delay=4):
+    if not click_on_sidemenu_text(instance_index, "Tree", delay=4):
         log_message("Tree entry NOT found in side menu. Aborting.", level="warning")
         return False
 
@@ -277,7 +288,7 @@ def go_pet_adventure(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_text("Pet Adventure", instance_index, roi="sidemenu", delay=1.0, last=True):
+    if not click_on_sidemenu_text(instance_index, "Pet Adventure", delay=1.0, last=True):
         log_message("Pet Adventure entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
@@ -385,6 +396,55 @@ def go_sidemenu_daily(instance_index):
     return True
 
 
+def scroll_sidemenu(instance_index, delay=1.0):
+    """Scrolls the side menu down one step.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        delay (float): Delay after the scroll in seconds.
+    """
+    scroll_screen(
+        SIDEMENU_SCROLL_START[0],
+        SIDEMENU_SCROLL_START[1],
+        SIDEMENU_SCROLL_END[0],
+        SIDEMENU_SCROLL_END[1],
+        SIDEMENU_SCROLL_DURATION_MS,
+        instance_index,
+        hold_end_ms=SIDEMENU_SCROLL_HOLD_END_MS,
+        delay=delay,
+    )
+
+
+def click_on_sidemenu_text(instance_index, text, delay=CLICK_DELAY, last=False, max_scrolls=SIDEMENU_SEARCH_MAX_SCROLLS):
+    """Clicks a side menu entry by text, scrolling the menu when it is not visible.
+
+    The side menu keeps growing as the game adds new events, which can push
+    entries that used to be visible below the fold. When the text is not found
+    the menu is scrolled down and the search is retried, up to ``max_scrolls``
+    times.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        text (str): Text to search for and click, e.g. 'Tundra Trek'.
+        delay (float): Delay after the click.
+        last (bool): When True click the lowest occurrence of the text instead
+            of the first one.
+        max_scrolls (int): Number of extra scrolls performed when the text is
+            not found.
+
+    Returns:
+        bool: True if the text was found and clicked, False otherwise.
+    """
+    for scroll_count in range(max_scrolls + 1):
+        if click_on_text(text, instance_index, roi="sidemenu", delay=delay, last=last):
+            return True
+        if scroll_count == max_scrolls:
+            break
+        log_message(f"Text '{text}' NOT found in side menu, scrolling and searching again.", level="info")
+        scroll_sidemenu(instance_index)
+    return False
+
+
 def go_tundra_trek(instance_index):
     """Navigates to the tundra trek screen by opening the side menu on the Daily tab and clicking the tundra trek entry by text.
 
@@ -397,7 +457,7 @@ def go_tundra_trek(instance_index):
     if not go_sidemenu_daily(instance_index):
         return False
 
-    if not click_on_text("Tundra Trek", instance_index, roi="sidemenu", delay=1.0):
+    if not click_on_sidemenu_text(instance_index, "Tundra Trek", delay=1.0):
         log_message("Tundra trek entry NOT found in side menu. Aborting.", level="warning")
         return False
     return True
