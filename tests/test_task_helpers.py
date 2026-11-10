@@ -14,10 +14,15 @@ from wosutil.config import (
     SCREEN_CHECK_THRESHOLD,
 )
 from wosutil.tool.tasks.navigation import (
+    SIDEMENU_SCROLL_DURATION_MS,
+    SIDEMENU_SCROLL_END,
+    SIDEMENU_SCROLL_HOLD_END_MS,
+    SIDEMENU_SCROLL_START,
     WORLD_MAP_SEARCH_SCROLL_DURATION_MS,
     WORLD_MAP_SEARCH_SCROLL_END,
     WORLD_MAP_SEARCH_SCROLL_START,
     click_first_found_template,
+    click_on_sidemenu_text,
     click_on_template,
     click_on_text,
     ensure_hero_recruit_screen,
@@ -584,10 +589,11 @@ class TestGoTundraTrek(unittest.TestCase):
         self.patchers = [
             patch("wosutil.tool.tasks.navigation.go_sidemenu_daily"),
             patch("wosutil.tool.tasks.navigation.get_roi"),
+            patch("wosutil.tool.tasks.navigation.scroll_screen"),
             patch("wosutil.tool.tasks.navigation.click_on_text"),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu_daily, self.get_roi, self.scroll_screen, self.click_text = self.mocks
         self.go_sidemenu_daily.return_value = True
         self.get_roi.return_value = (0, 173, 484, 759)
         self.click_text.return_value = True
@@ -597,18 +603,37 @@ class TestGoTundraTrek(unittest.TestCase):
         """The Daily tab is opened and the Tundra Trek entry is clicked by text."""
         self.assertTrue(go_tundra_trek(0))
         self.go_sidemenu_daily.assert_called_once_with(0)
-        self.click_text.assert_called_once_with("Tundra Trek", 0, roi="sidemenu", delay=1.0)
+        self.click_text.assert_called_once_with("Tundra Trek", 0, roi="sidemenu", delay=1.0, last=False)
+        self.scroll_screen.assert_not_called()
 
     def test_returns_false_when_daily_tab_not_reached(self):
         """Navigation fails when the Daily tab cannot be reached."""
         self.go_sidemenu_daily.return_value = False
         self.assertFalse(go_tundra_trek(0))
         self.click_text.assert_not_called()
+        self.scroll_screen.assert_not_called()
+
+    def test_scrolls_and_retries_when_entry_missing(self):
+        """A missing entry triggers another scroll and a second search."""
+        self.click_text.side_effect = [False, True]
+        self.assertTrue(go_tundra_trek(0))
+        self.assertEqual(self.click_text.call_count, 2)
+        self.scroll_screen.assert_called_once_with(
+            SIDEMENU_SCROLL_START[0],
+            SIDEMENU_SCROLL_START[1],
+            SIDEMENU_SCROLL_END[0],
+            SIDEMENU_SCROLL_END[1],
+            SIDEMENU_SCROLL_DURATION_MS,
+            0,
+            hold_end_ms=SIDEMENU_SCROLL_HOLD_END_MS,
+            delay=1.0,
+        )
 
     def test_returns_false_when_entry_missing(self):
         """Navigation fails when the Tundra Trek entry is not found."""
         self.click_text.return_value = False
         self.assertFalse(go_tundra_trek(0))
+        self.assertEqual(self.scroll_screen.call_count, 1)
 
 
 class TestGoPetAdventure(unittest.TestCase):
@@ -619,10 +644,11 @@ class TestGoPetAdventure(unittest.TestCase):
         self.patchers = [
             patch("wosutil.tool.tasks.navigation.go_sidemenu_daily"),
             patch("wosutil.tool.tasks.navigation.get_roi"),
+            patch("wosutil.tool.tasks.navigation.scroll_screen"),
             patch("wosutil.tool.tasks.navigation.click_on_text"),
         ]
         self.mocks = [p.start() for p in self.patchers]
-        self.go_sidemenu_daily, self.get_roi, self.click_text = self.mocks
+        self.go_sidemenu_daily, self.get_roi, self.scroll_screen, self.click_text = self.mocks
         self.go_sidemenu_daily.return_value = True
         self.get_roi.return_value = (0, 173, 484, 759)
         self.click_text.return_value = True
@@ -633,17 +659,20 @@ class TestGoPetAdventure(unittest.TestCase):
         self.assertTrue(go_pet_adventure(0))
         self.go_sidemenu_daily.assert_called_once_with(0)
         self.click_text.assert_called_once_with("Pet Adventure", 0, roi="sidemenu", delay=1.0, last=True)
+        self.scroll_screen.assert_not_called()
 
     def test_returns_false_when_daily_tab_not_reached(self):
         """Navigation fails when the Daily tab cannot be reached."""
         self.go_sidemenu_daily.return_value = False
         self.assertFalse(go_pet_adventure(0))
         self.click_text.assert_not_called()
+        self.scroll_screen.assert_not_called()
 
     def test_returns_false_when_pet_entry_missing(self):
         """Navigation fails when the Pet Adventure entry is not found."""
         self.click_text.return_value = False
         self.assertFalse(go_pet_adventure(0))
+        self.assertEqual(self.scroll_screen.call_count, 1)
 
 
 class TestGoIsland(unittest.TestCase):
@@ -668,9 +697,17 @@ class TestGoIsland(unittest.TestCase):
         self.assertTrue(go_island(0))
         self.go_sidemenu_daily.assert_called_once_with(0)
         self.scroll_screen.assert_called_once_with(13, 500, 13, 0, 500, 0, hold_end_ms=500, delay=1.0)
-        self.click_text.assert_called_once_with("Tree", 0, roi="sidemenu", delay=4)
+        self.click_text.assert_called_once_with("Tree", 0, roi="sidemenu", delay=4, last=False)
         self.assertEqual(self.click_coords.call_count, 2)
         self.click_coords.assert_any_call(100, 70, 0)
+
+    def test_scrolls_and_retries_when_tree_missing(self):
+        """A missing Tree entry triggers another scroll and a second search."""
+        self.click_text.side_effect = [False, True]
+        self.assertTrue(go_island(0))
+        self.assertEqual(self.scroll_screen.call_count, 2)
+        self.assertEqual(self.click_text.call_count, 2)
+        self.assertEqual(self.click_coords.call_count, 2)
 
     def test_returns_false_when_daily_tab_not_reached(self):
         """Navigation fails when the Daily tab cannot be reached."""
@@ -684,6 +721,7 @@ class TestGoIsland(unittest.TestCase):
         """Navigation fails when the Tree entry is not found."""
         self.click_text.return_value = False
         self.assertFalse(go_island(0))
+        self.assertEqual(self.scroll_screen.call_count, 2)
         self.click_coords.assert_not_called()
 
 
@@ -1138,6 +1176,51 @@ class TestClickOnText(unittest.TestCase):
         self.take_screenshot.assert_not_called()
         self.find_center.assert_not_called()
         self.click_coords.assert_not_called()
+
+
+class TestClickOnSidemenuText(unittest.TestCase):
+    """Test cases for the scrolling side menu text helper."""
+
+    def setUp(self):
+        """Set up shared mocks."""
+        self.patchers = [
+            patch("wosutil.tool.tasks.navigation.click_on_text"),
+            patch("wosutil.tool.tasks.navigation.scroll_screen"),
+        ]
+        self.mocks = [p.start() for p in self.patchers]
+        self.click_text, self.scroll_screen = self.mocks
+        self.click_text.return_value = True
+        self.addCleanup(lambda: [p.stop() for p in self.patchers])
+
+    def test_clicks_without_scrolling_when_visible(self):
+        """A visible entry is clicked without scrolling the menu."""
+        self.assertTrue(click_on_sidemenu_text(0, "Tundra Trek", delay=1.0))
+        self.click_text.assert_called_once_with("Tundra Trek", 0, roi="sidemenu", delay=1.0, last=False)
+        self.scroll_screen.assert_not_called()
+
+    def test_scrolls_and_searches_again_when_missing(self):
+        """A missing entry is searched again after one scroll."""
+        self.click_text.side_effect = [False, True]
+        self.assertTrue(click_on_sidemenu_text(0, "Tree", delay=4, last=True))
+        self.assertEqual(self.click_text.call_count, 2)
+        self.click_text.assert_called_with("Tree", 0, roi="sidemenu", delay=4, last=True)
+        self.scroll_screen.assert_called_once_with(
+            SIDEMENU_SCROLL_START[0],
+            SIDEMENU_SCROLL_START[1],
+            SIDEMENU_SCROLL_END[0],
+            SIDEMENU_SCROLL_END[1],
+            SIDEMENU_SCROLL_DURATION_MS,
+            0,
+            hold_end_ms=SIDEMENU_SCROLL_HOLD_END_MS,
+            delay=1.0,
+        )
+
+    def test_returns_false_after_last_scroll(self):
+        """The helper fails when the entry is still missing after the extra scroll."""
+        self.click_text.return_value = False
+        self.assertFalse(click_on_sidemenu_text(0, "Missing"))
+        self.assertEqual(self.click_text.call_count, 2)
+        self.assertEqual(self.scroll_screen.call_count, 1)
 
 
 class TestIsGameOnScreen(unittest.TestCase):
