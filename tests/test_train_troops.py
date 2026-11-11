@@ -8,7 +8,7 @@ from wosutil.tool.tasks.task_helpers import _train_troop_camp
 
 DEFAULT = 6 * 60 * 60
 ROI_SPEED_UP = (306, 940, 412, 310)
-ROI_TIMER = (458, 920, 127, 38)
+ROI_TIMER = (420, 920, 165, 38)
 ROI_PROMOTE_TEXT = (3, 768, 717, 28)
 ROI_PROMOTE = (561, 394, 159, 274)
 

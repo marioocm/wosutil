@@ -253,7 +253,7 @@ ROI = {
     "pet_skill_tapir_timer": (520, 293, 120, 27),
     "pet_skill_elk_timer": (226, 430, 122, 46),
     "troop_train_speed_up": (306, 940, 412, 310),
-    "troop_train_timer": (458, 920, 127, 38),
+    "troop_train_timer": (420, 920, 165, 38),
     "troop_promote_text": (3, 768, 717, 28),
     "train_troop_promote": (561, 394, 159, 274),
     "world_schedule_utc": (99, 0, 264, 42),

@@ -12,6 +12,7 @@ from PIL import Image
 from wosutil.emulator.image_utils import (
     _TIME_RE,
     _find_first_non_zero_digit_on_image,
+    _parse_timer_candidate,
     _parse_timer_text,
     _preprocess_timer_red_text,
     clear_template_cache,
@@ -130,6 +131,12 @@ class TestImageUtils(unittest.TestCase):
         result, _read_line = self._read_timer(return_value=("1d 06:29:08", 0.99))
 
         self.assertEqual(result, 1 * 86400 + 6 * 3600 + 29 * 60 + 8)
+
+    def test_read_screen_time_keeps_day_prefix_with_confused_letters(self):
+        """A day prefix misread as letters (e.g. 'ld') is not dropped."""
+        result, _read_line = self._read_timer(return_value=("ld 01:03:47", 0.99))
+
+        self.assertEqual(result, 1 * 86400 + 1 * 3600 + 3 * 60 + 47)
 
     def test_read_screen_time_normalizes_ocr_letter_confusions(self):
         """Common OCR letter/digit confusions are corrected before parsing."""
@@ -418,6 +425,10 @@ class TestTimeRegex(unittest.TestCase):
     def test_parser_keeps_day_prefix_for_valid_timer(self):
         """A valid timer with a day prefix is converted to total seconds."""
         self.assertEqual(_parse_timer_text("1d 06:29:08"), (6, 29, 8, 1 * 86400 + 6 * 3600 + 29 * 60 + 8))
+
+    def test_parser_candidate_recovers_day_prefix_from_confused_letters(self):
+        """A day prefix OCR'd as letters (e.g. 'ld') still contributes its days."""
+        self.assertEqual(_parse_timer_candidate("ld 01:03:47"), (1, 3, 47, 1 * 86400 + 1 * 3600 + 3 * 60 + 47))
 
 
 class TestFirstNonZeroDigit(unittest.TestCase):

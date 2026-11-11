@@ -266,7 +266,11 @@ def _preprocess_gray_text(img: Image.Image) -> Image.Image:
 
 
 def _parse_timer_text(text: str) -> Optional[Tuple[int, int, int, int]]:
-    """Parse a timer only when its hour, minute and second fields are valid."""
+    """Parse a timer only when its hour, minute and second fields are valid.
+
+    Accepts the optional ``Nd`` prefix the game shows for timers of a day or
+    more (e.g. ``1d 01:03:47``) and folds it into the total seconds.
+    """
     match = _TIME_RE.search(text)
     if not match:
         return None
@@ -281,11 +285,20 @@ def _parse_timer_text(text: str) -> Optional[Tuple[int, int, int, int]]:
 
 
 def _parse_timer_candidate(text: str) -> Optional[Tuple[int, int, int, int]]:
-    """Parse a timer, retrying with common OCR letter/digit confusions corrected."""
+    """Parse a timer, retrying with common OCR letter/digit confusions corrected.
+
+    The corrected pass is also preferred when it recovers a day prefix the raw
+    text lost (e.g. ``ld 01:03:47`` for ``1d 01:03:47``), because parsing only
+    the clock part would silently drop the days and understate the timer.
+    """
     parsed = _parse_timer_text(text)
-    if parsed is not None:
-        return parsed
-    return _parse_timer_text(text.translate(_DIGIT_CONFUSIONS))
+    corrected_text = text.translate(_DIGIT_CONFUSIONS)
+    corrected = _parse_timer_text(corrected_text)
+    if parsed is None:
+        return corrected
+    if corrected is not None and _DAY_RE.search(corrected_text) and not _DAY_RE.search(text):
+        return corrected
+    return parsed
 
 
 def read_screen_time(
@@ -296,7 +309,10 @@ def read_screen_time(
     screenshot_path: Optional[str] = None,
     quiet: bool = False,
 ) -> Optional[int]:
-    """Read a timer in HH:MM:SS format from an emulator screenshot, returning the time in seconds.
+    """Read a timer from an emulator screenshot, returning the time in seconds.
+
+    Timers are expected in ``HH:MM:SS`` format, optionally prefixed with the
+    game's ``Nd`` day marker (e.g. ``1d 01:03:47``) for values of 24h or more.
 
     By default a fresh screenshot is captured; a caller can pass ``screenshot_path``
     to reuse one it already owns so the same capture can be shared with other OCR
