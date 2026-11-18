@@ -2,7 +2,7 @@
 
 import unittest
 
-from wosutil.gui.gui_instance_status import get_next_task_info
+from wosutil.app.presentation import get_next_task_info
 
 
 class _FakeState:

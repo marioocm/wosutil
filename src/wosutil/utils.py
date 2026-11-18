@@ -15,7 +15,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import tkinter as tk
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
@@ -25,8 +24,11 @@ import psutil
 from wosutil.config import LOG_FILE
 from wosutil.stop import ToolStopped
 
-# Global variable to store the GUI log widget
-gui_log_widget = None
+# Callables invoked as ``observer(message, level)`` for every log line. Views
+# register here instead of owning module-level widget references, so the
+# logging path stays free of any GUI toolkit.
+_log_observers = []
+_log_observers_lock = threading.Lock()
 _logging_configured = False
 
 # Thread-local index of the emulator instance the current thread works on.
@@ -155,10 +157,26 @@ def setup_logging(log_to_file: bool = True) -> None:
     logging.getLogger("wosutil").info("--- Session started ---")
 
 
-def set_gui_log_widget(widget):
-    """Set the GUI log widget for displaying logs in the interface."""
-    global gui_log_widget
-    gui_log_widget = widget
+def add_log_observer(observer):
+    """Register a callable invoked as ``observer(message, level)`` for each line.
+
+    Args:
+        observer: Callable receiving the message and its level. Registering the
+            same callable twice is a no-op.
+    """
+    with _log_observers_lock:
+        if observer not in _log_observers:
+            _log_observers.append(observer)
+
+
+def remove_log_observer(observer):
+    """Unregister a callable added with :func:`add_log_observer`.
+
+    Args:
+        observer: Callable to remove. Missing observers are ignored.
+    """
+    with _log_observers_lock, contextlib.suppress(ValueError):
+        _log_observers.remove(observer)
 
 
 def ensure_directory_exists(directory_path: str) -> bool:
@@ -534,32 +552,24 @@ def log_message(message, level="info"):
     else:
         logger.info(message)
 
-    # Update GUI if available
-    if gui_log_widget is not None:
+    _notify_log_observers(message, level)
+
+
+def _notify_log_observers(message, level):
+    """Send a log line to every registered observer.
+
+    Args:
+        message: Log text.
+        level: Log level name.
+    """
+    with _log_observers_lock:
+        observers = list(_log_observers)
+    for observer in observers:
         try:
-            timestamp = time.strftime("[%H:%M:%S]")
-
-            # Update GUI widget (thread-safe); the tag name matches the level so
-            # the GUI can color it via its tag configuration.
-            gui_log_widget.after(0, lambda: _update_gui_log(timestamp, level, message))
-        except Exception as e:
-            # If GUI update fails, just log the error to console
-            logger.error(f"Failed to update GUI log: {e}")
-
-
-def _update_gui_log(timestamp, level, message):
-    """Update the GUI log widget (called from main thread)."""
-    if gui_log_widget is None:
-        return
-
-    try:
-        gui_log_widget.configure(state="normal")
-        gui_log_widget.insert(tk.END, f"{timestamp} [{level.upper()}] {message}\n", level)
-        gui_log_widget.see(tk.END)
-        gui_log_widget.configure(state="disabled")
-    except Exception:
-        # If widget is destroyed or other error, just ignore
-        pass
+            observer(message, level)
+        except Exception:
+            # A broken view must never take down the thread that logs.
+            logging.getLogger("wosutil").exception("Log observer failed")
 
 
 def get_template_path(template_name: str) -> Optional[str]:

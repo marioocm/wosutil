@@ -1,35 +1,20 @@
 """Main GUI module for WoS Util.
 
-Provides the Tkinter-based graphical interface for the automation tool.
+Tkinter shell over the headless application service: it creates the window,
+renders snapshots and forwards user actions. Application logic lives in
+``wosutil.app``, so this module has no business rules.
 """
 
+import time
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
-from wosutil.emulator.backends import (
-    EMULATOR_BLUESTACKS,
-    EMULATOR_LDPLAYER,
-    EMULATOR_MUMU,
-    create_backend,
-    detect_installed_emulators,
-)
-from wosutil.emulator.emulator_manager import set_active_backend
+from wosutil.app.bootstrap import build_app_context
+from wosutil.app.preferences import EMULATOR_LABELS
+from wosutil.emulator.backends import EMULATOR_MUMU
 from wosutil.gui.gui_dialogs import center_window_on_screen, show_centered_dialog
-from wosutil.preferences import (
-    get_emulator,
-    get_emulator_paths,
-    get_requirements_reminder_seen,
-    load_preferences,
-    mark_requirements_reminder_seen,
-    save_emulator,
-)
-from wosutil.tool.profiles.profile_manager import ProfileManager
-from wosutil.tool.tasks.task_definitions import get_task_definitions
-from wosutil.utils import log_message, set_gui_log_widget
-
-# Global variables
-log_text_widget = None
+from wosutil.utils import log_message
 
 # Logging configuration
 LOG_COLORS = {"info": "white", "error": "red", "warning": "orange", "success": "light green", "adb": "light blue", "debug": "gray"}
@@ -58,9 +43,6 @@ def setup_gui_style():
     style.map("Stop.TButton", background=[("active", "#C0392B")])
 
 
-_EMULATOR_LABELS = {EMULATOR_MUMU: "MuMu Player", EMULATOR_BLUESTACKS: "BlueStacks", EMULATOR_LDPLAYER: "LDPlayer"}
-
-
 def _ask_emulator(window, installed, log_message):
     """Pick the default emulator once (first run with several candidates).
 
@@ -86,14 +68,14 @@ def _ask_emulator(window, installed, log_message):
     top.configure(bg="#2C3E50")
 
     ttk.Label(top, text="Several emulators are installed. Choose the default one:").pack(padx=20, pady=(15, 5))
-    options = [_EMULATOR_LABELS.get(code, code) for code in installed]
+    options = [EMULATOR_LABELS.get(code, code) for code in installed]
     var = tk.StringVar(value=options[0])
     combo = ttk.Combobox(top, textvariable=var, values=options, state="readonly", width=28)
     combo.pack(padx=20, pady=10)
 
     def on_ok():
         label = var.get()
-        chosen["value"] = next((code for code in installed if _EMULATOR_LABELS.get(code, code) == label), installed[0])
+        chosen["value"] = next((code for code in installed if EMULATOR_LABELS.get(code, code) == label), installed[0])
         top.destroy()
 
     ttk.Button(top, text="OK", command=on_ok).pack(pady=(0, 15))
@@ -101,26 +83,42 @@ def _ask_emulator(window, installed, log_message):
     top.wait_window()
 
     selected = chosen["value"] or installed[0]
-    log_message(f"Emulator selected: {_EMULATOR_LABELS.get(selected, selected)}", "info")
+    log_message(f"Emulator selected: {EMULATOR_LABELS.get(selected, selected)}", "info")
     return selected
 
 
-def create_log_tab(notebook):
-    """Create and configure the log tab."""
+def create_log_tab(notebook, service):
+    """Create the log tab and stream the service log history into it.
+
+    Args:
+        notebook: The parent notebook widget.
+        service: Application service exposing ``logs_after``.
+    """
     log_tab = ttk.Frame(notebook)
     notebook.add(log_tab, text="Log")
 
-    global log_text_widget
     log_text_widget = ScrolledText(log_tab, width=70, height=15, font=("Consolas", 9), wrap=tk.WORD, bg="#1F2E3A", fg="#ECF0F1", insertbackground="white")
     log_text_widget.pack(expand=True, fill="both", padx=10, pady=10)
     log_text_widget.configure(state="disabled")
 
-    # Configure color tags
     for level, color in LOG_COLORS.items():
         log_text_widget.tag_config(level, foreground=color)
 
-    # Set the widget in utils for logging
-    set_gui_log_widget(log_text_widget)
+    state = {"seq": 0}
+
+    def pump():
+        entries = service.logs_after(state["seq"])
+        if entries:
+            log_text_widget.configure(state="normal")
+            for entry in entries:
+                state["seq"] = entry["seq"]
+                stamp = time.strftime("[%H:%M:%S]", time.localtime(entry["time"]))
+                log_text_widget.insert(tk.END, f"{stamp} [{entry['level'].upper()}] {entry['message']}\n", entry["level"])
+            log_text_widget.see(tk.END)
+            log_text_widget.configure(state="disabled")
+        log_text_widget.after(300, pump)
+
+    pump()
 
 
 def run_gui():
@@ -130,22 +128,11 @@ def run_gui():
 
     setup_logging()
 
-    # Remove temporary screenshots left behind by crashed sessions.
-    from wosutil.emulator.emulator_manager import cleanup_stale_temp_screenshots
-
-    cleanup_stale_temp_screenshots()
-
     log_message("Starting GUI initialization...", "info")
-
-    # Initialize managers
-    log_message("Initializing profile manager...", "info")
-    profile_manager = ProfileManager(log_message)
-
-    log_message("Loading task definitions...", "info")
-    task_definitions = get_task_definitions()
+    context = build_app_context(log_message)
+    service = context.service
 
     log_message("Creating main window...", "info")
-    # Create main window
     window = tk.Tk()
     window.title("WoS Util")
 
@@ -173,7 +160,7 @@ def run_gui():
     log_message("Main window created and configured", "info")
 
     # --- First-run setup requirements reminder ---
-    if not get_requirements_reminder_seen():
+    if context.requirements_reminder_pending:
         show_centered_dialog(
             window,
             "Setup requirements",
@@ -182,57 +169,12 @@ def run_gui():
             "- Mobile resolution 720p (720x1280 portrait)\n"
             "- Whiteout Survival installed and set to English\n\n",
         )
-        mark_requirements_reminder_seen()
+        service.ack_requirements_reminder()
 
     # --- Emulator selection (first run) ---
-    preferences = load_preferences()
-    emulator_paths = get_emulator_paths(preferences)
-    emulator = get_emulator(preferences)
-    if emulator is None:
-        emulator = _ask_emulator(window, detect_installed_emulators(emulator_paths), log_message)
-        save_emulator(emulator)
-
-    log_message(f"Initializing emulator backend ({emulator})...", "info")
-    backend = create_backend(emulator, log_message, emulator_paths=emulator_paths)
-
-    # Shared state between the tabs: the active backend, the refresh callback
-    # and the tool running flag allow an emulator change made in Preferences to
-    # re-create the backend and re-enumerate instances without a restart.
-    emulator_state = {"backend": backend}
-
-    def switch_emulator(new_emulator, new_emulator_paths=None):
-        """Apply an emulator change made in the Preferences tab.
-
-        Refuses while the tool is running (active instances/queue run against
-        the old backend); otherwise it re-creates the backend, replaces the
-        active manager and forces an instance refresh.
-
-        Args:
-            new_emulator (str): Emulator code, "mumu", "bluestacks" or
-                "ldplayer".
-            new_emulator_paths (dict, optional): Configured executable and
-                instance paths. Defaults to the persisted preferences.
-        """
-        nonlocal backend
-
-        if emulator_state.get("tool_running", {}).get("value"):
-            log_message("Emulator change ignored while the tool is running. It will apply on the next run.", "warning")
-            return
-        label = _EMULATOR_LABELS.get(new_emulator, new_emulator)
-        log_message(f"Switching emulator to {label}...", "info")
-        save_emulator(new_emulator)
-        emulator_paths = new_emulator_paths or get_emulator_paths()
-        backend = create_backend(new_emulator, log_message, emulator_paths=emulator_paths)
-        emulator_state["backend"] = backend
-        controller = emulator_state.get("controller")
-        if controller is not None:
-            controller.set_backend(backend)
-        else:
-            set_active_backend(backend)
-        refresh_instances = emulator_state.get("refresh_instances")
-        if refresh_instances is not None:
-            refresh_instances.force_update = True
-            refresh_instances()
+    if context.needs_emulator_choice:
+        chosen = _ask_emulator(window, context.installed_emulators, log_message)
+        service.set_emulator(chosen)
 
     # Setup GUI style
     log_message("Setting up GUI style...", "info")
@@ -247,34 +189,29 @@ def run_gui():
     log_message("Setting up instances tab...", "info")
     from wosutil.gui.gui_instances import setup_instances_tab
 
-    update_profile_comboboxes = setup_instances_tab(
-        notebook,
-        profile_manager,
-        log_message,
-        task_definitions,
-        emulator_state,
-    )
+    update_profile_comboboxes = setup_instances_tab(notebook, service)
 
     log_message("Setting up profiles tab...", "info")
     from wosutil.gui.gui_profile import setup_profiles_tab
 
-    setup_profiles_tab(
-        notebook,
-        profile_manager,
-        log_message,
-        list(task_definitions.values()),
-        on_profiles_changed=update_profile_comboboxes,
-    )
+    setup_profiles_tab(notebook, service, log_message, on_profiles_changed=update_profile_comboboxes)
 
     log_message("Setting up preferences tab...", "info")
     from wosutil.gui.gui_preferences import setup_preferences_tab
 
-    setup_preferences_tab(notebook, task_definitions, log_message, on_emulator_changed=switch_emulator)
+    setup_preferences_tab(notebook, service)
 
     # Create log tab
     log_message("Creating log tab...", "info")
-    create_log_tab(notebook)
+    create_log_tab(notebook, service)
+
+    def on_close():
+        """Stop the scheduler and close the window."""
+        service.close()
+        window.destroy()
+
+    window.protocol("WM_DELETE_WINDOW", on_close)
 
     log_message("Starting GUI mainloop...", "info")
-    # Start GUI
+    service.start()
     window.mainloop()

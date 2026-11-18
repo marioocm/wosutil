@@ -4,14 +4,13 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 
-def setup_profiles_tab(notebook, profile_manager, log_message, TASK_DEFINITIONS, on_profiles_changed=None):
-    """Setup the profiles tab in the GUI.
+def setup_profiles_tab(notebook, service, log_message, on_profiles_changed=None):
+    """Set up the profiles tab.
 
     Args:
         notebook: The parent notebook widget.
-        profile_manager: Profile manager instance.
+        service: Application service exposing profiles and their commands.
         log_message: Logging function.
-        TASK_DEFINITIONS: Dictionary of task definitions.
         on_profiles_changed: Optional callback invoked after a profile is
             saved or deleted, so other tabs can refresh their profile lists.
     """
@@ -22,13 +21,12 @@ def setup_profiles_tab(notebook, profile_manager, log_message, TASK_DEFINITIONS,
     profile_control_frame.pack(pady=10, padx=10, fill="x")
 
     ttk.Label(profile_control_frame, text="Profile:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-    profile_combobox = ttk.Combobox(profile_control_frame, values=list(profile_manager.profiles.keys()))
+    profile_combobox = ttk.Combobox(profile_control_frame, values=list(service.snapshot()["profiles"]))
     profile_combobox.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-    task_defs_by_id = {task["id"]: task for task in TASK_DEFINITIONS}
     task_checkbox_vars = {}
     task_checkbox_widgets = {}
-    for i, task in enumerate(TASK_DEFINITIONS):
+    for i, task in enumerate(service.task_catalog()):
         var = tk.BooleanVar()
         cb = ttk.Checkbutton(profile_control_frame, text=f"{task['name']} (Priority: {task['priority']})", variable=var)
         cb.grid(row=i + 1, column=0, columnspan=4, sticky="w", padx=10, pady=2)
@@ -37,10 +35,10 @@ def setup_profiles_tab(notebook, profile_manager, log_message, TASK_DEFINITIONS,
 
     def refresh_priorities():
         """Update the priority shown next to each task to the current values."""
-        for task_id, cb in task_checkbox_widgets.items():
-            task = task_defs_by_id.get(task_id)
-            if task is not None:
-                cb.config(text=f"{task['name']} (Priority: {task['priority']})")
+        for task in service.task_catalog():
+            checkbox = task_checkbox_widgets.get(task["id"])
+            if checkbox is not None:
+                checkbox.config(text=f"{task['name']} (Priority: {task['priority']})")
 
     def on_tab_changed(event):
         try:
@@ -53,7 +51,7 @@ def setup_profiles_tab(notebook, profile_manager, log_message, TASK_DEFINITIONS,
 
     def load_profile_selection(*_):
         profile_name = profile_combobox.get()
-        selected_tasks = profile_manager.profiles.get(profile_name, [])
+        selected_tasks = service.snapshot()["profiles"].get(profile_name, [])
         for task_id, var in task_checkbox_vars.items():
             var.set(task_id in selected_tasks)
         log_message(f"Profile '{profile_name}' loaded in selection.", level="info")
@@ -65,9 +63,11 @@ def setup_profiles_tab(notebook, profile_manager, log_message, TASK_DEFINITIONS,
             if not profile_name:
                 return
         selected_tasks = [task_id for task_id, var in task_checkbox_vars.items() if var.get()]
-        profile_manager.profiles[profile_name] = selected_tasks
-        profile_manager.save_profiles()
-        profile_combobox["values"] = list(profile_manager.profiles.keys())
+        result = service.save_profile(profile_name, selected_tasks)
+        if not result.ok:
+            messagebox.showerror("Error", result.error or "Could not save the profile.")
+            return
+        profile_combobox["values"] = list(service.snapshot()["profiles"])
         profile_combobox.set(profile_name)
         if on_profiles_changed is not None:
             on_profiles_changed()
@@ -78,11 +78,13 @@ def setup_profiles_tab(notebook, profile_manager, log_message, TASK_DEFINITIONS,
         if not profile_name:
             messagebox.showerror("Error", "No profile selected to be deleted.")
             return
-        if messagebox.askyesno("Confirm", f"Are you sure you want to delete the profile '{profile_name}'?") and profile_name in profile_manager.profiles:
-            del profile_manager.profiles[profile_name]
-            profile_manager.save_profiles()
+        if messagebox.askyesno("Confirm", f"Are you sure you want to delete the profile '{profile_name}'?"):
+            result = service.delete_profile(profile_name)
+            if not result.ok:
+                messagebox.showerror("Error", result.error or "Could not delete the profile.")
+                return
             profile_combobox.set("")
-            profile_combobox["values"] = list(profile_manager.profiles.keys())
+            profile_combobox["values"] = list(service.snapshot()["profiles"])
             for var in task_checkbox_vars.values():
                 var.set(False)
             if on_profiles_changed is not None:
