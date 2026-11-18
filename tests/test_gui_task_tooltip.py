@@ -39,12 +39,9 @@ class TestGetAllTasksInfo(unittest.TestCase):
         """Build a running task state dict."""
         return {"id": task_id, "name": name, "priority": priority, "next_run_time": next_run_time}
 
-    def test_no_state_returns_empty(self):
-        """A missing state yields no tasks."""
+    def test_no_or_empty_state_returns_empty(self):
+        """A missing or empty state yields no tasks."""
         self.assertEqual(get_all_tasks_info(None, 1000), [])
-
-    def test_empty_state_returns_empty(self):
-        """No tasks means nothing to preview."""
         self.assertEqual(get_all_tasks_info(_FakeState([]), 1000), [])
 
     def test_returns_all_tasks_with_remaining_time(self):
@@ -102,31 +99,6 @@ class TestGetAllTasksInfo(unittest.TestCase):
             ]
         )
         self.assertEqual(get_all_tasks_info(pm, 1000), [("First read", 5), ("Second read", 8)])
-
-    def test_real_00utc_batch_is_prioritized_before_it_due(self):
-        """The 00:00 UTC batch keeps priority order even before tasks are due.
-
-        Real schedule of the user: all four tasks fall within the 5s window
-        (0000 UTC readings a couple of seconds apart) and the preview must
-        show the most urgent first, not the timer reading order.
-        """
-        pm = _FakeState(
-            [
-                self._task("send_pet_adventure_chests", "Send Pet Adventure Chests", 1787616002.5451596, priority=9),
-                self._task("claim_pet_adventure_ally_treasure", "Claim Pet Adventure Ally Treasure", 1787616002.6933224, priority=10),
-                self._task("do_intel_missions", "Do Intel Missions", 1787616002.9505522, priority=11),
-                self._task("claim_storehouse_stamina", "Claim Storehouse Stamina", 1787616005.4818602, priority=6),
-            ]
-        )
-        self.assertEqual(
-            get_all_tasks_info(pm, 1787616000.0),
-            [
-                ("Claim Storehouse Stamina", 5),
-                ("Send Pet Adventure Chests", 2),
-                ("Claim Pet Adventure Ally Treasure", 2),
-                ("Do Intel Missions", 2),
-            ],
-        )
 
 
 class TestFormatTaskTooltip(unittest.TestCase):

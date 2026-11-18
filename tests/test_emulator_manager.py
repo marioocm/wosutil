@@ -124,6 +124,53 @@ class TestRestartAdbServerRateLimit(unittest.TestCase):
             backend.return_value.restart_server.assert_not_called()
 
 
+class TestAdbVerificationCache(unittest.TestCase):
+    """Stale ADB verifications must not survive a restart or a backend switch."""
+
+    def setUp(self):
+        """Save the module globals so each test leaves them untouched."""
+        self._old_cache = dict(emulator_manager._adb_verified_cache)
+        self._old_restart_time = emulator_manager._last_adb_restart_time
+        self._old_backend = emulator_manager._active_backend
+        emulator_manager._adb_verified_cache.clear()
+        emulator_manager._last_adb_restart_time = 0.0
+
+    def tearDown(self):
+        """Restore the module globals."""
+        emulator_manager._adb_verified_cache.clear()
+        emulator_manager._adb_verified_cache.update(self._old_cache)
+        emulator_manager._last_adb_restart_time = self._old_restart_time
+        emulator_manager._active_backend = self._old_backend
+
+    def test_set_active_backend_clears_cache_and_restart_timer(self):
+        """A backend switch must verify ADB again and allow a restart."""
+        emulator_manager._adb_verified_cache["127.0.0.1:16384"] = time.time()
+        emulator_manager._last_adb_restart_time = time.time()
+
+        emulator_manager.set_active_backend(None)
+
+        self.assertEqual(emulator_manager._adb_verified_cache, {})
+        self.assertEqual(emulator_manager._last_adb_restart_time, 0.0)
+
+    def test_force_restart_invalidates_the_serial_verification(self):
+        """A restart must not trust the ADB success cached before it."""
+        backend = MagicMock()
+        backend.get_serial.return_value = "127.0.0.1:16384"
+        emulator_manager._adb_verified_cache["127.0.0.1:16384"] = time.time()
+
+        with (
+            patch("wosutil.emulator.emulator_manager.check_emulator_health", return_value=True),
+            patch("wosutil.emulator.emulator_manager._connect_adb_device"),
+            patch("wosutil.emulator.emulator_manager.time.sleep"),
+            patch("wosutil.emulator.emulator_manager.stop_signal.wait", return_value=False),
+        ):
+            self.assertTrue(force_restart_emulator(0, backend, boot_timeout=1))
+
+        self.assertNotIn("127.0.0.1:16384", emulator_manager._adb_verified_cache)
+        backend.stop_instance.assert_called_once_with(0)
+        backend.start_instance.assert_called_once_with(0)
+
+
 class TestScrollScreen(unittest.TestCase):
     """Test cases for the scroll gesture helper."""
 
