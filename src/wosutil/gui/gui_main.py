@@ -194,7 +194,6 @@ def run_gui():
 
     log_message(f"Initializing emulator backend ({emulator})...", "info")
     backend = create_backend(emulator, log_message, emulator_paths=emulator_paths)
-    set_active_backend(backend)
 
     # Shared state between the tabs: the active backend, the refresh callback
     # and the tool running flag allow an emulator change made in Preferences to
@@ -224,11 +223,12 @@ def run_gui():
         save_emulator(new_emulator)
         emulator_paths = new_emulator_paths or get_emulator_paths()
         backend = create_backend(new_emulator, log_message, emulator_paths=emulator_paths)
-        set_active_backend(backend)
         emulator_state["backend"] = backend
         controller = emulator_state.get("controller")
         if controller is not None:
             controller.set_backend(backend)
+        else:
+            set_active_backend(backend)
         refresh_instances = emulator_state.get("refresh_instances")
         if refresh_instances is not None:
             refresh_instances.force_update = True

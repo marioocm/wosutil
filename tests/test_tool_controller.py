@@ -5,9 +5,9 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from wosutil.emulator.emulator_manager import AdbCommandError
+from wosutil.emulator.emulator_manager import AdbCommandError, get_active_backend, set_active_backend
 from wosutil.stop import stop_signal
-from wosutil.tool.tool_instances_controller import InstanceState, MultiInstanceToolController, pick_scheduled_task
+from wosutil.tool.tool_instances_controller import InstanceRuntime, InstanceState, MultiInstanceToolController, pick_scheduled_task
 
 TASK_A = {"id": "a", "name": "Task A", "function": lambda instance_index: True, "priority": 1, "reschedule_seconds": 1000}
 TASK_B = {"id": "b", "name": "Task B", "function": lambda instance_index: True, "priority": 2, "reschedule_seconds": 2000}
@@ -44,15 +44,6 @@ class FakeBackend:
         return f"serial-{index}"
 
 
-def _checked_widget(index=0, profile_name="All"):
-    """Build a checked instance widget for the given index."""
-    checked = MagicMock()
-    checked.get.return_value = True
-    profile_var = MagicMock()
-    profile_var.get.return_value = profile_name
-    return {"index": index, "checked": checked, "profile_var": profile_var}
-
-
 class ControllerTestCase(unittest.TestCase):
     """Base test case with a controller factory and clean stop signal."""
 
@@ -61,10 +52,11 @@ class ControllerTestCase(unittest.TestCase):
         stop_signal.clear()
 
     def tearDown(self):
-        """Do not leak the stop signal into other tests."""
+        """Do not leak the stop signal or the active backend into other tests."""
         stop_signal.clear()
+        set_active_backend(None)
 
-    def _make_controller(self, backend=None, dialogs=None, widgets=None):
+    def _make_controller(self, backend=None, dialogs=None):
         """Build a controller with mock dependencies and a log capture."""
         self.logs = []
         return MultiInstanceToolController(
@@ -72,13 +64,18 @@ class ControllerTestCase(unittest.TestCase):
             task_definitions=dict(TASK_DEFINITIONS),
             backend=backend or FakeBackend(),
             profiles={"All": ["a", "b"], "All2": ["a", "c"]},
-            instance_widgets=[] if widgets is None else widgets,
             dialog_queue=dialogs,
         )
 
     def _state(self, tasks=None, profile_name="All"):
         """Build an instance state with the given running tasks."""
         return InstanceState(profile_name=profile_name, tasks=list([dict(TASK_A)] if tasks is None else tasks))
+
+    def _add_instance(self, controller, index=0, tasks=None, profile_name="All"):
+        """Register a selected instance in the controller."""
+        runtime = InstanceRuntime(state=self._state(tasks, profile_name))
+        controller.instances[index] = runtime
+        return runtime
 
 
 class TestStartToolAbort(ControllerTestCase):
@@ -87,15 +84,25 @@ class TestStartToolAbort(ControllerTestCase):
     def test_start_tool_aborts_when_adb_blocked(self):
         """start_tool refuses to run and logs the warning when ADB is blocked."""
         controller = self._make_controller(FakeBackend(warnings=["ADB access is blocked."]))
-        self.assertFalse(controller.start_tool())
+        self.assertFalse(controller.start_tool([]))
         self.assertFalse(controller.tool_running)
         self.assertTrue(any("ADB access is blocked" in msg for msg, _level in self.logs))
+
+    def test_controller_owns_the_active_backend(self):
+        """Creating or replacing the backend updates the ADB target too."""
+        first = FakeBackend()
+        controller = self._make_controller(first)
+        self.assertIs(get_active_backend(), first)
+
+        second = FakeBackend()
+        controller.set_backend(second)
+        self.assertIs(get_active_backend(), second)
 
     def test_start_tool_runs_when_adb_ok(self):
         """start_tool runs normally when the backend has no warnings."""
         controller = self._make_controller()
         with patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=False):
-            self.assertTrue(controller.start_tool())
+            self.assertTrue(controller.start_tool([]))
         self.assertTrue(controller.tool_running)
 
     def test_start_tool_refuses_to_overlap_a_running_session(self):
@@ -103,7 +110,7 @@ class TestStartToolAbort(ControllerTestCase):
         controller = self._make_controller()
         controller.tool_running = True
 
-        self.assertFalse(controller.start_tool())
+        self.assertFalse(controller.start_tool([]))
         self.assertTrue(controller.tool_running)
         self.assertTrue(any("already running" in msg for msg, _level in self.logs))
 
@@ -112,9 +119,9 @@ class TestStartToolAbort(ControllerTestCase):
         controller = self._make_controller()
         worker = MagicMock()
         worker.is_alive.return_value = True
-        controller.instance_threads[0] = worker
+        controller.instances[0] = InstanceRuntime(state=self._state(), thread=worker)
 
-        self.assertFalse(controller.start_tool())
+        self.assertFalse(controller.start_tool([]))
         self.assertFalse(controller.tool_running)
         self.assertTrue(any("still stopping" in msg for msg, _level in self.logs))
 
@@ -125,18 +132,14 @@ class TestStartToolAbort(ControllerTestCase):
         worker = MagicMock()
         worker.is_alive.return_value = True
         controller.tool_running = True
-        controller._active_instances.add(0)
-        controller._selected_instances[0] = "All"
-        controller.states[0] = self._state()
-        controller.instance_threads[0] = worker
+        controller.instances[0] = InstanceRuntime(state=self._state(), thread=worker)
 
         controller.stop_tool()
 
-        self.assertIs(controller.instance_threads[0], worker)
+        self.assertIs(controller.instances[0].thread, worker)
         worker.join.assert_called_once_with(timeout=5.0)
         self.assertEqual(backend.stop_calls, 1)
-        self.assertEqual(controller._active_instances, set())
-        self.assertEqual(controller.states, {})
+        self.assertTrue(controller.is_active(0))
 
 
 class TestGameNotInstalledAbort(ControllerTestCase):
@@ -146,7 +149,7 @@ class TestGameNotInstalledAbort(ControllerTestCase):
         """Missing game: clear error, one stop, no relaunch and no retry."""
         backend = FakeBackend()
         controller = self._make_controller(backend)
-        controller.states[0] = self._state(tasks=[])
+        runtime = self._add_instance(controller, tasks=[])
         with (
             patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
             patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=False),
@@ -156,8 +159,8 @@ class TestGameNotInstalledAbort(ControllerTestCase):
         mock_launch.assert_not_called()
         self.assertEqual(backend.stop_calls, 1)
         self.assertEqual(backend.start_calls, 1)
-        self.assertNotIn(0, controller._active_instances)
-        self.assertEqual(controller._launch_attempts, {})
+        self.assertFalse(controller.is_active(0))
+        self.assertEqual(runtime.launch_attempts, 0)
         self.assertTrue(controller.is_aborted(0))
         self.assertTrue(any("not installed" in msg for msg, _level in self.logs))
 
@@ -165,7 +168,7 @@ class TestGameNotInstalledAbort(ControllerTestCase):
         """A (title, text) dialog request is queued for the GUI main thread."""
         dialogs = queue.Queue()
         controller = self._make_controller(dialogs=dialogs)
-        controller.states[0] = self._state(tasks=[])
+        self._add_instance(controller, tasks=[])
         with (
             patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
             patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=False),
@@ -185,25 +188,25 @@ class TestLaunchFailures(ControllerTestCase):
         """A worker scheduled just before Stop must not open the emulator."""
         backend = FakeBackend()
         controller = self._make_controller(backend)
-        controller.states[0] = self._state()
+        self._add_instance(controller)
         stop_signal.set()
 
         controller._run_instance(0)
 
         self.assertEqual(backend.start_calls, 0)
         self.assertEqual(backend.stop_calls, 0)
-        self.assertNotIn(0, controller._active_instances)
+        self.assertFalse(controller.is_active(0))
 
     def test_start_failure_counts_toward_retry_attempts(self):
         """A failed emulator start releases the slot and counts an attempt."""
         backend = FakeBackend(start_result=False)
         controller = self._make_controller(backend)
-        controller.states[0] = self._state()
+        runtime = self._add_instance(controller)
 
         controller._run_instance(0)
 
-        self.assertEqual(controller._launch_attempts[0], 1)
-        self.assertNotIn(0, controller._active_instances)
+        self.assertEqual(runtime.launch_attempts, 1)
+        self.assertFalse(controller.is_active(0))
         self.assertEqual(backend.stop_calls, 1)
 
     def test_start_failure_pauses_after_max_attempts(self):
@@ -211,46 +214,46 @@ class TestLaunchFailures(ControllerTestCase):
         backend = FakeBackend(start_result=False)
         controller = self._make_controller(backend)
         controller.max_launch_attempts = 1
-        controller.states[0] = self._state()
+        runtime = self._add_instance(controller)
 
         controller._run_instance(0)
 
-        self.assertGreater(controller._retry_blocked_until[0], time.time())
-        self.assertEqual(controller._launch_attempts[0], 0)
+        self.assertGreater(runtime.retry_blocked_until, time.time())
+        self.assertEqual(runtime.launch_attempts, 0)
 
     def test_adb_failure_restarts_the_emulator_before_giving_up(self):
         """A failed ADB connection triggers one emulator restart attempt."""
         backend = FakeBackend()
         controller = self._make_controller(backend)
-        controller.states[0] = self._state()
+        runtime = self._add_instance(controller)
         with (
             patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=False),
             patch("wosutil.tool.tool_instances_controller.force_restart_emulator", return_value=False) as mock_restart,
         ):
             controller._run_instance(0)
         mock_restart.assert_called_once_with(0, backend)
-        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertEqual(runtime.launch_attempts, 1)
         self.assertEqual(backend.stop_calls, 1)
 
     def test_game_launch_failure_counts_toward_retry_attempts(self):
         """A failed game launch releases the slot and counts an attempt."""
         backend = FakeBackend()
         controller = self._make_controller(backend)
-        controller.states[0] = self._state()
+        runtime = self._add_instance(controller)
         with (
             patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
             patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=True),
             patch("wosutil.tool.tool_instances_controller.retry_operation", return_value=False),
         ):
             controller._run_instance(0)
-        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertEqual(runtime.launch_attempts, 1)
         self.assertEqual(backend.stop_calls, 1)
 
     def test_startup_exception_counts_toward_retry_attempts(self):
         """An ADB crash during startup must count as a launch failure."""
         backend = FakeBackend()
         controller = self._make_controller(backend)
-        controller.states[0] = self._state()
+        runtime = self._add_instance(controller)
 
         def run_once(operation, **_kwargs):
             return operation()
@@ -263,8 +266,8 @@ class TestLaunchFailures(ControllerTestCase):
         ):
             controller._run_instance(0)
 
-        self.assertEqual(controller._launch_attempts[0], 1)
-        self.assertNotIn(0, controller._active_instances)
+        self.assertEqual(runtime.launch_attempts, 1)
+        self.assertFalse(controller.is_active(0))
         self.assertEqual(backend.stop_calls, 1)
 
     def test_startup_exception_backs_off_after_max_attempts(self):
@@ -272,7 +275,7 @@ class TestLaunchFailures(ControllerTestCase):
         backend = FakeBackend()
         controller = self._make_controller(backend)
         controller.max_launch_attempts = 1
-        controller.states[0] = self._state()
+        runtime = self._add_instance(controller)
 
         def run_once(operation, **_kwargs):
             return operation()
@@ -285,7 +288,7 @@ class TestLaunchFailures(ControllerTestCase):
         ):
             controller._run_instance(0)
 
-        self.assertGreater(controller._retry_blocked_until[0], time.time())
+        self.assertGreater(runtime.retry_blocked_until, time.time())
 
 
 class TestInstanceWorker(ControllerTestCase):
@@ -305,12 +308,12 @@ class TestInstanceWorker(ControllerTestCase):
         """A far next task closes the emulator and the scheduler keeps the slot."""
         backend = FakeBackend()
         controller = self._make_controller(backend)
-        controller.states[0] = self._state(tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}])
+        self._add_instance(controller, tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}])
         patches = self._startup_patches(controller)
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             controller._run_instance(0)
         self.assertEqual(backend.stop_calls, 1)
-        self.assertNotIn(0, controller._active_instances)
+        self.assertFalse(controller.is_active(0))
         self.assertTrue(any("more than" in msg for msg, _level in self.logs))
 
     def test_health_check_failure_restarts_or_releases_the_slot(self):
@@ -318,7 +321,7 @@ class TestInstanceWorker(ControllerTestCase):
         backend = FakeBackend()
         controller = self._make_controller(backend)
         controller.health_check_interval = -1
-        controller.states[0] = self._state(tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}])
+        runtime = self._add_instance(controller, tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}])
         patches = self._startup_patches(controller)
         with (
             patches[0],
@@ -331,22 +334,20 @@ class TestInstanceWorker(ControllerTestCase):
         ):
             controller._run_instance(0)
         mock_restart.assert_called_once_with(0, backend)
-        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertEqual(runtime.launch_attempts, 1)
         self.assertEqual(backend.stop_calls, 1)
 
     def test_no_tasks_releases_the_slot(self):
         """An empty profile closes the instance and stops scheduling it."""
         backend = FakeBackend()
         controller = self._make_controller(backend)
-        controller.states[0] = self._state(tasks=[])
-        controller._selected_instances[0] = "All"
+        runtime = self._add_instance(controller, tasks=[])
         controller.tool_running = True
         patches = self._startup_patches(controller)
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             controller._run_instance(0)
         self.assertEqual(backend.stop_calls, 1)
-        with controller._state_lock:
-            self.assertIsNone(controller._next_run_time(0))
+        self.assertEqual(runtime.state.tasks, [])
 
 
 class TestScheduler(ControllerTestCase):
@@ -361,8 +362,7 @@ class TestScheduler(ControllerTestCase):
 
     def _select(self, index, next_run_time, profile_name="All"):
         """Register a selected instance with a single scheduled task."""
-        self.controller._selected_instances[index] = profile_name
-        self.controller.states[index] = self._state(tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": next_run_time}])
+        self._add_instance(self.controller, index=index, tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": next_run_time}], profile_name=profile_name)
 
     def _launch(self):
         """Run one scheduler pass and return the patched Thread factory."""
@@ -377,7 +377,7 @@ class TestScheduler(ControllerTestCase):
         thread_factory = self._launch()
         thread_factory.return_value.start.assert_called_once()
         self.assertEqual(thread_factory.call_args.kwargs["args"], (0,))
-        self.assertIn(0, self.controller._active_instances)
+        self.assertTrue(self.controller.is_active(0))
 
     def test_future_task_within_startup_window_is_started(self):
         """The instance opens shortly before its next task."""
@@ -388,37 +388,36 @@ class TestScheduler(ControllerTestCase):
         """A distant task keeps the emulator closed."""
         self._select(0, time.time() + 61)
         self._launch().return_value.start.assert_not_called()
-        self.assertEqual(self.controller._active_instances, set())
+        self.assertFalse(self.controller.is_active(0))
 
     def test_instance_without_tasks_is_not_started(self):
         """A profile with no tasks never opens an emulator."""
-        self.controller._selected_instances[0] = "All"
-        self.controller.states[0] = self._state(tasks=[])
+        self._add_instance(self.controller, tasks=[])
         self._launch().return_value.start.assert_not_called()
 
     def test_aborted_instance_is_not_started(self):
         """A permanently aborted instance is never resurrected."""
         self._select(0, time.time() - 1)
-        self.controller._aborted_instances.add(0)
+        self.controller.instances[0].aborted = True
         self._launch().return_value.start.assert_not_called()
 
     def test_retry_blocked_instance_is_not_started_until_cooldown(self):
         """A paused instance is skipped while the retry cooldown runs."""
         self._select(0, time.time() - 1)
-        self.controller._retry_blocked_until[0] = time.time() + 300
+        self.controller.instances[0].retry_blocked_until = time.time() + 300
         self._launch().return_value.start.assert_not_called()
 
     def test_active_instance_is_not_started_twice(self):
         """An instance already running keeps its slot."""
         self._select(0, time.time() - 1)
-        self.controller._active_instances.add(0)
+        self.controller.instances[0].thread = MagicMock()
         self._launch().return_value.start.assert_not_called()
 
     def test_emulator_limit_is_honored(self):
         """No instance starts when every slot is busy."""
         self.controller.set_max_instances(1)
         self._select(0, time.time() - 1)
-        self.controller._active_instances.add(1)
+        self.controller.instances[1] = InstanceRuntime(state=self._state(tasks=[]), thread=MagicMock())
         self._launch().return_value.start.assert_not_called()
 
     def test_earliest_task_gets_the_free_slot_first(self):
@@ -436,7 +435,7 @@ class TestScheduler(ControllerTestCase):
         self._select(0, time.time() - 1)
         dead = MagicMock()
         dead.is_alive.return_value = False
-        self.controller.instance_threads[0] = dead
+        self.controller.instances[0].thread = dead
         self._launch().return_value.start.assert_called_once()
 
     def test_pending_position_reflects_start_order(self):
@@ -534,9 +533,8 @@ class TestScheduleMemory(ControllerTestCase):
             patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved_schedule),
             patch("wosutil.tool.tool_instances_controller.save_task_schedule"),
         ):
-            controller.instance_widgets.append(_checked_widget(profile_name=profile_name))
-            self.assertTrue(controller.start_tool())
-        return controller.states[0].tasks
+            self.assertTrue(controller.start_tool([(0, profile_name)]))
+        return controller.instances[0].state.tasks
 
     def test_start_tool_restores_saved_next_run_times(self):
         """A saved future time keeps the remaining wait of the task."""
@@ -582,8 +580,7 @@ class TestScheduleMemory(ControllerTestCase):
             patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved),
             patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save,
         ):
-            controller.instance_widgets.append(_checked_widget())
-            self.assertTrue(controller.start_tool())
+            self.assertTrue(controller.start_tool([(0, "All")]))
         persisted = mock_save.call_args.args[0]
         # The profile only contains a and b, but z is kept for a future switch back
         self.assertIn("z", persisted["0"])
@@ -597,7 +594,7 @@ class TestScheduleMemory(ControllerTestCase):
             patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value={"0": {"a": {"next_run_time": 1.0}}}),
             patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save,
         ):
-            self.assertTrue(controller.start_tool())
+            self.assertTrue(controller.start_tool([]))
         mock_save.assert_not_called()
 
     def test_start_tool_keeps_current_behavior_when_memory_disabled(self):
@@ -608,10 +605,9 @@ class TestScheduleMemory(ControllerTestCase):
             patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=False),
             patch("wosutil.tool.tool_instances_controller.load_task_schedule") as mock_load,
         ):
-            controller.instance_widgets.append(_checked_widget())
-            self.assertTrue(controller.start_tool())
+            self.assertTrue(controller.start_tool([(0, "All")]))
         mock_load.assert_not_called()
-        tasks = controller.states[0].tasks
+        tasks = controller.instances[0].state.tasks
         self.assertEqual(len(tasks), 2)
         for task in tasks:
             self.assertLessEqual(task["next_run_time"], time.time())
@@ -622,8 +618,7 @@ class TestSchedulePersistenceInWorker(ControllerTestCase):
 
     def _run_worker_once(self, controller, state):
         """Run the instance worker synchronously with the emulator stack stubbed."""
-        controller.states[0] = state
-        controller._selected_instances[0] = "All"
+        controller.instances[0] = InstanceRuntime(state=state)
         with (
             patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
             patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=True),

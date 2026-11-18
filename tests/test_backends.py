@@ -139,11 +139,9 @@ class TestMumuDiscovery(unittest.TestCase):
             {"MuMuPlayerGlobal-15.0-0": "Healer", "MuMuPlayerGlobal-12.0-1": "Antnee"},
         )
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None, instance_base_path=vms)
-        with patch("wosutil.emulator.backends.save_instance_cache") as mock_save:
-            instances = backend.get_instances()
+        instances = backend.get_instances()
 
         self.assertEqual(instances, [{"index": 0, "name": "Healer"}, {"index": 1, "name": "Antnee"}])
-        mock_save.assert_called_once_with(instances)
 
     def test_get_instances_missing_dir_returns_empty(self):
         """A missing vms dir yields no instances."""
@@ -186,22 +184,19 @@ class TestBlueStacksBackend(unittest.TestCase):
         self.backend = backends.BlueStacksBackend(log_func=lambda *a, **k: None, conf_path=self.conf_path)
 
     def test_get_instances(self):
-        """Instances map to stable integer indices and update the cache."""
-        with patch("wosutil.emulator.backends.save_instance_cache") as mock_save:
-            instances = self.backend.get_instances()
-            self.assertEqual(instances, [{"index": 0, "name": "Nougat"}, {"index": 1, "name": "Mario"}])
-            mock_save.assert_called_once_with(instances)
+        """Instances map to stable integer indices."""
+        instances = self.backend.get_instances()
+        self.assertEqual(instances, [{"index": 0, "name": "Nougat"}, {"index": 1, "name": "Mario"}])
 
     def test_instances_refresh_rebuilds_index_map(self):
         """A config change is picked up on the next call, keeping stable slots."""
-        with patch("wosutil.emulator.backends.save_instance_cache"):
-            new_conf = SAMPLE_CONF + 'bst.instance.Rogue64.display_name="Paco"\nbst.instance.Rogue64.status.adb_port="5558"\n'
-            with open(self.conf_path, "a", encoding="utf-8") as f:
-                f.write(new_conf)
-            instances = self.backend.get_instances()
-            self.assertEqual([i["name"] for i in instances], ["Nougat", "Mario", "Paco"])
-            self.assertEqual(instances[2]["index"], 2)
-            self.assertEqual(self.backend.get_serial(2), "127.0.0.1:5558")
+        new_conf = SAMPLE_CONF + 'bst.instance.Rogue64.display_name="Paco"\nbst.instance.Rogue64.status.adb_port="5558"\n'
+        with open(self.conf_path, "a", encoding="utf-8") as f:
+            f.write(new_conf)
+        instances = self.backend.get_instances()
+        self.assertEqual([i["name"] for i in instances], ["Nougat", "Mario", "Paco"])
+        self.assertEqual(instances[2]["index"], 2)
+        self.assertEqual(self.backend.get_serial(2), "127.0.0.1:5558")
 
     def test_serial_mapping(self):
         """Serial mapping uses each BlueStacks instance ADB port."""
@@ -296,20 +291,17 @@ class TestLDPlayerBackend(unittest.TestCase):
         self.backend = backends.LDPlayerBackend(log_func=lambda *a, **k: None, config_dir=self.config_dir)
 
     def test_get_instances(self):
-        """Instances map to stable integer indices and update the cache."""
-        with patch("wosutil.emulator.backends.save_instance_cache") as mock_save:
-            instances = self.backend.get_instances()
-            self.assertEqual(instances, [{"index": 0, "name": "Mario"}, {"index": 1, "name": "Krys"}])
-            mock_save.assert_called_once_with(instances)
+        """Instances map to stable integer indices."""
+        instances = self.backend.get_instances()
+        self.assertEqual(instances, [{"index": 0, "name": "Mario"}, {"index": 1, "name": "Krys"}])
 
     def test_instances_refresh_rebuilds_index_map(self):
         """A new config file is picked up on the next call, keeping stable slots."""
-        with patch("wosutil.emulator.backends.save_instance_cache"):
-            with open(os.path.join(self.config_dir, "leidian2.config"), "w", encoding="utf-8") as f:
-                f.write('{"basicSettings.adbDebug": 1, "statusSettings.playerName": "Paco"}')
-            instances = self.backend.get_instances()
-            self.assertEqual([i["name"] for i in instances], ["Mario", "Krys", "Paco"])
-            self.assertEqual(instances[2]["index"], 2)
+        with open(os.path.join(self.config_dir, "leidian2.config"), "w", encoding="utf-8") as f:
+            f.write('{"basicSettings.adbDebug": 1, "statusSettings.playerName": "Paco"}')
+        instances = self.backend.get_instances()
+        self.assertEqual([i["name"] for i in instances], ["Mario", "Krys", "Paco"])
+        self.assertEqual(instances[2]["index"], 2)
 
     def test_serial_mapping(self):
         """Serials follow the emulator-5554 + 2*index LDPlayer scheme."""
