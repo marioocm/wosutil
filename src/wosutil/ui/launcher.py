@@ -67,6 +67,7 @@ def open_app_window(url: str) -> bool:
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-sync",
+        "--disable-background-mode",
         f"--window-size={WINDOW_SIZE}",
     ]
 
