@@ -5,15 +5,23 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from wosutil.emulator.instance_cache import load_instance_cache
+from wosutil.config import INSTANCE_SELECTION_FILE
+from wosutil.emulator.instance_cache import load_instance_cache, save_instance_cache
 from wosutil.gui.gui_dialogs import show_centered_dialog
 from wosutil.gui.gui_instance_status import format_instance_status, format_task_tooltip
 from wosutil.gui.gui_tooltip import Tooltip
-from wosutil.tool.tool_instances_controller import (
-    MultiInstanceToolController,
-    load_instance_selection,
-    save_instance_selection,
-)
+from wosutil.tool.tool_instances_controller import MultiInstanceToolController
+from wosutil.utils import load_json_file, save_json_file
+
+
+def load_instance_selection():
+    """Load the instance selection from the JSON file."""
+    return load_json_file(INSTANCE_SELECTION_FILE, default_value={})
+
+
+def save_instance_selection(selection):
+    """Save the instance selection to the JSON file."""
+    return save_json_file(INSTANCE_SELECTION_FILE, selection)
 
 
 def _build_editable_rows(parent, instances, profiles, selection, on_change):
@@ -125,7 +133,6 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
         task_definitions=task_definitions,
         backend=get_backend(),
         profiles=profile_manager.profiles,
-        instance_widgets=instance_widgets,
         dialog_queue=dialog_queue,
     )
     controller.set_max_instances(max_emus_value)
@@ -134,6 +141,13 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
     # --- Tool state ---
     tool_running = emulator_state.get("tool_running") or {"value": False}
     emulator_state["tool_running"] = tool_running
+
+    def save_selection():
+        """Persist the checkbox and profile choices shown in the tab."""
+        selection = {}
+        for inst in instance_widgets:
+            selection[str(inst["index"])] = {"checked": inst["checked"].get(), "profile": inst["profile_var"].get()}
+        save_instance_selection(selection)
 
     def refresh_instances():
         for widget in instance_list_frame.winfo_children():
@@ -145,8 +159,7 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
 
         if force_update:
             instances = get_backend().get_instances()
-            if not instances:
-                instances = load_instance_cache()
+            save_instance_cache(instances)
         else:
             instances = load_instance_cache()
 
@@ -154,7 +167,7 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
         instance_selection = load_instance_selection()
 
         if not tool_running["value"]:
-            instance_widgets.extend(_build_editable_rows(instance_list_frame, instances, profiles, instance_selection, controller.on_checkbox_or_profile_change))
+            instance_widgets.extend(_build_editable_rows(instance_list_frame, instances, profiles, instance_selection, save_selection))
         else:
             instance_widgets.extend(_build_running_rows(instance_list_frame, instances, profiles, instance_selection, lambda idx: format_task_tooltip(controller.state_for(idx), time.time())))
 
@@ -187,6 +200,7 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
         start_btn.pack(side="left", padx=10, pady=10)
 
     def on_start_tool():
+        selection = [(inst["index"], inst["profile_var"].get()) for inst in instance_widgets if inst["checked"].get()]
         # Abort before switching to the running UI if the backend cannot
         # control the emulator (e.g. BlueStacks has ADB access disabled).
         adb_warnings = get_backend().check_adb_access()
@@ -197,7 +211,7 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
             show_centered_dialog(notebook, "Tool not started", "\n\n".join(adb_warnings))
             return
 
-        if not controller.start_tool():
+        if not controller.start_tool(selection):
             return
 
         tool_running["value"] = True

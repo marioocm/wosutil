@@ -37,7 +37,6 @@ from wosutil.config import (
     MUMU_INSTANCE_BASE_PATH,
     MUMU_MULTI_PLAYER_PATH,
 )
-from wosutil.emulator.instance_cache import save_instance_cache
 from wosutil.emulator.window_utils import minimize_process_windows, minimize_windows_by_title
 from wosutil.utils import (
     _detached_creation_flags,
@@ -295,10 +294,8 @@ class EmulatorBackend(ABC):
         """Return the emulator instances as dicts with 'index' and 'name'."""
 
     def get_instances(self):
-        """Return the instance list and refresh the shared instance cache."""
-        instances = self.list_instances()
-        save_instance_cache(instances)
-        return instances
+        """Return the emulator instances as dicts with 'index' and 'name'."""
+        return self.list_instances()
 
     # --- Instance details (emulator specific) ---
 

@@ -14,8 +14,15 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Optional
 
-from wosutil.config import INSTANCE_SELECTION_FILE, WHITEOUT_PACKAGE
-from wosutil.emulator.emulator_manager import check_emulator_health, force_restart_emulator, invalidate_adb_verification, is_wos_installed, verify_adb_connected
+from wosutil.config import WHITEOUT_PACKAGE
+from wosutil.emulator.emulator_manager import (
+    check_emulator_health,
+    force_restart_emulator,
+    invalidate_adb_verification,
+    is_wos_installed,
+    set_active_backend,
+    verify_adb_connected,
+)
 from wosutil.preferences import get_remember_schedule
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.tool.tasks.task_schedule import (
@@ -26,7 +33,7 @@ from wosutil.tool.tasks.task_schedule import (
     snapshot_instance_schedule,
 )
 from wosutil.tool.utc_time import sync_utc_time
-from wosutil.utils import instance_log_context, load_json_file, retry_operation, safe_int, save_json_file
+from wosutil.utils import instance_log_context, retry_operation, safe_int
 
 # Tasks whose run times are closer than this are considered the same time
 # window: when both are due (or become due within the window), the priority
@@ -58,6 +65,22 @@ class InstanceState:
     tasks: list = field(default_factory=list)
     current_task_name: Optional[str] = None
     opening: bool = False
+
+
+@dataclass
+class InstanceRuntime:
+    """Everything the controller needs to track for one selected instance."""
+
+    state: InstanceState
+    thread: Optional[threading.Thread] = None
+    launch_attempts: int = 0
+    retry_blocked_until: float = 0.0
+    aborted: bool = False
+
+    @property
+    def is_active(self):
+        """Return True while a worker owns the instance slot."""
+        return self.thread is not None
 
 
 def pick_scheduled_task(task_state, now):
@@ -97,39 +120,18 @@ def pick_scheduled_task(task_state, now):
     return target, target["next_run_time"]
 
 
-def load_instance_selection():
-    """Load the instance selection from the JSON file.
-
-    Returns:
-        dict: Dictionary with instance selection data.
-    """
-    return load_json_file(INSTANCE_SELECTION_FILE, default_value={})
-
-
-def save_instance_selection(selection):
-    """Save the instance selection to the JSON file.
-
-    Args:
-        selection (dict): Dictionary with instance selection data.
-
-    Returns:
-        bool: True if saved successfully.
-    """
-    return save_json_file(INSTANCE_SELECTION_FILE, selection)
-
-
 class MultiInstanceToolController:
     """Run the selected profiles across emulator instances."""
 
-    def __init__(self, log_message, task_definitions, backend, profiles, instance_widgets, dialog_queue=None):
+    def __init__(self, log_message, task_definitions, backend, profiles, dialog_queue=None):
         """Initialize the controller.
 
         Args:
             log_message: Logging function.
             task_definitions (dict): Task definitions.
-            backend: The emulator backend used to start/stop instances.
+            backend: The emulator backend used to start/stop instances. It
+                also becomes the active backend for every ADB command.
             profiles (dict): Task profiles (name -> task ids).
-            instance_widgets (list): Instance rows shown in the GUI.
             dialog_queue (queue.Queue, optional): Queue where worker threads
                 push (title, text) pairs the GUI must show as dialogs.
         """
@@ -137,7 +139,6 @@ class MultiInstanceToolController:
         self.task_definitions = task_definitions
         self.backend = backend
         self.profiles = profiles
-        self.instance_widgets = instance_widgets
         self.dialog_queue = dialog_queue
 
         self.max_launch_attempts = 3
@@ -149,21 +150,18 @@ class MultiInstanceToolController:
         self._state_lock = threading.RLock()
         self._schedule_lock = threading.Lock()
 
-        self.states: dict[int, InstanceState] = {}
-        self._selected_instances: dict[int, str] = {}
-        self._active_instances: set[int] = set()
-        self.instance_threads: dict[int, threading.Thread] = {}
-        self._launch_attempts: dict[int, int] = {}
-        self._retry_blocked_until: dict[int, float] = {}
-        self._aborted_instances: set[int] = set()
+        self.instances: dict[int, InstanceRuntime] = {}
         self._max_instances = DEFAULT_MAX_INSTANCES
         self._task_schedule = None
+
+        set_active_backend(backend)
 
     # --- Public state used by the GUI ---
 
     def set_backend(self, backend):
-        """Replace the emulator backend (e.g. after a Preferences change)."""
+        """Replace the emulator backend and make it the active ADB target."""
         self.backend = backend
+        set_active_backend(backend)
 
     def set_max_instances(self, value):
         """Set the maximum number of simultaneously open emulators."""
@@ -173,23 +171,27 @@ class MultiInstanceToolController:
     def state_for(self, index):
         """Return the scheduling state of an instance (None when not selected)."""
         with self._state_lock:
-            return self.states.get(index)
+            runtime = self.instances.get(index)
+            return runtime.state if runtime else None
 
     def is_active(self, index):
         """Return True when the instance has a running worker."""
         with self._state_lock:
-            return index in self._active_instances
+            runtime = self.instances.get(index)
+            return runtime.is_active if runtime else False
 
     def is_aborted(self, index):
         """Return True when the instance was permanently aborted (game missing)."""
         with self._state_lock:
-            return index in self._aborted_instances
+            runtime = self.instances.get(index)
+            return runtime.aborted if runtime else False
 
     def retry_seconds_remaining(self, index, now=None):
         """Return the seconds the instance is paused before its next retry."""
         now = time.time() if now is None else now
         with self._state_lock:
-            return max(0.0, self._retry_blocked_until.get(index, 0) - now)
+            runtime = self.instances.get(index)
+            return max(0.0, runtime.retry_blocked_until - now) if runtime else 0.0
 
     def pending_position(self, index):
         """Return the 1-based start order of a waiting instance (None if absent)."""
@@ -201,17 +203,15 @@ class MultiInstanceToolController:
                 return position
         return None
 
-    def on_checkbox_or_profile_change(self):
-        """Persist the instance selection and profile choices."""
-        selection = {}
-        for inst in self.instance_widgets:
-            selection[str(inst["index"])] = {"checked": inst["checked"].get(), "profile": inst["profile_var"].get()}
-        save_instance_selection(selection)
-
     # --- Tool lifecycle ---
 
-    def start_tool(self):
+    def start_tool(self, selection):
         """Start the automation tool.
+
+        Args:
+            selection: Iterable of ``(instance_index, profile_name)`` pairs the
+                caller wants to run. The GUI builds it from its checkboxes; a
+                CLI can pass plain data.
 
         Returns:
             bool: True if the tool started, False if it was rejected (already
@@ -221,17 +221,12 @@ class MultiInstanceToolController:
             if self.tool_running:
                 self.log_message("The tool is already running.", level="warning")
                 return False
-            if any(thread.is_alive() for thread in self.instance_threads.values()):
+            self._forget_dead_threads_locked()
+            if any(runtime.thread is not None for runtime in self.instances.values()):
                 self.log_message("The previous tool session is still stopping. Try again in a moment.", level="warning")
                 return False
             self.tool_running = True
-            self.states.clear()
-            self._selected_instances.clear()
-            self._active_instances.clear()
-            self.instance_threads.clear()
-            self._launch_attempts.clear()
-            self._retry_blocked_until.clear()
-            self._aborted_instances.clear()
+            self.instances.clear()
 
         self.tool_should_stop.clear()
 
@@ -249,17 +244,12 @@ class MultiInstanceToolController:
         self._task_schedule = load_task_schedule() if get_remember_schedule() else None
         now = time.time()
         with self._state_lock:
-            for inst in self.instance_widgets:
-                if not inst["checked"].get():
-                    continue
-                idx = inst["index"]
-                profile_name = inst["profile_var"].get()
-                saved_tasks = load_saved_tasks(self._task_schedule, idx) if self._task_schedule is not None else {}
+            for index, profile_name in selection:
+                saved_tasks = load_saved_tasks(self._task_schedule, index) if self._task_schedule is not None else {}
                 tasks = self._build_tasks(profile_name, saved_tasks, now)
-                self.states[idx] = InstanceState(profile_name=profile_name, tasks=tasks)
-                self._selected_instances[idx] = profile_name
+                self.instances[index] = InstanceRuntime(state=InstanceState(profile_name=profile_name, tasks=tasks))
 
-        if self._task_schedule is not None and self._selected_instances:
+        if self._task_schedule is not None and self.instances:
             self._persist_schedules()
         self.launch_due_instances()
         return True
@@ -269,32 +259,25 @@ class MultiInstanceToolController:
         with self._state_lock:
             self.tool_running = False
             self.tool_should_stop.set()
-            active_instances = list(self._active_instances)
-            worker_threads = list(self.instance_threads.values())
+            runtimes = list(self.instances.items())
 
-        for idx in active_instances:
-            self.log_message(f"Closing emulator of instance {idx} while stopping the tool...", "info")
-            self._close_instance(idx)
+        for idx, runtime in runtimes:
+            if runtime.thread is not None:
+                self.log_message(f"Closing emulator of instance {idx} while stopping the tool...", "info")
+                self._close_instance(idx)
 
-        for thread in worker_threads:
-            if thread.is_alive():
-                thread.join(timeout=5.0)
+        for _idx, runtime in runtimes:
+            if runtime.thread is not None and runtime.thread.is_alive():
+                runtime.thread.join(timeout=5.0)
 
         with self._state_lock:
-            live_threads = [thread for thread in self.instance_threads.values() if thread.is_alive()]
-            self._active_instances.clear()
-            self._selected_instances.clear()
-            self._launch_attempts.clear()
-            self._retry_blocked_until.clear()
-            self._aborted_instances.clear()
-            self.states.clear()
-            if not live_threads:
-                self.instance_threads.clear()
+            live = {idx: runtime for idx, runtime in self.instances.items() if runtime.thread is not None and runtime.thread.is_alive()}
+            self.instances = live
 
         gc.collect()
 
-        if live_threads:
-            self.log_message(f"Tool stop requested, but {len(live_threads)} worker thread(s) are still finishing.", level="warning")
+        if live:
+            self.log_message(f"Tool stop requested, but {len(live)} worker thread(s) are still finishing.", level="warning")
         self.log_message("Tool stopped and resources cleaned up", level="info")
 
     # --- Scheduler ---
@@ -312,28 +295,34 @@ class MultiInstanceToolController:
             return
         to_start = []
         with self._state_lock:
-            free_slots = self._max_instances - len(self._active_instances)
+            self._forget_dead_threads_locked()
+            free_slots = self._max_instances - sum(1 for runtime in self.instances.values() if runtime.is_active)
             if free_slots <= 0:
                 return
             now = time.time()
             due = []
-            for idx in self._selected_instances:
-                if idx in self._active_instances or idx in self._aborted_instances:
+            for idx, runtime in self.instances.items():
+                if runtime.is_active or runtime.aborted:
                     continue
-                if now < self._retry_blocked_until.get(idx, 0):
+                if now < runtime.retry_blocked_until:
                     continue
-                next_run = self._next_run_time(idx)
+                next_run = self._next_run_time(runtime)
                 if next_run is None or next_run - now > TASK_STARTUP_WINDOW_SECONDS:
                     continue
                 due.append((next_run, idx))
             due.sort()
             for _next_run, idx in due[:free_slots]:
                 thread = threading.Thread(target=self._run_instance, args=(idx,), daemon=True, name=f"Instance-{idx}")
-                self._active_instances.add(idx)
-                self.instance_threads[idx] = thread
+                self.instances[idx].thread = thread
                 to_start.append(thread)
         for thread in to_start:
             thread.start()
+
+    def _forget_dead_threads_locked(self):
+        """Clear thread references left by workers that already exited."""
+        for runtime in self.instances.values():
+            if runtime.thread is not None and not runtime.thread.is_alive():
+                runtime.thread = None
 
     def _pending_instances_locked(self):
         """Yield ``(index, next_run_time)`` of instances that can be started.
@@ -341,21 +330,19 @@ class MultiInstanceToolController:
         The caller must hold ``_state_lock``.
         """
         now = time.time()
-        for idx in self._selected_instances:
-            if idx in self._active_instances or idx in self._aborted_instances:
+        for idx, runtime in self.instances.items():
+            if runtime.is_active or runtime.aborted:
                 continue
-            if now < self._retry_blocked_until.get(idx, 0):
+            if now < runtime.retry_blocked_until:
                 continue
-            yield idx, self._next_run_time(idx)
+            yield idx, self._next_run_time(runtime)
 
-    def _next_run_time(self, index):
+    def _next_run_time(self, runtime):
         """Return the earliest scheduled time of an instance (None without tasks).
 
         The caller must hold ``_state_lock``.
         """
-        state = self.states.get(index)
-        tasks = state.tasks if state else []
-        return min((task.get("next_run_time", 0) for task in tasks), default=None)
+        return min((task.get("next_run_time", 0) for task in runtime.state.tasks), default=None)
 
     def _build_tasks(self, profile_name, saved_tasks, now):
         """Build the runtime task list of a profile, applying a saved schedule."""
@@ -376,62 +363,74 @@ class MultiInstanceToolController:
                 self.log_message(f"Error in instance {index}: {e}", "error")
                 self._record_launch_failure(index)
             finally:
-                state = self.states.get(index)
-                if state is not None:
-                    state.opening = False
-                    state.current_task_name = None
+                runtime = self.instances.get(index)
+                if runtime is not None:
+                    runtime.state.opening = False
+                    runtime.state.current_task_name = None
                 # Close the emulator before releasing the slot: the scheduler
                 # must never start a new worker on the same instance while the
                 # previous one is still shutting it down. A stop request is
                 # handled by stop_tool().
                 if not self.tool_should_stop.is_set():
                     self._close_instance(index)
-                self._release_slot(index)
-                self._remove_thread_reference(index, threading.current_thread())
+                self._release_slot(index, threading.current_thread())
 
     def _instance_worker(self, index):
-        """Open the instance, launch the game and run its tasks."""
-        if self.tool_should_stop.is_set():
+        """Open the instance, prepare the game and run its task loop."""
+        runtime = self.instances.get(index)
+        if runtime is None:
             return
-        state = self.states.get(index)
-        if state is None:
-            return
+        state = runtime.state
         state.opening = True
         state.current_task_name = None
 
+        if not self._open_instance(index):
+            return
+        if not self._prepare_game(index, state):
+            return
+        self._run_task_loop(index, state)
+
+    def _open_instance(self, index):
+        """Start the emulator and make sure ADB and the game are reachable."""
+        if self.tool_should_stop.is_set():
+            return False
         self._forget_adb_verification(index)
         if not self.backend.start_instance(index):
             self._record_launch_failure(index)
-            return
+            return False
         if self.tool_should_stop.is_set():
-            return
+            return False
 
         if not verify_adb_connected(index):
             self.log_message(f"Could not connect ADB to instance {index}. Restarting the emulator...", "error")
             if not force_restart_emulator(index, self.backend) or not verify_adb_connected(index):
                 self.log_message(f"ADB connection still failed after restart for instance {index}.", "error")
                 self._record_launch_failure(index)
-                return
+                return False
 
         # The game missing is a permanent condition: closing/restarting the
         # emulator can never fix it, so abort this instance instead of looping.
         if not is_wos_installed(index):
             self._abort_instance(index)
-            return
+            return False
+        return True
 
+    def _prepare_game(self, index, state):
+        """Launch the game, sync its clock and reconcile the task schedule."""
         from wosutil.tool.tasks.navigation import launch_and_reach_city_screen
 
         if not retry_operation(lambda: launch_and_reach_city_screen(instance_index=index), max_attempts=3, delay=5.0, retry_on_false=True):
             self.log_message(f"Could not launch the game on instance {index}.", "error")
             self._record_launch_failure(index)
-            return
+            return False
 
-        with self._state_lock:
-            self._launch_attempts.pop(index, None)
+        runtime = self.instances.get(index)
+        if runtime is not None:
+            runtime.launch_attempts = 0
         state.opening = False
 
         if self.tool_should_stop.is_set():
-            return
+            return False
 
         # The game clock is the first thing to sync every time an instance is
         # opened: several tasks reschedule to 00:00 UTC.
@@ -444,7 +443,10 @@ class MultiInstanceToolController:
 
         if state.tasks and reconcile_bear_trap_schedule(index, state.tasks):
             self._persist_schedules()
+        return True
 
+    def _run_task_loop(self, index, state):
+        """Run the scheduled tasks of one instance until it is idle or stopped."""
         last_health_check = time.time()
         while not self.tool_should_stop.is_set():
             now = time.time()
@@ -507,7 +509,9 @@ class MultiInstanceToolController:
     def _abort_instance(self, index):
         """Permanently abort an instance whose game is not installed."""
         with self._state_lock:
-            self._aborted_instances.add(index)
+            runtime = self.instances.get(index)
+            if runtime is not None:
+                runtime.aborted = True
         message = (
             f"Whiteout Survival ({WHITEOUT_PACKAGE}) is not installed on instance {index}. "
             "Install the game on this instance (e.g. from the emulator's app store or Google Play) "
@@ -521,13 +525,14 @@ class MultiInstanceToolController:
         """Count a launch failure and pause the instance after repeated ones."""
         paused = False
         with self._state_lock:
-            attempts = self._launch_attempts.get(index, 0) + 1
-            if attempts >= self.max_launch_attempts:
-                self._retry_blocked_until[index] = time.time() + RETRY_COOLDOWN_SECONDS
-                self._launch_attempts[index] = 0
+            runtime = self.instances.get(index)
+            if runtime is None:
+                return
+            runtime.launch_attempts += 1
+            if runtime.launch_attempts >= self.max_launch_attempts:
+                runtime.retry_blocked_until = time.time() + RETRY_COOLDOWN_SECONDS
+                runtime.launch_attempts = 0
                 paused = True
-            else:
-                self._launch_attempts[index] = attempts
         if paused:
             self.log_message(
                 f"Instance {index} has failed {self.max_launch_attempts} consecutive startup attempts. Pausing it for {RETRY_COOLDOWN_SECONDS // 60} minutes before retrying.",
@@ -547,16 +552,12 @@ class MultiInstanceToolController:
         except Exception as e:
             self.log_message(f"Error closing emulator instance {index}: {e}", "error")
 
-    def _remove_thread_reference(self, index, thread):
-        """Remove a worker reference only when it still belongs to that worker."""
+    def _release_slot(self, index, thread):
+        """Release the instance slot only when it still belongs to this worker."""
         with self._state_lock:
-            if self.instance_threads.get(index) is thread:
-                del self.instance_threads[index]
-
-    def _release_slot(self, index):
-        """Free the instance slot so the scheduler can start it again."""
-        with self._state_lock:
-            self._active_instances.discard(index)
+            runtime = self.instances.get(index)
+            if runtime is not None and runtime.thread is thread:
+                runtime.thread = None
 
     # --- Schedule persistence ---
 
@@ -572,16 +573,12 @@ class MultiInstanceToolController:
         if self._task_schedule is None:
             return
         with self._state_lock:
-            selected = list(self._selected_instances)
-            states = {idx: self.states.get(idx) for idx in selected}
+            selected = [(idx, runtime.state.tasks) for idx, runtime in self.instances.items()]
         if not selected:
             return
         with self._schedule_lock:
-            for idx in selected:
-                state = states.get(idx)
-                if state is None:
-                    continue
+            for idx, tasks in selected:
                 instance_entry = self._task_schedule.setdefault(str(idx), {})
-                instance_entry.update(snapshot_instance_schedule(state.tasks))
+                instance_entry.update(snapshot_instance_schedule(tasks))
             if not save_task_schedule(self._task_schedule):
                 self.log_message("Error saving the task schedule.", level="error")
