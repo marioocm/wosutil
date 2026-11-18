@@ -36,6 +36,13 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - Full check (required after changes): run all three above
 - Build: `python -m build`
 
+## Testing policy
+- Add a test for observable behavior or for a regression that actually happened, not for every getter, default or private branch.
+- Prefer one parameterized test over several near-duplicate tests.
+- Mock only external boundaries (ADB, filesystem, clock, GUI); avoid asserting private call sequences unless order is the behavior.
+- Never add a test just to raise coverage; if the existing tests already cover the behavior, leave them alone.
+- Keep the suite fast: patch `time.sleep` in tests instead of waiting real seconds.
+
 ## Git workflow
 The project follows GitHub Flow: `main` is always stable and ready to use; all work happens on short-lived branches merged via Pull Requests (squash merge, branch deleted after merge).
 

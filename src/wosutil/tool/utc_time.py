@@ -534,29 +534,3 @@ def get_seconds_until_utc_midnight(instance_index: int, fallback: Optional[float
     if seconds_of_day is None:
         return fallback
     return float(UTC_SECONDS_PER_DAY - seconds_of_day)
-
-
-def get_seconds_until_utc_hour(instance_index: int, hour: int, minute: int = 0, fallback: Optional[float] = None) -> Optional[float]:
-    """Seconds until the given hour/minute in UTC according to the cached game clock.
-
-    The target is the next occurrence of ``hour:minute`` UTC; when that instant
-    already passed today the task waits until it comes back tomorrow.
-
-    Args:
-        instance_index (int): Emulator instance index.
-        hour (int): Target UTC hour (0-23).
-        minute (int, optional): Target UTC minute (0-59).
-        fallback (float, optional): Value to return when no clock was read yet.
-
-    Returns:
-        float or None: Seconds until the target UTC time, or the fallback when
-            the clock is unavailable (None when no fallback was given).
-    """
-    current = _current_utc_seconds_of_day(instance_index)
-    if current is None:
-        return fallback
-    target = hour * 3600 + minute * 60
-    delay = target - current
-    if delay <= 0:
-        delay += UTC_SECONDS_PER_DAY
-    return float(delay)

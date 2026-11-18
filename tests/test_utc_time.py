@@ -14,7 +14,6 @@ from wosutil.tool.utc_time import (
     clear_cached_utc_times,
     get_cached_bear_hunt_times,
     get_cached_utc_time,
-    get_seconds_until_utc_hour,
     get_seconds_until_utc_midnight,
     parse_task_list_schedule,
     set_cached_bear_hunt_times,
@@ -101,21 +100,6 @@ class TestUtcCacheAndReschedule(unittest.TestCase):
         self.assertEqual(get_seconds_until_utc_midnight(0, fallback=12345.0), 12345.0)
         self.assertIsNone(get_seconds_until_utc_midnight(0))
 
-    def test_seconds_until_utc_hour_later_today(self):
-        """At 11:12:26 the wait until 12:00 UTC is 47m 34s."""
-        set_cached_utc_time(0, (8, 10, 11, 12, 26))
-        self.assertEqual(get_seconds_until_utc_hour(0, 12), 47 * 60 + 34)
-
-    def test_seconds_until_utc_hour_passed_today(self):
-        """A target hour already passed today waits until tomorrow."""
-        set_cached_utc_time(0, (8, 10, 11, 12, 26))
-        self.assertEqual(get_seconds_until_utc_hour(0, 10), 86400 - (1 * 3600 + 12 * 60 + 26))
-
-    def test_seconds_until_utc_hour_fallback(self):
-        """Without a cached clock the fallback is returned."""
-        self.assertEqual(get_seconds_until_utc_hour(0, 0, fallback=60.0), 60.0)
-        self.assertIsNone(get_seconds_until_utc_hour(0, 0))
-
     def test_seconds_until_midnight_stale_cache_after_midnight(self):
         """A clock read at 23:59:11 crossing midnight still waits for the NEXT midnight.
 
@@ -126,12 +110,6 @@ class TestUtcCacheAndReschedule(unittest.TestCase):
         with patch("wosutil.tool.utc_time.time.time", side_effect=[1000.0, 1000.0 + 48 * 60]):
             set_cached_utc_time(0, (8, 10, 23, 59, 11))
             self.assertEqual(get_seconds_until_utc_midnight(0), 86400 - (48 * 60 - 49))
-
-    def test_seconds_until_utc_hour_stale_cache_after_midnight(self):
-        """A stale cache is extrapolated when the target hour comes after midnight."""
-        with patch("wosutil.tool.utc_time.time.time", side_effect=[1000.0, 1000.0 + 48 * 60]):
-            set_cached_utc_time(0, (8, 10, 23, 59, 11))
-            self.assertEqual(get_seconds_until_utc_hour(0, 1), 3600 - (48 * 60 - 49))
 
 
 class TestSyncUtcTime(unittest.TestCase):

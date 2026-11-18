@@ -39,6 +39,10 @@ class FakeBackend:
         self.stop_calls += 1
         return True
 
+    def get_serial(self, index):
+        """Return a stable serial for the stub."""
+        return f"serial-{index}"
+
 
 def _checked_widget(index=0, profile_name="All"):
     """Build a checked instance widget for the given index."""
@@ -176,6 +180,19 @@ class TestGameNotInstalledAbort(ControllerTestCase):
 
 class TestLaunchFailures(ControllerTestCase):
     """Launch failures are counted, then the instance backs off."""
+
+    def test_worker_does_not_open_an_emulator_after_stop(self):
+        """A worker scheduled just before Stop must not open the emulator."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state()
+        stop_signal.set()
+
+        controller._run_instance(0)
+
+        self.assertEqual(backend.start_calls, 0)
+        self.assertEqual(backend.stop_calls, 0)
+        self.assertNotIn(0, controller._active_instances)
 
     def test_start_failure_counts_toward_retry_attempts(self):
         """A failed emulator start releases the slot and counts an attempt."""

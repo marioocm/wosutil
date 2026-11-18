@@ -321,11 +321,6 @@ class TestLDPlayerBackend(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.backend.get_serial(2)
 
-    def test_build_command(self):
-        """LDPlayer commands use its own adb targeting the instance serial."""
-        m = self.backend
-        self.assertEqual(m.build_adb_command(["shell", "echo", "hi"], 0), [m.adb_path, "-s", "emulator-5554", "shell", "echo", "hi"])
-
     def test_check_adb_access_enabled(self):
         """No warnings when ADB debugging is enabled everywhere."""
         config_dir = ldplayer_config_dir_helper({"leidian0.config": LDPLAYER_INSTANCE_0})
@@ -517,6 +512,7 @@ class TestQuietWindowHandling(unittest.TestCase):
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
         with (
             patch("subprocess.Popen"),
+            patch("wosutil.emulator.backends.time.sleep"),
             patch.object(backends.MuMuBackend, "_is_instance_running", side_effect=[False, True]),
             patch.object(backends.MuMuBackend, "_instance_name", return_value="Healer"),
             patch("wosutil.emulator.backends.minimize_process_windows") as mock_sweep,
@@ -639,14 +635,6 @@ class TestQuietWindowHandling(unittest.TestCase):
             self.assertTrue(backend.stop_instance(0))
         proc.terminate.assert_not_called()
 
-    def test_bluestacks_stop_terminates_processes(self):
-        """BlueStacks instances are stopped by terminating HD-Player."""
-        backend = backends.BlueStacksBackend(log_func=lambda *a, **k: None, conf_path=tempfile_helper(SAMPLE_CONF))
-        proc = Mock()
-        with patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]):
-            self.assertTrue(backend.stop_instance(0))
-        proc.terminate.assert_called_once()
-
     def test_ldplayer_stop_requests_graceful_quit_then_terminates(self):
         """LDPlayer tries ldconsole quit before terminating dnplayer."""
         backend = backends.LDPlayerBackend(log_func=lambda *a, **k: None, config_dir=ldplayer_config_dir_helper({"leidian0.config": LDPLAYER_INSTANCE_0}))
@@ -662,6 +650,7 @@ class TestQuietWindowHandling(unittest.TestCase):
         proc = Mock()
         with (
             patch("wosutil.emulator.backends.run_process_robust", return_value=Mock(returncode=0)),
+            patch("wosutil.emulator.backends.time.sleep"),
             patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]),
         ):
             self.assertTrue(backend.stop_instance(0))

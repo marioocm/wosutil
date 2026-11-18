@@ -10,14 +10,14 @@ needed.
 import gc
 import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Optional
 
 from wosutil.config import INSTANCE_SELECTION_FILE, WHITEOUT_PACKAGE
-from wosutil.emulator.emulator_manager import check_emulator_health, force_restart_emulator, is_wos_installed, verify_adb_connected
+from wosutil.emulator.emulator_manager import check_emulator_health, force_restart_emulator, invalidate_adb_verification, is_wos_installed, verify_adb_connected
 from wosutil.preferences import get_remember_schedule
 from wosutil.stop import ToolStopped, stop_signal
-from wosutil.tool.profiles.profile_utils import build_running_tasks_state
 from wosutil.tool.tasks.task_schedule import (
     build_task_state,
     load_saved_tasks,
@@ -254,10 +254,8 @@ class MultiInstanceToolController:
                     continue
                 idx = inst["index"]
                 profile_name = inst["profile_var"].get()
-                if self._task_schedule is not None:
-                    tasks = self._build_tasks(profile_name, load_saved_tasks(self._task_schedule, idx), now)
-                else:
-                    tasks = build_running_tasks_state(profile_name, self.profiles, self.task_definitions, now)
+                saved_tasks = load_saved_tasks(self._task_schedule, idx) if self._task_schedule is not None else {}
+                tasks = self._build_tasks(profile_name, saved_tasks, now)
                 self.states[idx] = InstanceState(profile_name=profile_name, tasks=tasks)
                 self._selected_instances[idx] = profile_name
 
@@ -310,6 +308,8 @@ class MultiInstanceToolController:
         """
         if not self.tool_running:
             return
+        if self.tool_should_stop.is_set():
+            return
         to_start = []
         with self._state_lock:
             free_slots = self._max_instances - len(self._active_instances)
@@ -361,7 +361,7 @@ class MultiInstanceToolController:
         """Build the runtime task list of a profile, applying a saved schedule."""
         task_names = self.profiles.get(profile_name, [])
         task_defs = sorted((self.task_definitions[name] for name in task_names if name in self.task_definitions), key=lambda task: task["priority"])
-        return build_task_state(task_defs, saved_tasks, now)
+        return build_task_state(task_defs, saved_tasks or {}, now)
 
     # --- Worker ---
 
@@ -391,14 +391,19 @@ class MultiInstanceToolController:
 
     def _instance_worker(self, index):
         """Open the instance, launch the game and run its tasks."""
+        if self.tool_should_stop.is_set():
+            return
         state = self.states.get(index)
         if state is None:
             return
         state.opening = True
         state.current_task_name = None
 
+        self._forget_adb_verification(index)
         if not self.backend.start_instance(index):
             self._record_launch_failure(index)
+            return
+        if self.tool_should_stop.is_set():
             return
 
         if not verify_adb_connected(index):
@@ -529,8 +534,14 @@ class MultiInstanceToolController:
                 level="error",
             )
 
+    def _forget_adb_verification(self, index):
+        """Discard the cached ADB verification of an instance, if resolvable."""
+        with suppress(Exception):
+            invalidate_adb_verification(self.backend.get_serial(index))
+
     def _close_instance(self, index):
         """Close an emulator instance, logging (but not raising) failures."""
+        self._forget_adb_verification(index)
         try:
             self.backend.stop_instance(index)
         except Exception as e:
