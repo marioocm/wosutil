@@ -644,7 +644,7 @@ def check_emulator_health(instance_index):
         return False
 
 
-def force_restart_emulator(instance_index, multi_instance_manager, boot_timeout=60):
+def force_restart_emulator(instance_index, backend=None, boot_timeout=60):
     """Forces a restart of the emulator instance when it's hanging.
 
     After restarting, waits for the instance to boot (Android takes longer
@@ -653,23 +653,22 @@ def force_restart_emulator(instance_index, multi_instance_manager, boot_timeout=
 
     Args:
         instance_index (int): Emulator instance index.
-        multi_instance_manager: The multi-instance manager object.
+        backend: The emulator backend to use. Defaults to the active backend.
         boot_timeout (int): Maximum seconds to wait for the instance to
             respond after restarting.
 
     Returns:
         bool: True if restart was successful, False otherwise.
     """
+    backend = backend or get_active_backend()
     log_message(f"Force restarting emulator instance {instance_index} due to hanging...", level="warning")
 
     try:
-        # Stop the instance
-        multi_instance_manager.stop_instance(instance_index)
+        backend.stop_instance(instance_index)
         stop_signal.check()
         time.sleep(3)  # Wait for emulator to close
 
-        # Start the instance again
-        multi_instance_manager.start_instance(instance_index)
+        backend.start_instance(instance_index)
         stop_signal.check()
 
         # Android needs time to boot after a cold start: poll the health

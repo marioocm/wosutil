@@ -9,11 +9,11 @@ from wosutil.gui.gui_instances import (
 )
 
 
-class _FakePM:
-    """Minimal profile manager stub exposing the tasks state."""
+class _FakeState:
+    """Minimal instance state stub exposing the task list."""
 
     def __init__(self, tasks):
-        self.running_tasks_state = tasks
+        self.tasks = tasks
 
 
 class TestFormatTimeRemaining(unittest.TestCase):
@@ -45,21 +45,21 @@ class TestGetAllTasksInfo(unittest.TestCase):
 
     def test_empty_state_returns_empty(self):
         """No tasks means nothing to preview."""
-        self.assertEqual(get_all_tasks_info(_FakePM([]), 1000), [])
+        self.assertEqual(get_all_tasks_info(_FakeState([]), 1000), [])
 
     def test_returns_all_tasks_with_remaining_time(self):
         """Every scheduled task is listed with its remaining seconds."""
-        pm = _FakePM([self._task("a", "Claim supplies", 1500), self._task("b", "Train troops", 2500)])
+        pm = _FakeState([self._task("a", "Claim supplies", 1500), self._task("b", "Train troops", 2500)])
         self.assertEqual(get_all_tasks_info(pm, 1000), [("Claim supplies", 500), ("Train troops", 1500)])
 
     def test_dues_tasks_show_zero(self):
         """A due task is reported with 0 remaining seconds."""
-        pm = _FakePM([self._task("a", "Due task", 900)])
+        pm = _FakeState([self._task("a", "Due task", 900)])
         self.assertEqual(get_all_tasks_info(pm, 1000), [("Due task", 0)])
 
     def test_tasks_sorted_by_remaining_time(self):
         """Tasks are listed soonest first, due tasks on top."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Far away", 4000),
                 self._task("b", "Due task", 900),
@@ -75,7 +75,7 @@ class TestGetAllTasksInfo(unittest.TestCase):
         show the higher-priority in-window task first even when its timer was
         read later.
         """
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Low priority read early", 1000, priority=50),
                 self._task("b", "High priority read later", 1002, priority=1),
@@ -85,7 +85,7 @@ class TestGetAllTasksInfo(unittest.TestCase):
 
     def test_out_of_window_task_keeps_chronological_order(self):
         """A high-priority task beyond the 5s window does not jump ahead."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Due low priority", 1000, priority=50),
                 self._task("b", "Urgent much later", 1015, priority=1),
@@ -95,7 +95,7 @@ class TestGetAllTasksInfo(unittest.TestCase):
 
     def test_same_priority_stays_chronological(self):
         """Tied priorities keep the timer order, as the worker does."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "First read", 1005, priority=5),
                 self._task("b", "Second read", 1008, priority=5),
@@ -110,7 +110,7 @@ class TestGetAllTasksInfo(unittest.TestCase):
         (0000 UTC readings a couple of seconds apart) and the preview must
         show the most urgent first, not the timer reading order.
         """
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("send_pet_adventure_chests", "Send Pet Adventure Chests", 1787616002.5451596, priority=9),
                 self._task("claim_pet_adventure_ally_treasure", "Claim Pet Adventure Ally Treasure", 1787616002.6933224, priority=10),
@@ -138,17 +138,17 @@ class TestFormatTaskTooltip(unittest.TestCase):
 
     def test_each_task_is_one_line(self):
         """Each task occupies a numbered line with its countdown."""
-        pm = _FakePM([{"name": "Claim supplies", "next_run_time": 1500}])
+        pm = _FakeState([{"name": "Claim supplies", "next_run_time": 1500}])
         self.assertEqual(format_task_tooltip(pm, 1000), "1. Claim supplies: 00:08:20")
 
     def test_due_tasks_are_marked_ready(self):
         """A due task is shown as ready instead of a zero countdown."""
-        pm = _FakePM([{"name": "Due task", "next_run_time": 900}])
+        pm = _FakeState([{"name": "Due task", "next_run_time": 900}])
         self.assertEqual(format_task_tooltip(pm, 1000), "1. Due task: ready")
 
     def test_multi_line_priority_order(self):
         """The order shown follows the worker, not the timer reading."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 {"name": "Low priority", "priority": 50, "next_run_time": 1000},
                 {"name": "High priority", "priority": 1, "next_run_time": 1002},

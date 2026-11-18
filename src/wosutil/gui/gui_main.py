@@ -7,7 +7,6 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
-from wosutil.context import set_multi_instance_manager
 from wosutil.emulator.backends import (
     EMULATOR_BLUESTACKS,
     EMULATOR_LDPLAYER,
@@ -31,12 +30,6 @@ from wosutil.utils import log_message, set_gui_log_widget
 
 # Global variables
 log_text_widget = None
-profile_manager = None
-multi_instance_manager = None
-instances_profile_managers: dict = {}
-instance_queue: list = []
-active_instances: set = set()
-max_instances_var = None
 
 # Logging configuration
 LOG_COLORS = {"info": "white", "error": "red", "warning": "orange", "success": "light green", "adb": "light blue", "debug": "gray"}
@@ -132,8 +125,6 @@ def create_log_tab(notebook):
 
 def run_gui():
     """Main GUI initialization and execution."""
-    global profile_manager, multi_instance_manager, instances_profile_managers, max_instances_var
-
     # Configure console + file logging once (entry point of the `wosutil` command).
     from wosutil.utils import setup_logging
 
@@ -151,7 +142,7 @@ def run_gui():
     profile_manager = ProfileManager(log_message)
 
     log_message("Loading task definitions...", "info")
-    TASK_DEFINITIONS = get_task_definitions()
+    task_definitions = get_task_definitions()
 
     log_message("Creating main window...", "info")
     # Create main window
@@ -202,14 +193,13 @@ def run_gui():
         save_emulator(emulator)
 
     log_message(f"Initializing emulator backend ({emulator})...", "info")
-    multi_instance_manager = create_backend(emulator, log_message, emulator_paths=emulator_paths)
-    set_active_backend(multi_instance_manager)
-    set_multi_instance_manager(multi_instance_manager)
+    backend = create_backend(emulator, log_message, emulator_paths=emulator_paths)
+    set_active_backend(backend)
 
     # Shared state between the tabs: the active backend, the refresh callback
     # and the tool running flag allow an emulator change made in Preferences to
     # re-create the backend and re-enumerate instances without a restart.
-    emulator_state = {"backend": multi_instance_manager}
+    emulator_state = {"backend": backend}
 
     def switch_emulator(new_emulator, new_emulator_paths=None):
         """Apply an emulator change made in the Preferences tab.
@@ -224,7 +214,7 @@ def run_gui():
             new_emulator_paths (dict, optional): Configured executable and
                 instance paths. Defaults to the persisted preferences.
         """
-        global multi_instance_manager
+        nonlocal backend
 
         if emulator_state.get("tool_running", {}).get("value"):
             log_message("Emulator change ignored while the tool is running. It will apply on the next run.", "warning")
@@ -233,13 +223,12 @@ def run_gui():
         log_message(f"Switching emulator to {label}...", "info")
         save_emulator(new_emulator)
         emulator_paths = new_emulator_paths or get_emulator_paths()
-        multi_instance_manager = create_backend(new_emulator, log_message, emulator_paths=emulator_paths)
-        set_active_backend(multi_instance_manager)
-        set_multi_instance_manager(multi_instance_manager)
-        emulator_state["backend"] = multi_instance_manager
+        backend = create_backend(new_emulator, log_message, emulator_paths=emulator_paths)
+        set_active_backend(backend)
+        emulator_state["backend"] = backend
         controller = emulator_state.get("controller")
         if controller is not None:
-            controller.multi_instance_manager = multi_instance_manager
+            controller.set_backend(backend)
         refresh_instances = emulator_state.get("refresh_instances")
         if refresh_instances is not None:
             refresh_instances.force_update = True
@@ -261,13 +250,9 @@ def run_gui():
     update_profile_comboboxes = setup_instances_tab(
         notebook,
         profile_manager,
-        multi_instance_manager,
         log_message,
-        TASK_DEFINITIONS,
-        instances_profile_managers,
-        instance_queue,
-        active_instances,
-        emulator_state=emulator_state,
+        task_definitions,
+        emulator_state,
     )
 
     log_message("Setting up profiles tab...", "info")
@@ -277,14 +262,14 @@ def run_gui():
         notebook,
         profile_manager,
         log_message,
-        list(TASK_DEFINITIONS.values()),
+        list(task_definitions.values()),
         on_profiles_changed=update_profile_comboboxes,
     )
 
     log_message("Setting up preferences tab...", "info")
     from wosutil.gui.gui_preferences import setup_preferences_tab
 
-    setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_changed=switch_emulator)
+    setup_preferences_tab(notebook, task_definitions, log_message, on_emulator_changed=switch_emulator)
 
     # Create log tab
     log_message("Creating log tab...", "info")

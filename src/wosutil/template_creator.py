@@ -12,8 +12,9 @@ import pyperclip
 from PIL import Image, ImageTk
 
 from wosutil.config import TEMPLATES_DIR
-from wosutil.emulator.emulator_manager import take_screenshot
-from wosutil.emulator.instances_controller import MultiInstanceManager
+from wosutil.emulator.backends import create_backend
+from wosutil.emulator.emulator_manager import set_active_backend, take_screenshot
+from wosutil.preferences import get_emulator, get_emulator_paths
 
 
 class TemplateCreatorApp:
@@ -49,7 +50,10 @@ class TemplateCreatorApp:
         self.last_roi = None
         self.zoom = 1.0
         self.selected_instance = tk.StringVar()  # StringVar to handle "Instance X"
-        self.multi_instance_manager = MultiInstanceManager(print)  # To get the available instances
+        # Use the emulator selected in Preferences so screenshots target the
+        # same backend as the automation tool.
+        self.backend = create_backend(get_emulator(), print, emulator_paths=get_emulator_paths())
+        set_active_backend(self.backend)
 
         # Variables for panning
         self.pan_start_x = 0
@@ -161,7 +165,7 @@ class TemplateCreatorApp:
         """Refresh the list of available instances."""
         try:
             # Get available instances
-            instances_data = self.multi_instance_manager.get_instances()
+            instances_data = self.backend.get_instances()
             available_instances = [instance["index"] for instance in instances_data]
 
             if available_instances:
@@ -210,7 +214,7 @@ class TemplateCreatorApp:
                 return
 
             # Check that the instance is available
-            instances_data = self.multi_instance_manager.get_instances()
+            instances_data = self.backend.get_instances()
             available_instances = [instance["index"] for instance in instances_data]
             if instance_index not in available_instances:
                 messagebox.showerror("Error", f"Instance {instance_index} is not available.\nAvailable instances: {available_instances}")

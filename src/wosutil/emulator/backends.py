@@ -1,13 +1,11 @@
 """Emulator backend abstraction.
 
-Introduces a single interface so the automation pipeline can run against
-MuMu Player, BlueStacks 5 or LDPlayer without changing its own code. Each
-backend owns the emulator-specific details: listing/starting/stopping
-instances and resolving ADB commands/serials for a given integer
-``instance_index``.
+Each backend owns the emulator-specific details (instance discovery,
+start/stop and ADB addressing) behind one small interface, so the automation
+pipeline can run against MuMu Player, BlueStacks 5 or LDPlayer unchanged.
 
-Callers that do not create a backend explicitly get the default MuMu backend,
-preserving the pre-refactor behavior.
+An instance is always addressed by an integer ``instance_index`` that is
+stable for the selected emulator.
 """
 
 import json
@@ -17,7 +15,6 @@ import re
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from typing import Dict
 
 import psutil
 
@@ -40,7 +37,7 @@ from wosutil.config import (
     MUMU_INSTANCE_BASE_PATH,
     MUMU_MULTI_PLAYER_PATH,
 )
-from wosutil.emulator.instances_controller import MultiInstanceManager, save_instance_cache
+from wosutil.emulator.instance_cache import save_instance_cache
 from wosutil.emulator.window_utils import minimize_process_windows, minimize_windows_by_title
 from wosutil.utils import (
     _detached_creation_flags,
@@ -58,14 +55,23 @@ EMULATOR_MUMU = "mumu"
 EMULATOR_BLUESTACKS = "bluestacks"
 EMULATOR_LDPLAYER = "ldplayer"
 
+# Instance lifecycle polling. Emulators boot/close asynchronously, so both
+# operations confirm the result by polling their processes.
+POLL_SECONDS = 2
+START_CONFIRM_ATTEMPTS = 30
+START_MINIMIZE_GRACE_SWEEPS = 2
+STOP_CONFIRM_ATTEMPTS = 30
+STOP_RETRY_EVERY = 5
+KILL_CONFIRM_ATTEMPTS = 5
+
 _BLUESTACKS_INSTANCE_PORT_RE = re.compile(r"^bst\.instance\.([^.]+)\.status\.adb_port$")
 _LDPLAYER_CONFIG_RE = re.compile(r"^leidian(\d+)\.config$")
+_MUMU_INSTANCE_FOLDER_RE = re.compile(r"^MuMuPlayerGlobal-[\d.]+-(\d+)$")
+_MUMU_INSTANCE_SERIES_RE = re.compile(r"^MuMuPlayerGlobal-([\d.]+)-\d+$")
 
 # Executable names whose windows belong to each emulator family (basename,
 # extensionless, case-insensitive). Used to minimize windows that would
-# otherwise steal the foreground focus. MuMu 12 runs its instances through
-# MuMuNxDevice.exe (shells/renderers spawn short-lived helper processes that
-# may be unreadable, so the stable names are listed too).
+# otherwise steal the foreground focus.
 MUMU_WINDOW_PROCESS_NAMES = (
     "MuMuNxDevice",
     "MuMuNxMain",
@@ -92,15 +98,16 @@ def start_minimized_enabled():
 
 
 def parse_devices_output(stdout):
-    """Parses the output of ``adb devices`` into a {serial: state} dict.
+    """Parse the output of ``adb devices`` into a {serial: state} dict.
 
     Args:
         stdout: The raw output of the devices command.
 
     Returns:
-        dict: Mapping of device serial to connection state ("device", "offline").
+        dict: Mapping of device serial to connection state ("device",
+        "offline").
     """
-    devices: Dict[str, str] = {}
+    devices: dict[str, str] = {}
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line or "List of devices" in line or line.startswith("*"):
@@ -188,7 +195,7 @@ def parse_ldplayer_config(config_path):
 
     Returns:
         dict: Raw config content, or an empty dict if the file is missing or
-            not valid JSON.
+        not valid JSON.
     """
     try:
         with open(config_path, encoding="utf-8") as f:
@@ -209,7 +216,7 @@ def list_ldplayer_instances(config_dir=LDPLAYER_INSTANCE_CONFIG_DIR):
 
     Returns:
         list: Sorted list of dicts with 'key', 'index', 'display_name' and
-            'adb_debug' (bool).
+        'adb_debug' (bool).
     """
     instances = []
     try:
@@ -233,99 +240,132 @@ def list_ldplayer_instances(config_dir=LDPLAYER_INSTANCE_CONFIG_DIR):
     return sorted(instances, key=lambda inst: inst["index"])
 
 
-class EmulatorBackend(ABC):
-    """Uniform interface implemented by every supported emulator.
+def _signal_processes(processes, action):
+    """Terminate or kill each process, ignoring ones that already exited.
 
-    The instance lifecycle (start/stop, window minimizing, ADB server helpers)
-    is shared by every backend; subclasses only provide the emulator-specific
-    details: how instances are discovered on disk, how one is launched and
-    matched to its processes, and how ADB commands reach it.
+    Args:
+        processes (iterable): psutil process objects.
+        action (str): Method to call on each process ("terminate" or "kill").
     """
+    for proc in processes:
+        try:
+            getattr(proc, action)()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+
+def _resolve_instance(instances, instance_index, emulator_name):
+    """Return the instance dict of an emulator slot.
+
+    Args:
+        instances (list): Instance dicts with an 'index' key.
+        instance_index (int): Instance slot to resolve.
+        emulator_name (str): Backend name used in the error message.
+
+    Returns:
+        dict: The matching instance.
+
+    Raises:
+        ValueError: If the index does not belong to any instance.
+    """
+    for instance in instances:
+        if instance["index"] == int(instance_index):
+            return instance
+    raise ValueError(f"Unknown {emulator_name} instance index: {instance_index}")
+
+
+class EmulatorBackend(ABC):
+    """Uniform interface implemented by every supported emulator."""
 
     name = ""
     window_process_names = ()
+    # Whether a running instance can also be detected as an ADB device when
+    # its launcher process is not visible (headless instances).
+    adb_running_fallback = False
 
     def __init__(self, log_func=None, adb_path=None):
         """Initialize the backend with a logging function and ADB binary."""
         self.log = log_func or logger.info
         self.adb_path = adb_path
 
+    # --- Instance discovery ---
+
     @abstractmethod
+    def list_instances(self):
+        """Return the emulator instances as dicts with 'index' and 'name'."""
+
     def get_instances(self):
-        """Return the list of emulator instances with 'index' and 'name'."""
-        raise NotImplementedError
+        """Return the instance list and refresh the shared instance cache."""
+        instances = self.list_instances()
+        save_instance_cache(instances)
+        return instances
 
-    @abstractmethod
-    def _is_instance_running(self, instance_index):
-        """Return True if the given instance is currently running."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def get_serial(self, instance_index):
-        """Return the ADB serial (host:port) of the given instance."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def build_adb_command(self, command_parts, instance_index):
-        """Return the full ADB argv for ``command_parts`` on the instance."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def check_adb_access(self):
-        """Return non-empty user-facing warnings about ADB access."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def _launch_argv(self, instance_index):
-        """Return the argv that starts the instance (a long-lived process).
-
-        The process must not be awaited: instances boot on their own and are
-        monitored by polling, like the other emulator backends do.
-        """
-        raise NotImplementedError
+    # --- Instance details (emulator specific) ---
 
     @abstractmethod
     def _matching_processes(self, instance_index):
         """Return the running processes that belong to the instance."""
-        raise NotImplementedError
 
     @abstractmethod
     def _display_name(self, instance_index):
         """Return the instance display name (its window title)."""
-        raise NotImplementedError
+
+    @abstractmethod
+    def _launch_argv(self, instance_index):
+        """Return the argv that starts the instance (a long-lived process)."""
+
+    @abstractmethod
+    def get_serial(self, instance_index):
+        """Return the ADB serial (host:port) of the given instance."""
+
+    @abstractmethod
+    def check_adb_access(self):
+        """Return non-empty user-facing warnings about ADB access."""
+
+    def build_adb_command(self, command_parts, instance_index):
+        """Return the full ADB argv for ``command_parts`` on the instance."""
+        return [self.adb_path, "-s", self.get_serial(instance_index), *command_parts]
+
+    def _killable_processes(self, instance_index):
+        """Return the processes the stop fallback may terminate directly."""
+        return self._matching_processes(instance_index)
+
+    def _is_instance_running(self, instance_index):
+        """Return True when the instance processes or its ADB device are up."""
+        if self._matching_processes(instance_index):
+            return True
+        if not self.adb_running_fallback:
+            return False
+        return self.list_devices().get(self.get_serial(instance_index)) == "device"
+
+    # --- Instance lifecycle ---
 
     def _graceful_stop(self, instance_index):
         """Ask the emulator to close the instance gracefully (optional hook)."""
-        return None
+        return False
 
-    def _keep_windows_background(self, instance_index):
+    def _minimize_windows(self, enabled, title=None):
         """Minimize the emulator windows so they never steal the foreground.
 
         The window owner process can be elevated and unreadable, so the
-        instance display name (the window title) is matched as well. Only runs
-        when the instance is being opened by the tool: if the user restores
-        the window afterwards it is left alone.
+        instance window title is matched as well when it is known.
+        ``enabled`` is read once per lifecycle call so a polling loop never
+        re-reads the preference file.
         """
-        if not start_minimized_enabled():
+        if not enabled:
             return
-        titles = (self._display_name(instance_index),)
         minimize_process_windows(self.window_process_names, self.log)
-        minimize_windows_by_title(titles, self.log)
+        if title:
+            minimize_windows_by_title((title,), self.log)
 
     def start_instance(self, instance_index):
-        """Start an instance and wait for it to boot. Return True on success.
-
-        The window is launched minimized when the emulator honors the initial
-        window state and is otherwise minimized as soon as it appears, so it
-        never keeps the foreground focus.
-
-        Return False after a generous (60s) window without confirmation.
-        """
+        """Start an instance and wait for it to boot. Return True on success."""
         name = self._display_name(instance_index)
+        minimize = start_minimized_enabled()
         self.log(f"Starting instance {name}...", "info")
         if self._is_instance_running(instance_index):
             self.log(f"Instance {name} is already running.", "info")
-            self._keep_windows_background(instance_index)
+            self._minimize_windows(minimize, name)
             return True
         try:
             subprocess.Popen(
@@ -336,108 +376,87 @@ class EmulatorBackend(ABC):
         except OSError as e:
             self.log(f"Could not launch instance {name}: {e}", "error")
             return False
-        # Minimize as soon as the window appears (and again once confirmed
-        # running) so it never keeps the foreground focus.
-        self._keep_windows_background(instance_index)
-        for _ in range(30):
+        # Minimize right after launch and while the window appears, so it never
+        # keeps the foreground focus.
+        self._minimize_windows(minimize, name)
+        for _ in range(START_CONFIRM_ATTEMPTS):
             if self._is_instance_running(instance_index):
-                # The instance process may be confirmed before its window
-                # exists (the emulator spawns it in the first seconds); keep
-                # minimizing for a short grace period so the window never
-                # steals the foreground when it appears.
-                for _ in range(2):
-                    self._keep_windows_background(instance_index)
-                    time.sleep(2)
+                for _ in range(START_MINIMIZE_GRACE_SWEEPS):
+                    self._minimize_windows(minimize, name)
+                    time.sleep(POLL_SECONDS)
                 self.log(f"Instance {name} started.", "success")
                 return True
-            self._keep_windows_background(instance_index)
-            time.sleep(2)
+            self._minimize_windows(minimize, name)
+            time.sleep(POLL_SECONDS)
         self.log(f"Could not confirm instance {name} started.", "error")
         return False
 
     def stop_instance(self, instance_index):
-        """Stop an instance: graceful request first, then terminate processes.
+        """Stop an instance: graceful request first, then process termination.
 
-        The graceful request (when the emulator provides one) is given time
-        to close the VM cleanly before the instance processes are terminated
-        directly: killing a legacy VM process (MuMuVMMHeadless.exe) crashes
-        the MuMuVMMSVC hypervisor service, so direct termination is only the
-        fallback for a hung emulator (and backends may forbid killing some
-        processes entirely, see :meth:`_terminate_matching_processes`).
-
-        Return False after a short window without confirmation.
-        """
-        name = self._display_name(instance_index)
-        self.log(f"Stopping instance {name}...", "info")
-        if not self._is_instance_running(instance_index):
-            self.log(f"Instance {name} is not running.", "info")
-        else:
-            if self._graceful_stop(instance_index):
-                # The manager accepted a graceful shutdown: keep the request
-                # alive (a hung guest may only answer a later one) and wait
-                # for the VM to close on its own before terminating anything.
-                for attempt in range(30):
-                    if not self._matching_processes(instance_index):
-                        self.log(f"Instance {name} stopped.", "success")
-                        break
-                    if attempt and attempt % 5 == 0:
-                        self._graceful_stop(instance_index)
-                    time.sleep(2)
-                if not self._matching_processes(instance_index):
-                    if start_minimized_enabled():
-                        minimize_process_windows(self.window_process_names, self.log)
-                    return True
-                self.log(f"Graceful shutdown of instance {name} did not complete. Terminating processes...", "warning")
-            if not self._terminate_matching_processes(instance_index):
-                self.log(f"Could not stop instance {name}.", "error")
-                if start_minimized_enabled():
-                    minimize_process_windows(self.window_process_names, self.log)
-                return False
-            self.log(f"Instance {name} stopped.", "success")
-        # The emulator may leave windows behind when an instance closes (e.g.
-        # the MuMu manager); minimize them so the close never steals focus.
-        if start_minimized_enabled():
-            minimize_process_windows(self.window_process_names, self.log)
-        return True
-
-    def _terminate_matching_processes(self, instance_index):
-        """Terminate the instance processes directly, waiting between attempts.
-
-        Terminates then kills the processes matched to the instance, giving
-        them a short window to exit after each step. Backends whose processes
-        must never be killed directly (MuMu legacy VMs crash the hypervisor
-        service) override this to exclude them.
+        The graceful request (when the emulator provides one) is given time to
+        close the VM cleanly before the instance processes are terminated
+        directly. Killing a legacy MuMu VM process crashes its hypervisor
+        service, so backends may exclude those processes from
+        :meth:`_killable_processes`.
 
         Returns:
-            bool: True when the instance processes are all gone afterwards.
+            bool: True when the instance is no longer running.
         """
-        processes = self._matching_processes(instance_index)
-        for proc in processes:
-            try:
-                proc.terminate()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        for _ in range(5):
+        name = self._display_name(instance_index)
+        minimize = start_minimized_enabled()
+        self.log(f"Stopping instance {name}...", "info")
+        stopped = True
+        if self._is_instance_running(instance_index):
+            graceful = self._graceful_stop(instance_index)
+            if not (graceful and self._wait_until_stopped(instance_index, retry_graceful=True)):
+                if graceful:
+                    self.log(f"Graceful shutdown of instance {name} did not complete. Terminating processes...", "warning")
+                stopped = self._terminate_matching_processes(instance_index)
+                if not stopped:
+                    self.log(f"Could not stop instance {name}.", "error")
+            if stopped:
+                self.log(f"Instance {name} stopped.", "success")
+        else:
+            self.log(f"Instance {name} is not running.", "info")
+        # The emulator may leave helper windows behind when an instance closes.
+        self._minimize_windows(minimize)
+        return stopped
+
+    def _wait_until_stopped(self, instance_index, attempts=STOP_CONFIRM_ATTEMPTS, retry_graceful=False):
+        """Poll until the instance processes are gone or the attempts run out.
+
+        Args:
+            instance_index (int): Instance slot.
+            attempts (int): Number of polls.
+            retry_graceful (bool): Re-issue the graceful shutdown request every
+                few polls for a guest that only answers a later request.
+
+        Returns:
+            bool: True when the instance processes are gone.
+        """
+        for attempt in range(attempts):
             if not self._matching_processes(instance_index):
                 return True
-            time.sleep(2)
-        for proc in self._matching_processes(instance_index):
-            try:
-                proc.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        for _ in range(5):
-            if not self._matching_processes(instance_index):
-                return True
-            time.sleep(2)
-        return False
+            if retry_graceful and attempt and attempt % STOP_RETRY_EVERY == 0:
+                self._graceful_stop(instance_index)
+            time.sleep(POLL_SECONDS)
+        return not self._matching_processes(instance_index)
+
+    def _terminate_matching_processes(self, instance_index):
+        """Terminate the instance processes, then kill any survivor."""
+        _signal_processes(self._killable_processes(instance_index), "terminate")
+        if self._wait_until_stopped(instance_index, KILL_CONFIRM_ATTEMPTS):
+            return True
+        _signal_processes(self._killable_processes(instance_index), "kill")
+        return self._wait_until_stopped(instance_index, KILL_CONFIRM_ATTEMPTS)
+
+    # --- ADB server ---
 
     def list_devices(self):
         """List devices using the backend adb binary."""
         result = run_process_robust([self.adb_path, "devices"], timeout=15)
-        if not result:
-            return {}
-        return parse_devices_output(result.stdout)
+        return parse_devices_output(result.stdout) if result else {}
 
     def connect(self, serial):
         """Ask the backend ADB server to connect to ``serial``."""
@@ -453,12 +472,47 @@ class EmulatorBackend(ABC):
         run_process_robust([self.adb_path, "start-server"], timeout=10)
 
 
-class MuMuBackend(MultiInstanceManager, EmulatorBackend):
+class _ConfigBackend(EmulatorBackend):
+    """Backend whose instances come from a configuration source on disk.
+
+    Subclasses provide :meth:`_read_instances`; this class keeps the parsed
+    list and resolves integer slots against it.
+    """
+
+    def __init__(self, log_func=None, adb_path=None):
+        """Initialize the backend and load its instance list."""
+        super().__init__(log_func=log_func, adb_path=adb_path)
+        self._instances = []
+        self.refresh()
+
+    def refresh(self):
+        """Re-read the configuration and rebuild the instance list."""
+        self._instances = self._read_instances()
+
+    @abstractmethod
+    def _read_instances(self):
+        """Return instance dicts with 'index', 'name' and 'display_name'."""
+
+    def list_instances(self):
+        """Return the config-backed instances with their stable indices."""
+        self.refresh()
+        return [{"index": inst["index"], "name": inst["display_name"] or inst["name"]} for inst in self._instances]
+
+    def _get_instance(self, instance_index):
+        """Resolve an integer slot to its instance dict.
+
+        Raises:
+            ValueError: If the index is out of range.
+        """
+        return _resolve_instance(self._instances, instance_index, self.name)
+
+
+class MuMuBackend(EmulatorBackend):
     """MuMu Player backend.
 
-    Reuses the existing :class:`MultiInstanceManager` for instance discovery
-    and adds the ADB command/connection helpers MuMu requires (through its own
-    ``adb.exe``, targeting the predictable 16384 + 32*index serials).
+    Instances are discovered by scanning the ``vms`` folder (the folder name
+    carries the instance index) and matched to their shell/hypervisor
+    processes, so no manager process or window is needed.
     """
 
     name = EMULATOR_MUMU
@@ -472,129 +526,130 @@ class MuMuBackend(MultiInstanceManager, EmulatorBackend):
             adb_path (str): Path to the MuMu adb.exe.
             instance_base_path (str): Directory containing the instance VMs.
             manager_path (str): Path to MuMuManager.exe used for graceful
-                instance shutdowns (falls back to terminating processes when
-                missing).
+                instance shutdowns.
         """
-        super().__init__(log_func=log_func, instance_base_path=instance_base_path)
-        self.adb_path = adb_path
+        super().__init__(log_func=log_func, adb_path=adb_path)
+        self.instance_base_path = instance_base_path
         self.manager_path = manager_path
 
-    def _graceful_stop(self, instance_index):
-        """Shut the instance down through MuMuManager instead of killing it.
+    def _vm_name(self, idx):
+        """Return the instance folder name, e.g. ``MuMuPlayerGlobal-15.0-0``.
 
-        Terminating the instance processes directly (MuMuVMMHeadless.exe for
-        legacy Android 12 VMs) makes the MuMuVMMSVC hypervisor service crash
-        with an R6025 "pure virtual function call"; asking the manager to
-        shut the player down first lets the hypervisor release the VM
-        cleanly. The request is retried a few times: a busy manager (e.g.
-        still answering another instance) can reject the first one.
-
-        Returns:
-            bool: True when the manager accepted the shutdown request, False
-            when it is missing or every attempt failed (callers then fall
-            back to terminating the shell processes only, never the VM).
+        MuMu names the per-instance folder after the emulator series it was
+        created with, so the series must not be hardcoded. A best-effort guess
+        is returned when no folder matches so a missing instance still
+        surfaces as a warning.
         """
-        for _ in range(3):
-            if not os.path.exists(self.manager_path):
-                self.log(f"MuMuManager.exe not found at {self.manager_path}, falling back to process termination.", "warning")
-                return False
-            result = run_process_robust([self.manager_path, "control", "--vmindex", str(instance_index), "shutdown"], timeout=30)
-            if result and result.returncode == 0:
-                return True
-            time.sleep(2)
-        self.log(f"MuMuManager shutdown request failed for instance {instance_index}.", "warning")
-        return False
+        if not os.path.isdir(self.instance_base_path):
+            return f"MuMuPlayerGlobal-12.0-{idx}"
+        try:
+            return next(folder for folder in os.listdir(self.instance_base_path) if re.fullmatch(rf"MuMuPlayerGlobal-[\d.]+-{idx}", folder))
+        except StopIteration:
+            return f"MuMuPlayerGlobal-12.0-{idx}"
 
-    def _terminate_matching_processes(self, instance_index):
-        """Kill the instance shell processes, never the VM process.
+    def _instance_config_path(self, idx):
+        """Return the extra_config.json path of an instance."""
+        return os.path.join(self.instance_base_path, self._vm_name(idx), "configs", "extra_config.json")
 
-        Terminating MuMuVMMHeadless.exe (the VirtualBox VM process behind
-        Android 12 instances) directly crashes the MuMuVMMSVC hypervisor
-        service with an R6025 "pure virtual function call", so the VM is
-        left running when the manager cannot close it: the stop is reported
-        as failed and the instance is retried later instead of taking the
-        ADB of every instance down with it.
+    def _instance_name(self, idx):
+        """Return the display name of an instance, or ``Instance {idx}``."""
+        try:
+            with open(self._instance_config_path(idx), encoding="utf-8") as f:
+                return json.load(f).get("playerName", f"Instance {idx}")
+        except (OSError, ValueError):
+            return f"Instance {idx}"
 
-        Returns:
-            bool: True when the instance processes are all gone afterwards.
+    def _device_executable(self, idx):
+        """Return the MuMuNxDevice.exe shell for the instance's series."""
+        series = _MUMU_INSTANCE_SERIES_RE.match(self._vm_name(idx)).group(1)
+        root = os.path.dirname(self.instance_base_path)
+        return os.path.normpath(os.path.join(root, "nx_device", series, "shell", "MuMuNxDevice.exe"))
+
+    def _device_argv(self, idx):
+        """Return the argv that launches the instance VM directly."""
+        return [self._device_executable(idx), "-v", str(idx), "--vm", self._vm_name(idx)]
+
+    def list_instances(self):
+        """Return the instances found in the ``vms`` folder."""
+        self.log("Fetching emulator instances...", "info")
+        if not os.path.isdir(self.instance_base_path):
+            return []
+        indices = set()
+        for folder in os.listdir(self.instance_base_path):
+            match = _MUMU_INSTANCE_FOLDER_RE.fullmatch(folder)
+            if match:
+                indices.add(int(match.group(1)))
+        return [{"index": idx, "name": self._instance_name(idx)} for idx in sorted(indices)]
+
+    def _matching_processes(self, instance_index):
+        """Return the shell and hypervisor processes of an instance."""
+        vm_name = self._vm_name(instance_index)
+        matches = []
+        for proc, name, cmdline in _iter_processes():
+            if (
+                _is_process_named(name, "MuMuNxDevice")
+                and _has_process_option(cmdline, "vm", vm_name)
+                or _is_process_named(name, "MuMuVMMHeadless")
+                and _has_process_option(cmdline, "comment", vm_name)
+            ):
+                matches.append(proc)
+        return matches
+
+    def _killable_processes(self, instance_index):
+        """Return the instance shell processes, never the VM process.
+
+        Terminating MuMuVMMHeadless.exe directly crashes the MuMuVMMSVC
+        hypervisor service, so only the MuMuNxDevice shell may be killed.
         """
         vm_name = self._vm_name(instance_index)
-        shells = [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "MuMuNxDevice") and _has_process_option(cmdline, "vm", vm_name)]
-        for proc in shells:
-            try:
-                proc.terminate()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        for _ in range(5):
-            if not self._matching_processes(instance_index):
-                return True
-            time.sleep(2)
-        for proc in shells:
-            try:
-                proc.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        for _ in range(5):
-            if not self._matching_processes(instance_index):
-                return True
-            time.sleep(2)
-        return False
+        return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "MuMuNxDevice") and _has_process_option(cmdline, "vm", vm_name)]
 
     def _launch_argv(self, instance_index):
         """Launch the instance VM directly with its device shell."""
         return self._device_argv(instance_index)
 
-    def _matching_processes(self, instance_index):
-        """Match the instance by its shell or hypervisor process."""
-        return super()._matching_processes(instance_index)
-
     def _display_name(self, instance_index):
         """Return the instance display name (the window title)."""
         return self._instance_name(instance_index)
 
-    def _is_instance_running(self, instance_index):
-        """Check whether the instance is running via its processes."""
-        return bool(self._matching_processes(instance_index))
-
     def get_serial(self, instance_index):
-        """Return the MuMu ADB serial for the instance index.
-
-        Args:
-            instance_index (int): Emulator instance index.
-
-        Returns:
-            str: ADB serial, e.g. "127.0.0.1:16416" for instance 1.
-        """
+        """Return the MuMu ADB serial, e.g. "127.0.0.1:16416" for instance 1."""
         port = int(ADB_PORT) + ADB_PORT_STEP * int(instance_index)
         return f"127.0.0.1:{port}"
-
-    def build_adb_command(self, command_parts, instance_index):
-        """Build the MuMu adb command line.
-
-        Args:
-            command_parts (list): ADB command parts.
-            instance_index (int): Emulator instance index.
-
-        Returns:
-            list: Full argv, e.g. [adb.exe, "-s", "127.0.0.1:16416", ...].
-        """
-        return [self.adb_path, "-s", self.get_serial(instance_index)] + command_parts
 
     def check_adb_access(self):
         """MuMu does not restrict out-of-the-box ADB usage."""
         return []
 
+    def _graceful_stop(self, instance_index):
+        """Shut the instance down through MuMuManager instead of killing it.
 
-class BlueStacksBackend(EmulatorBackend):
+        The request is retried a few times: a busy manager (e.g. still
+        answering another instance) can reject the first one.
+        """
+        if not os.path.exists(self.manager_path):
+            self.log(f"MuMuManager.exe not found at {self.manager_path}, falling back to process termination.", "warning")
+            return False
+        for attempt in range(3):
+            result = run_process_robust([self.manager_path, "control", "--vmindex", str(instance_index), "shutdown"], timeout=30)
+            if result and result.returncode == 0:
+                return True
+            if attempt < 2:
+                time.sleep(POLL_SECONDS)
+        self.log(f"MuMuManager shutdown request failed for instance {instance_index}.", "warning")
+        return False
+
+
+class BlueStacksBackend(_ConfigBackend):
     """BlueStacks 5 backend (``bluestacks.conf``-driven).
 
-    Instances are discovered from ``bluestacks.conf``; integer instance indices
-    map to those instances ordered by ADB port. ADB is always run with
-    BlueStacks' own ``HD-Adb.exe`` (its server owns port 5037).
+    Instances are ordered by ADB port and addressed by their position in that
+    order. ADB always runs with BlueStacks' own ``HD-Adb.exe``.
     """
 
     name = EMULATOR_BLUESTACKS
     window_process_names = BLUESTACKS_WINDOW_PROCESS_NAMES
+    adb_running_fallback = True
 
     def __init__(self, log_func=None, conf_path=BLUESTACKS_CONF, adb_path=BLUESTACKS_ADB_PATH, player_path=BLUESTACKS_HD_PLAYER_PATH):
         """Initialize the BlueStacks backend.
@@ -605,127 +660,56 @@ class BlueStacksBackend(EmulatorBackend):
             adb_path (str): Path to HD-Adb.exe.
             player_path (str): Path to HD-Player.exe.
         """
-        super().__init__(log_func=log_func, adb_path=adb_path)
         self.conf_path = conf_path
         self.player_path = player_path
-        self._instances = []
-        self._index_map = {}
-        self.refresh()
+        super().__init__(log_func=log_func, adb_path=adb_path)
 
-    def refresh(self):
-        """Re-read the config file and rebuild the instance list."""
-        values = parse_bluestacks_conf(self.conf_path)
-        self._instances = list_bluestacks_instances(values)
-        self._index_map = {index: instance for index, instance in enumerate(self._instances)}
-
-    def _get_instance(self, instance_index):
-        """Resolve an integer slot to its instance dict.
-
-        Args:
-            instance_index (int): Instance slot.
-
-        Returns:
-            dict: The instance info.
-
-        Raises:
-            ValueError: If the index is out of range.
-        """
-        instance = self._index_map.get(int(instance_index))
-        if instance is None:
-            raise ValueError(f"Unknown BlueStacks instance index: {instance_index}")
-        return instance
-
-    def _instance_name(self, instance_index):
-        """Return the config key (e.g. "Pie64") of an instance slot."""
-        return self._get_instance(instance_index)["name"]
-
-    def _display_name(self, instance_index):
-        """Return the instance display name (the window title)."""
-        return self._get_instance(instance_index)["display_name"]
+    def _read_instances(self):
+        """Read bluestacks.conf and assign stable slots by ADB port."""
+        return [{"index": index, **instance} for index, instance in enumerate(list_bluestacks_instances(parse_bluestacks_conf(self.conf_path)))]
 
     def _launch_argv(self, instance_index):
         """Launch the instance through HD-Player.exe."""
-        return [self.player_path, "--instance", self._instance_name(instance_index)]
-
-    def get_instances(self):
-        """List BlueStacks instances with stable integer indices (by ADB port).
-
-        The result is persisted to the shared instance cache, mirroring the MuMu
-        backend, so the GUI can render instances without re-reading the config
-        file on every refresh.
-        """
-        self.refresh()
-        instances = [{"index": i, "name": inst["display_name"] or inst["name"]} for i, inst in enumerate(self._instances)]
-        save_instance_cache(instances)
-        return instances
+        return [self.player_path, "--instance", self._get_instance(instance_index)["name"]]
 
     def get_serial(self, instance_index):
         """Return the ADB serial (host:port) of the instance, using its port."""
         return f"127.0.0.1:{self._get_instance(instance_index)['adb_port']}"
 
-    def build_adb_command(self, command_parts, instance_index):
-        """Build a BlueStacks adb command using its own binary.
-
-        Args:
-            command_parts (list): ADB command parts.
-            instance_index (int): Emulator instance slot.
-
-        Returns:
-            list: Full argv, e.g. [HD-Adb.exe, "-s", "127.0.0.1:5555", ...].
-        """
-        return [self.adb_path, "-s", self.get_serial(instance_index)] + command_parts
-
     def _matching_processes(self, instance_index):
         """Return the HD-Player processes launched for an instance."""
-        instance_name = self._instance_name(instance_index)
+        instance_name = self._get_instance(instance_index)["name"]
         return [proc for proc, name, cmdline in _iter_processes() if _is_process_named(name, "HD-Player") and _has_process_option(cmdline, "instance", instance_name)]
 
-    def _is_instance_running(self, instance_index):
-        """Check whether the instance is booting/running via its processes."""
-        if self._matching_processes(instance_index):
-            return True
-        # Fallback: the instance may run headless, visible only as ADB device.
-        devices = self.list_devices()
-        return devices.get(self.get_serial(instance_index)) == "device"
+    def _display_name(self, instance_index):
+        """Return the instance display name (the window title)."""
+        instance = self._get_instance(instance_index)
+        return instance["display_name"] or instance["name"]
 
     def check_adb_access(self):
-        """Warn when BlueStacks blocks out-of-band ADB shell access.
-
-        Returns:
-            list: Human-readable warnings (empty when ADB access is enabled).
-        """
+        """Warn when BlueStacks blocks out-of-band ADB shell access."""
         if get_bluestacks_adb_access(parse_bluestacks_conf(self.conf_path)):
             return []
-        warning = (
+        return [
             "BlueStacks has 'Android Debug Bridge' disabled. Enable it in "
             "BlueStacks Settings > Advanced > Android Debug Bridge and restart "
             "BlueStacks, or the tool cannot control the emulator (adb errors: "
             "'error: closed')."
-        )
-        return [warning]
+        ]
 
 
-class LDPlayerBackend(EmulatorBackend):
+class LDPlayerBackend(_ConfigBackend):
     """LDPlayer backend (``vms/config/leidianN.config``-driven).
 
-    Instances are discovered from the per-instance JSON config files; the
-    ``leidianN`` file number N is the instance index used by ``ldconsole.exe``
-    (``launch --index N`` / ``quit --index N``). ADB always runs with
-    LDPlayer's own ``adb.exe`` (its server owns port 5037 and registers each
-    instance as ``emulator-5554 + 2*index``).
+    The ``leidianN`` file number N is the instance index used by
+    ``ldconsole.exe``. ADB always runs with LDPlayer's own ``adb.exe``.
     """
 
     name = EMULATOR_LDPLAYER
     window_process_names = LDPLAYER_WINDOW_PROCESS_NAMES
+    adb_running_fallback = True
 
-    def __init__(
-        self,
-        log_func=None,
-        config_dir=LDPLAYER_INSTANCE_CONFIG_DIR,
-        console_path=LDPLAYER_CONSOLE_PATH,
-        adb_path=LDPLAYER_ADB_PATH,
-        player_path=LDPLAYER_PLAYER_PATH,
-    ):
+    def __init__(self, log_func=None, config_dir=LDPLAYER_INSTANCE_CONFIG_DIR, console_path=LDPLAYER_CONSOLE_PATH, adb_path=LDPLAYER_ADB_PATH, player_path=LDPLAYER_PLAYER_PATH):
         """Initialize the LDPlayer backend.
 
         Args:
@@ -735,69 +719,25 @@ class LDPlayerBackend(EmulatorBackend):
             adb_path (str): Path to LDPlayer's bundled adb.exe.
             player_path (str): Path to dnplayer.exe.
         """
-        super().__init__(log_func=log_func, adb_path=adb_path)
         self.config_dir = config_dir
         self.console_path = console_path
         self.player_path = player_path
-        self._instances = []
-        self._index_map = {}
-        self.refresh()
+        super().__init__(log_func=log_func, adb_path=adb_path)
 
-    def refresh(self):
-        """Re-read the config directory and rebuild the instance list."""
-        self._instances = list_ldplayer_instances(self.config_dir)
-        self._index_map = {inst["index"]: inst for inst in self._instances}
+    def _read_instances(self):
+        """Read the per-instance config files."""
+        return list_ldplayer_instances(self.config_dir)
 
-    def _get_instance(self, instance_index):
-        """Resolve an integer slot to its instance dict.
-
-        Args:
-            instance_index (int): Instance index.
-
-        Returns:
-            dict: The instance info.
-
-        Raises:
-            ValueError: If the index is out of range.
-        """
-        instance = self._index_map.get(int(instance_index))
-        if instance is None:
-            raise ValueError(f"Unknown LDPlayer instance index: {instance_index}")
-        return instance
-
-    def get_instances(self):
-        """List LDPlayer instances with their stable indexes.
-
-        The result is persisted to the shared instance cache, mirroring the
-        other backends, so the GUI can render instances without re-reading the
-        config files on every refresh.
-        """
-        self.refresh()
-        instances = [{"index": inst["index"], "name": inst["display_name"]} for inst in self._instances]
-        save_instance_cache(instances)
-        return instances
+    def _launch_argv(self, instance_index):
+        """Launch the instance through ldconsole (asynchronous)."""
+        self._get_instance(instance_index)
+        return [self.console_path, "launch", "--index", str(instance_index)]
 
     def get_serial(self, instance_index):
-        """Return the ADB serial shown by LDPlayer's adb server.
-
-        LDPlayer registers each instance as ``emulator-<port - 1>`` with the
-        port derived from the instance index (5555 for instance 0).
-        """
+        """Return the ADB serial (``emulator-<port - 1>``) of the instance."""
         self._get_instance(instance_index)
         port = LDPLAYER_ADB_PORT + LDPLAYER_ADB_PORT_STEP * int(instance_index)
         return f"emulator-{port - 1}"
-
-    def build_adb_command(self, command_parts, instance_index):
-        """Build an LDPlayer adb command using its own binary.
-
-        Args:
-            command_parts (list): ADB command parts.
-            instance_index (int): Emulator instance index.
-
-        Returns:
-            list: Full argv, e.g. [adb.exe, "-s", "emulator-5554", ...].
-        """
-        return [self.adb_path, "-s", self.get_serial(instance_index)] + command_parts
 
     def _matching_processes(self, instance_index):
         """Return the dnplayer processes launched for an instance."""
@@ -807,38 +747,21 @@ class LDPlayerBackend(EmulatorBackend):
         """Return the instance display name (the window title)."""
         return self._get_instance(instance_index)["display_name"]
 
-    def _launch_argv(self, instance_index):
-        """Launch the instance through ldconsole (asynchronous)."""
-        return [self.console_path, "launch", "--index", str(instance_index)]
-
-    def _graceful_stop(self, instance_index):
-        """Ask ldconsole to close the instance gracefully."""
-        run_process_robust([self.console_path, "quit", "--index", str(instance_index)], timeout=15)
-
-    def _is_instance_running(self, instance_index):
-        """Check whether the instance is running via its dnplayer process."""
-        if self._matching_processes(instance_index):
-            return True
-        # Fallback: the instance may run headless, visible only as ADB device.
-        devices = self.list_devices()
-        return devices.get(self.get_serial(instance_index)) == "device"
-
     def check_adb_access(self):
-        """Warn when LDPlayer instances block out-of-band ADB usage.
-
-        Returns:
-            list: Human-readable warnings (empty when ADB debugging is enabled
-                on every instance).
-        """
+        """Warn when LDPlayer instances block out-of-band ADB usage."""
         disabled = [inst["display_name"] for inst in self._instances if not inst["adb_debug"]]
         if not disabled:
             return []
-        warning = (
+        return [
             "LDPlayer has 'ADB debugging' disabled for instance(s): " + ", ".join(disabled) + ". Enable it in LDPlayer settings (Customize > Other settings > ADB "
             "debugging) and restart the instances, or the tool cannot control "
             "the emulator."
-        )
-        return [warning]
+        ]
+
+    def _graceful_stop(self, instance_index):
+        """Ask ldconsole to close the instance gracefully."""
+        result = run_process_robust([self.console_path, "quit", "--index", str(instance_index)], timeout=15)
+        return bool(result and result.returncode == 0)
 
 
 def _configured_path(emulator_paths, emulator, key, default):

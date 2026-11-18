@@ -5,7 +5,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from wosutil.emulator.instances_controller import load_instance_cache
+from wosutil.emulator.instance_cache import load_instance_cache
 from wosutil.gui.gui_dialogs import show_centered_dialog
 from wosutil.gui.gui_tooltip import Tooltip
 from wosutil.tool.tool_instances_controller import (
@@ -17,33 +17,37 @@ from wosutil.tool.tool_instances_controller import (
 )
 
 
-def get_next_task_info(pm, now):
+def get_next_task_info(state, now):
     """Get the task that will actually run next, mirroring the worker.
 
     The controller executes the highest-priority task that is already due,
     waiting for a higher-priority task scheduled within the grouping window
     (TASK_GROUPING_WINDOW_SECONDS) first, and waits for the earliest future
-    task otherwise. The first pick may not be the first task that executes:
-    while a picked task is not due yet, the worker keeps waiting and
-    re-picking, and a higher-priority in-window task (e.g. another 00:00 UTC
-    event read a second later) can jump ahead. This helper walks that wait
-    chain to find the task the worker will actually execute first.
+    task otherwise. While a picked task is not due yet, the worker keeps
+    waiting and re-picking, so a higher-priority in-window task can jump
+    ahead. This helper walks that wait chain to find the task the worker will
+    actually execute first.
+
+    Args:
+        state: The instance state (or None).
+        now: Current epoch time.
+
+    Returns:
+        tuple: (task name, execution timestamp) or (None, None).
     """
-    if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
+    tasks = getattr(state, "tasks", None) if state else None
+    if not tasks:
         return None, None
 
     sim_now = now
     while True:
-        task, wait_until = pick_scheduled_task(pm.running_tasks_state, sim_now)
+        task, wait_until = pick_scheduled_task(tasks, sim_now)
         if task is None:
             return None, None
         if wait_until is None:
             task_name = task.get("name", "?")
-            if sim_now == now:
-                # The task is due right now: return it without the wait time
-                return task_name, None
-            # The task executes at sim_now (the end of the wait chain)
-            return task_name, sim_now
+            # The task is due now (or at the end of the wait chain)
+            return task_name, (None if sim_now == now else sim_now)
         sim_now = wait_until
 
 
@@ -55,34 +59,35 @@ def format_time_remaining(seconds):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def get_all_tasks_info(pm, now):
+def get_all_tasks_info(state, now):
     """Get every scheduled task of an instance in the real execution order.
 
     Tasks whose run times fall within the same window
     (TASK_GROUPING_WINDOW_SECONDS) run grouped by priority, since the worker
     waits for the highest-priority in-window task instead of the one whose
-    timer was read earlier. This helper group the tasks in windows the same
-    way and lists each window in priority order, so the preview matches the
-    order in which the tasks will actually run; tasks in different windows
-    keep their chronological order.
+    timer was read earlier. This helper groups the tasks the same way and
+    lists each window in priority order, so the preview matches the order in
+    which the tasks will actually run; tasks in different windows keep their
+    chronological order.
 
     Args:
-        pm: The profile manager of the instance (or None).
+        state: The instance state (or None).
         now: Current epoch time.
 
     Returns:
         List of (task name, remaining seconds) pairs in execution order;
         tasks that are already due have a remaining time of 0.
     """
-    if not pm or not hasattr(pm, "running_tasks_state") or not pm.running_tasks_state:
+    tasks = getattr(state, "tasks", None) if state else None
+    if not tasks:
         return []
 
-    tasks = sorted(pm.running_tasks_state, key=lambda t: (t.get("next_run_time", 0), t.get("priority", 99)))
+    ordered = sorted(tasks, key=lambda task: (task.get("next_run_time", 0), task.get("priority", 99)))
 
     clusters = []
     cluster = []
     anchor = None
-    for task in tasks:
+    for task in ordered:
         task_time = task.get("next_run_time", 0)
         if cluster and task_time > anchor + TASK_GROUPING_WINDOW_SECONDS:
             clusters.append(cluster)
@@ -96,25 +101,25 @@ def get_all_tasks_info(pm, now):
 
     infos = []
     for cluster in clusters:
-        cluster.sort(key=lambda t: (t.get("priority", 99), t.get("next_run_time", 0)))
+        cluster.sort(key=lambda task: (task.get("priority", 99), task.get("next_run_time", 0)))
         for task in cluster:
             remaining = max(0, int(task.get("next_run_time", 0) - now))
             infos.append((task.get("name", "?"), remaining))
     return infos
 
 
-def format_task_tooltip(pm, now):
+def format_task_tooltip(state, now):
     """Build the tooltip text with the countdown of every scheduled task.
 
     Args:
-        pm: The profile manager of the instance (or None).
+        state: The instance state (or None).
         now: Current epoch time.
 
     Returns:
         One numbered line per task in execution order, "Name: HH:MM:SS" form;
         tasks that are ready to run are shown as ready.
     """
-    infos = get_all_tasks_info(pm, now)
+    infos = get_all_tasks_info(state, now)
     if not infos:
         return "No programmed tasks"
     lines = []
@@ -126,49 +131,25 @@ def format_task_tooltip(pm, now):
     return "\n".join(lines)
 
 
-def setup_instances_tab(
-    notebook,
-    profile_manager,
-    multi_instance_manager,
-    log_message,
-    TASK_DEFINITIONS,
-    instances_profile_managers,
-    instance_queue,
-    active_instances,
-    emulator_state=None,
-):
-    """Setup the instances tab in the GUI.
+def setup_instances_tab(notebook, profile_manager, log_message, task_definitions, emulator_state):
+    """Set up the instances tab in the GUI.
 
     Args:
         notebook: The parent notebook widget.
         profile_manager: Profile manager instance.
-        multi_instance_manager: Multi-instance manager instance.
         log_message: Logging function.
-        TASK_DEFINITIONS: Dictionary of task definitions.
-        instances_profile_managers: Dictionary mapping instances to profile managers.
-        instance_queue: Queue of instances to process.
-        active_instances: Set of currently active instances.
-        emulator_state (dict, optional): Shared emulator state. When provided,
-            the backend, tool_running flag, controller and the refresh callback
-            are tracked here so an emulator switch (Preferences) can re-create
-            the backend and re-enumerate instances. If None, a private state is
-            created and the passed backend is used.
+        task_definitions (dict): Task definitions.
+        emulator_state (dict): Shared state with the active backend, the tool
+            running flag, the controller and the refresh callback.
     """
-    if emulator_state is None:
-        emulator_state = {}
-
-    def get_backend():
-        """Return the backend tracked in the shared state.
-
-        Falls back to the one this tab was initialized with.
-        """
-        return emulator_state.get("backend") or multi_instance_manager
-
     multi_instance_tab = ttk.Frame(notebook)
     notebook.add(multi_instance_tab, text="Multi-Instance")
 
     instance_list_frame = ttk.LabelFrame(multi_instance_tab, text="Instances and Profiles")
     instance_list_frame.pack(pady=10, padx=10, fill="x")
+
+    def get_backend():
+        return emulator_state["backend"]
 
     def get_profiles():
         return list(profile_manager.profiles.keys())
@@ -178,7 +159,7 @@ def setup_instances_tab(
     max_emus_value = instance_selection.get("max_emulators", 2)
     max_instances_var = tk.IntVar(value=max_emus_value)
 
-    # --- Botones y controles ---
+    # --- Buttons and controls ---
     button_frame = ttk.Frame(multi_instance_tab)
     button_frame.pack(pady=10)
 
@@ -196,27 +177,20 @@ def setup_instances_tab(
     stop_btn.pack(side="left", padx=10, pady=10)
     stop_btn.pack_forget()  # Hidden at first
 
-    # --- Controlador ---
-    # Shared queue used by the tool worker threads to request dialogs in the
-    # main thread (e.g. "game not installed"); drained by periodic_update.
+    # --- Controller ---
+    # Worker threads ask for dialogs through this queue; periodic_update shows
+    # them in the main thread.
     dialog_queue = queue.Queue()
     controller = MultiInstanceToolController(
-        multi_instance_manager=emulator_state.get("backend") or multi_instance_manager,
-        profile_manager=profile_manager,
         log_message=log_message,
-        TASK_DEFINITIONS=TASK_DEFINITIONS,
-        instances_profile_managers=instances_profile_managers,
-        instance_queue=instance_queue,
-        active_instances=active_instances,
+        task_definitions=task_definitions,
+        backend=get_backend(),
+        profiles=profile_manager.profiles,
         instance_widgets=instance_widgets,
-        save_instance_selection=save_instance_selection,
-        load_instance_selection=load_instance_selection,
         dialog_queue=dialog_queue,
     )
+    controller.set_max_instances(max_emus_value)
     emulator_state["controller"] = controller
-
-    def on_checkbox_or_profile_change():
-        controller.on_checkbox_or_profile_change()
 
     # --- Tool state ---
     tool_running = emulator_state.get("tool_running") or {"value": False}
@@ -249,13 +223,13 @@ def setup_instances_tab(
                 checked_val = instance_selection.get(idx_str, {}).get("checked", False)
                 profile_val = instance_selection.get(idx_str, {}).get("profile", profiles[0] if profiles else "")
                 checked_var.set(checked_val)
-                cb = ttk.Checkbutton(row, variable=checked_var, command=on_checkbox_or_profile_change)
+                cb = ttk.Checkbutton(row, variable=checked_var, command=controller.on_checkbox_or_profile_change)
                 cb.pack(side="left")
                 ttk.Label(row, text=f"Instance {inst['index']} ({inst['name']})").pack(side="left", padx=5)
                 profile_var = tk.StringVar(value=profile_val)
                 combo = ttk.Combobox(row, values=profiles, textvariable=profile_var, state="readonly", width=20)
                 combo.pack(side="left", padx=5)
-                combo.bind("<<ComboboxSelected>>", lambda e: on_checkbox_or_profile_change())
+                combo.bind("<<ComboboxSelected>>", lambda e: controller.on_checkbox_or_profile_change())
                 task_status_label = ttk.Label(row, text="")
                 task_status_label.pack(side="left", padx=10)
                 instance_widgets.append({"index": inst["index"], "checked": checked_var, "profile_var": profile_var, "combo": combo, "task_status_label": task_status_label})
@@ -277,7 +251,7 @@ def setup_instances_tab(
                     info_icon.pack(side="left", padx=(0, 2))
                     Tooltip(
                         info_icon,
-                        lambda idx=inst["index"]: format_task_tooltip(instances_profile_managers.get(idx), time.time()),
+                        lambda idx=inst["index"]: format_task_tooltip(controller.state_for(idx), time.time()),
                     )
                     instance_widgets.append(
                         {
@@ -295,7 +269,6 @@ def setup_instances_tab(
 
     refresh_btn.config(command=update_and_refresh)
     emulator_state["refresh_instances"] = refresh_instances
-    controller.set_max_instances_var(max_instances_var)
     start_btn.config(command=lambda: on_start_tool())
     stop_btn.config(command=lambda: on_stop_tool())
 
@@ -310,6 +283,9 @@ def setup_instances_tab(
             show_centered_dialog(notebook, "Tool not started", "\n\n".join(adb_warnings))
             return
 
+        if not controller.start_tool():
+            return
+
         tool_running["value"] = True
         # Hide controls and show stop
         refresh_btn.pack_forget()
@@ -321,7 +297,6 @@ def setup_instances_tab(
         stop_btn.pack(side="left", padx=10, pady=10)
         # Refresh the shown instance rows to the running state
         refresh_instances()
-        controller.start_tool()
 
     def on_stop_tool():
         tool_running["value"] = False
@@ -329,7 +304,6 @@ def setup_instances_tab(
         stop_btn.pack_forget()
         refresh_btn.pack(side="left", padx=5)
         emu_limit_spin.pack(side="left", padx=5)
-        # Shows emulator limit again
         for child in button_frame.winfo_children():
             if isinstance(child, ttk.Label):
                 child.pack(side="left", padx=5)
@@ -337,25 +311,8 @@ def setup_instances_tab(
         refresh_instances()
         controller.stop_tool()
 
-    def get_ordinal_number(n):
-        """Convert a number to its ordinal form (1st, 2nd, 3rd, etc)."""
-        if not isinstance(n, int):
-            return str(n)
-
-        suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-
-        return f"{n}{suffix}"
-
-    def get_queue_position(idx):
-        """Get position of instance in queue."""
-        try:
-            pos = [ix for ix, (i, _) in enumerate(instance_queue) if i == idx][0] + 1
-            return get_ordinal_number(pos)
-        except (IndexError, ValueError):
-            return None
-
     def update_task_status_labels():
-        if not getattr(controller, "tool_running", False):
+        if not controller.tool_running:
             for inst_widget in instance_widgets:
                 inst_widget["task_status_label"].config(text="")
             return
@@ -370,65 +327,52 @@ def setup_instances_tab(
                 label.config(text="")
                 continue
 
-            pm = instances_profile_managers.get(idx)
+            state = controller.state_for(idx)
 
-            if idx in active_instances:
-                # Instance is active
-                if pm and getattr(pm, "opening_state", False):
-                    # The emulator/game is still opening: show the opening phase
-                    # and the first task it will run once inside.
-                    task_name, _ = get_next_task_info(pm, now)
-                    if task_name:
-                        label.config(text=f"Opening... First task: {task_name}")
-                    else:
-                        label.config(text="Opening...")
-                elif pm and hasattr(pm, "current_task_name") and pm.current_task_name:
-                    label.config(text=f"Executing: {pm.current_task_name}")
+            if controller.is_active(idx):
+                if state is not None and state.opening:
+                    task_name, _ = get_next_task_info(state, now)
+                    label.config(text=f"Opening... First task: {task_name}" if task_name else "Opening...")
+                elif state is not None and state.current_task_name:
+                    label.config(text=f"Executing: {state.current_task_name}")
                 else:
-                    task_name, next_time = get_next_task_info(pm, now)
+                    task_name, next_time = get_next_task_info(state, now)
                     if task_name and next_time and next_time > now:
-                        remaining = int(next_time - now)
-                        label.config(text=f"Next: {task_name} in {format_time_remaining(remaining)}")
+                        label.config(text=f"Next: {task_name} in {format_time_remaining(int(next_time - now))}")
                     elif task_name:
                         label.config(text=f"Executing: {task_name}")
                     else:
                         label.config(text="No programmed tasks")
             else:
-                # Instance is not active: in the queue, paused, or waiting to
-                # be re-queued by the self-healing launcher.
-                task_name, next_time = get_next_task_info(pm, now)
-                queue_pos = get_queue_position(idx)
-                aborted = idx in getattr(controller, "_aborted_instances", set())
-                blocked_until = getattr(controller, "_retry_blocked_until", {}).get(idx, 0)
+                task_name, next_time = get_next_task_info(state, now)
+                queue_pos = controller.pending_position(idx)
+                retry_remaining = controller.retry_seconds_remaining(idx, now)
 
-                if aborted:
+                if controller.is_aborted(idx):
                     label.config(text="Game not installed - install it and press Start")
                 elif queue_pos:
                     if task_name:
-                        if next_time:  # The task is on cooldown
-                            remaining = int(next_time - now)
-                            label.config(text=f"In queue ({queue_pos}) - Next: {task_name} in {format_time_remaining(remaining)}")
-                        else:  # The task is ready to run
+                        if next_time:
+                            label.config(text=f"In queue ({queue_pos}) - Next: {task_name} in {format_time_remaining(int(next_time - now))}")
+                        else:
                             label.config(text=f"In queue ({queue_pos}) - Waiting to execute: {task_name}")
                     else:
                         label.config(text=f"In queue ({queue_pos})")
-                else:
-                    if blocked_until > now:
-                        label.config(text=f"Retry paused - {format_time_remaining(int(blocked_until - now))}")
-                    elif task_name:
-                        if next_time:  # The task is on cooldown
-                            remaining = int(next_time - now)
-                            label.config(text=f"Standby - Next: {task_name} in {format_time_remaining(remaining)}")
-                        else:  # The task is ready to run
-                            label.config(text=f"Standby - Waiting to execute: {task_name}")
+                elif retry_remaining > 0:
+                    label.config(text=f"Retry paused - {format_time_remaining(int(retry_remaining))}")
+                elif task_name:
+                    if next_time:
+                        label.config(text=f"Standby - Next: {task_name} in {format_time_remaining(int(next_time - now))}")
                     else:
-                        label.config(text="Standby")
+                        label.config(text=f"Standby - Waiting to execute: {task_name}")
+                else:
+                    label.config(text="Standby")
 
     def update_profile_comboboxes():
         """Refresh the profile options of every instance combobox.
 
-        Called after a profile is created, updated, or deleted so the lists stay
-        in sync without requiring a manual refresh.
+        Called after a profile is created, updated, or deleted so the lists
+        stay in sync without requiring a manual refresh.
         """
         profiles = get_profiles()
         for inst_widget in instance_widgets:
@@ -449,15 +393,14 @@ def setup_instances_tab(
             except queue.Empty:
                 break
             show_centered_dialog(notebook, title, text)
-        # Retry launching queued instances whose next task is already within the
-        # startup window (<= 60 seconds) or already due.
-        if getattr(controller, "tool_running", False):
-            controller.launch_next_instances()
+        if controller.tool_running:
+            controller.launch_due_instances()
         instance_list_frame.after(1000, periodic_update)
 
     periodic_update()
 
     def on_max_instances_change(*args):
+        controller.set_max_instances(max_instances_var.get())
         selection = load_instance_selection()
         selection["max_emulators"] = max_instances_var.get()
         save_instance_selection(selection)
