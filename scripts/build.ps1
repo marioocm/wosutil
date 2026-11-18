@@ -10,6 +10,15 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
 
+$Python = Join-Path $Root ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $Python)) {
+    $Python = "python"
+}
+
+Write-Host "Fetching the pinned UI bundle..."
+& $Python (Join-Path $Root "scripts\fetch_ui.py")
+if ($LASTEXITCODE -ne 0) { throw "Could not fetch the UI bundle." }
+
 $PyInstaller = Join-Path $Root ".venv\Scripts\pyinstaller.exe"
 if (-not (Test-Path -LiteralPath $PyInstaller)) {
     $PyInstaller = Get-Command pyinstaller -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source

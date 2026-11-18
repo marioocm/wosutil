@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wosutil"
-version = "1.3.12"
+version = "1.4.0"
 description = "Python automation tool for Whiteout Survival using Android emulators (MuMu, BlueStacks, LDPlayer)"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,7 @@ where = ["src"]
 
 [project.scripts]
 wosutil = "wosutil.gui.gui_main:run_gui"
+wosutil-web = "wosutil.ui.main:run"
 template-creator = "wosutil.template_creator:main"
 
 [tool.pytest.ini_options]
