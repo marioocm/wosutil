@@ -101,7 +101,7 @@ class TestRestartAdbServerRateLimit(unittest.TestCase):
         with patch("wosutil.emulator.emulator_manager.get_active_backend") as backend:
             self.assertTrue(restart_adb_server())
             self.assertFalse(restart_adb_server())
-            self.assertEqual(backend.return_value.restart_server.call_count, 1)
+            self.assertEqual(backend.return_value.adb.restart_server.call_count, 1)
 
     def test_restart_allowed_after_interval(self):
         """A restart after the cooldown is honored again."""
@@ -109,7 +109,7 @@ class TestRestartAdbServerRateLimit(unittest.TestCase):
             self.assertTrue(restart_adb_server())
             emulator_manager._last_adb_restart_time -= emulator_manager.ADB_RESTART_MIN_INTERVAL_SECONDS + 1
             self.assertTrue(restart_adb_server())
-            self.assertEqual(backend.return_value.restart_server.call_count, 2)
+            self.assertEqual(backend.return_value.adb.restart_server.call_count, 2)
 
     def test_verify_does_not_restart_server_when_restart_is_recent(self):
         """A missing device with a recently restarted server only reconnects."""
@@ -121,7 +121,7 @@ class TestRestartAdbServerRateLimit(unittest.TestCase):
             patch("wosutil.emulator.emulator_manager.time.sleep"),
         ):
             self.assertFalse(verify_adb_connected(0, max_attempts=1, wait=0))
-            backend.return_value.restart_server.assert_not_called()
+            backend.return_value.adb.restart_server.assert_not_called()
 
 
 class TestAdbVerificationCache(unittest.TestCase):
@@ -283,7 +283,7 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
             patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
             patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)),
             patch("wosutil.emulator.emulator_manager.os.close"),
-            patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=None),
+            patch("wosutil.adb.run_process_robust_bytes", return_value=None),
             patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete,
         ):
             self.assertIsNone(take_screenshot(0))
@@ -298,7 +298,7 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
             patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
             patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)),
             patch("wosutil.emulator.emulator_manager.os.close"),
-            patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=garbage),
+            patch("wosutil.adb.run_process_robust_bytes", return_value=garbage),
             patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete,
         ):
             self.assertIsNone(take_screenshot(0))
@@ -315,7 +315,7 @@ class TestInputAndScreenshotFailures(unittest.TestCase):
             patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
             patch("wosutil.emulator.emulator_manager.tempfile.mkstemp", return_value=(123, local_path)),
             patch("wosutil.emulator.emulator_manager.os.close"),
-            patch("wosutil.emulator.emulator_manager.run_process_robust_bytes", return_value=success),
+            patch("wosutil.adb.run_process_robust_bytes", return_value=success),
             patch("builtins.open", file_handle),
             patch("wosutil.emulator.emulator_manager.delete_temp_screenshot") as delete,
         ):

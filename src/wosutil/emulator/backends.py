@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 
 import psutil
 
+from wosutil.adb import AdbClient
 from wosutil.config import (
     ADB_PORT,
     ADB_PORT_STEP,
@@ -94,27 +95,6 @@ def start_minimized_enabled():
     from wosutil.preferences import get_start_minimized
 
     return get_start_minimized()
-
-
-def parse_devices_output(stdout):
-    """Parse the output of ``adb devices`` into a {serial: state} dict.
-
-    Args:
-        stdout: The raw output of the devices command.
-
-    Returns:
-        dict: Mapping of device serial to connection state ("device",
-        "offline").
-    """
-    devices: dict[str, str] = {}
-    for line in (stdout or "").splitlines():
-        line = line.strip()
-        if not line or "List of devices" in line or line.startswith("*"):
-            continue
-        parts = line.split()
-        if len(parts) >= 2:
-            devices[parts[0]] = parts[1].lower()
-    return devices
 
 
 def parse_bluestacks_conf(conf_path=BLUESTACKS_CONF):
@@ -285,7 +265,12 @@ class EmulatorBackend(ABC):
     def __init__(self, log_func=None, adb_path=None):
         """Initialize the backend with a logging function and ADB binary."""
         self.log = log_func or logger.info
-        self.adb_path = adb_path
+        self.adb = AdbClient(adb_path)
+
+    @property
+    def adb_path(self):
+        """Return the adb executable owned by this backend."""
+        return self.adb.adb_path
 
     # --- Instance discovery ---
 
@@ -319,10 +304,6 @@ class EmulatorBackend(ABC):
     def check_adb_access(self):
         """Return non-empty user-facing warnings about ADB access."""
 
-    def build_adb_command(self, command_parts, instance_index):
-        """Return the full ADB argv for ``command_parts`` on the instance."""
-        return [self.adb_path, "-s", self.get_serial(instance_index), *command_parts]
-
     def _killable_processes(self, instance_index):
         """Return the processes the stop fallback may terminate directly."""
         return self._matching_processes(instance_index)
@@ -333,7 +314,7 @@ class EmulatorBackend(ABC):
             return True
         if not self.adb_running_fallback:
             return False
-        return self.list_devices().get(self.get_serial(instance_index)) == "device"
+        return self.adb.devices().get(self.get_serial(instance_index)) == "device"
 
     # --- Instance lifecycle ---
 
@@ -447,26 +428,6 @@ class EmulatorBackend(ABC):
             return True
         _signal_processes(self._killable_processes(instance_index), "kill")
         return self._wait_until_stopped(instance_index, KILL_CONFIRM_ATTEMPTS)
-
-    # --- ADB server ---
-
-    def list_devices(self):
-        """List devices using the backend adb binary."""
-        result = run_process_robust([self.adb_path, "devices"], timeout=15)
-        return parse_devices_output(result.stdout) if result else {}
-
-    def connect(self, serial):
-        """Ask the backend ADB server to connect to ``serial``."""
-        run_process_robust([self.adb_path, "connect", serial], timeout=10)
-
-    def kill_server(self):
-        """Stop the backend ADB server."""
-        run_process_robust([self.adb_path, "kill-server"], timeout=10)
-
-    def restart_server(self):
-        """Restart the backend ADB server."""
-        self.kill_server()
-        run_process_robust([self.adb_path, "start-server"], timeout=10)
 
 
 class _ConfigBackend(EmulatorBackend):

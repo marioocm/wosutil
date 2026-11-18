@@ -69,12 +69,6 @@ class TestConfParsing(unittest.TestCase):
         off.pop("bst.enable_adb_access")
         self.assertFalse(backends.get_bluestacks_adb_access(off))
 
-    def test_parse_devices_output(self):
-        """Adb devices output is parsed into a {serial: state} dict."""
-        stdout = "List of devices attached\n127.0.0.1:5555\tdevice\n127.0.0.1:5552\toffline\n"
-        self.assertEqual(backends.parse_devices_output(stdout), {"127.0.0.1:5555": "device", "127.0.0.1:5552": "offline"})
-        self.assertEqual(backends.parse_devices_output(""), {})
-
 
 class TestMumuBackend(unittest.TestCase):
     """Regression tests for the MuMu backend internals."""
@@ -90,7 +84,8 @@ class TestMumuBackend(unittest.TestCase):
         from wosutil.config import MUMU_ADB_PATH
 
         backend = backends.MuMuBackend()
-        command = backend.build_adb_command(["shell", "input", "tap", "100", "200"], 1)
+        serial = backend.get_serial(1)
+        command = backend.adb.build_command(serial, ["shell", "input", "tap", "100", "200"])
         self.assertEqual(command, [MUMU_ADB_PATH, "-s", "127.0.0.1:16416", "shell", "input", "tap", "100", "200"])
 
     def test_no_adb_warnings(self):
@@ -211,7 +206,8 @@ class TestBlueStacksBackend(unittest.TestCase):
     def test_build_command(self):
         """BlueStacks commands use HD-Adb targeting the instance serial."""
         m = self.backend
-        self.assertEqual(m.build_adb_command(["shell", "echo", "hi"], 1), [m.adb_path, "-s", "127.0.0.1:5555", "shell", "echo", "hi"])
+        serial = m.get_serial(1)
+        self.assertEqual(m.adb.build_command(serial, ["shell", "echo", "hi"]), [m.adb_path, "-s", "127.0.0.1:5555", "shell", "echo", "hi"])
 
     def test_check_adb_access_enabled(self):
         """No warnings when ADB access is enabled."""
