@@ -7,128 +7,67 @@ from tkinter import ttk
 
 from wosutil.emulator.instance_cache import load_instance_cache
 from wosutil.gui.gui_dialogs import show_centered_dialog
+from wosutil.gui.gui_instance_status import format_instance_status, format_task_tooltip
 from wosutil.gui.gui_tooltip import Tooltip
 from wosutil.tool.tool_instances_controller import (
-    TASK_GROUPING_WINDOW_SECONDS,
     MultiInstanceToolController,
     load_instance_selection,
-    pick_scheduled_task,
     save_instance_selection,
 )
 
 
-def get_next_task_info(state, now):
-    """Get the task that will actually run next, mirroring the worker.
-
-    The controller executes the highest-priority task that is already due,
-    waiting for a higher-priority task scheduled within the grouping window
-    (TASK_GROUPING_WINDOW_SECONDS) first, and waits for the earliest future
-    task otherwise. While a picked task is not due yet, the worker keeps
-    waiting and re-picking, so a higher-priority in-window task can jump
-    ahead. This helper walks that wait chain to find the task the worker will
-    actually execute first.
-
-    Args:
-        state: The instance state (or None).
-        now: Current epoch time.
-
-    Returns:
-        tuple: (task name, execution timestamp) or (None, None).
-    """
-    tasks = getattr(state, "tasks", None) if state else None
-    if not tasks:
-        return None, None
-
-    sim_now = now
-    while True:
-        task, wait_until = pick_scheduled_task(tasks, sim_now)
-        if task is None:
-            return None, None
-        if wait_until is None:
-            task_name = task.get("name", "?")
-            # The task is due now (or at the end of the wait chain)
-            return task_name, (None if sim_now == now else sim_now)
-        sim_now = wait_until
+def _build_editable_rows(parent, instances, profiles, selection, on_change):
+    """Create the editable instance rows (checkbox, profile, status)."""
+    widgets = []
+    for inst in instances:
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=2)
+        index = inst["index"]
+        idx_str = str(index)
+        checked_var = tk.BooleanVar()
+        checked_var.set(selection.get(idx_str, {}).get("checked", False))
+        cb = ttk.Checkbutton(row, variable=checked_var, command=on_change)
+        cb.pack(side="left")
+        ttk.Label(row, text=f"Instance {index} ({inst['name']})").pack(side="left", padx=5)
+        profile_var = tk.StringVar(value=selection.get(idx_str, {}).get("profile", profiles[0] if profiles else ""))
+        combo = ttk.Combobox(row, values=profiles, textvariable=profile_var, state="readonly", width=20)
+        combo.pack(side="left", padx=5)
+        combo.bind("<<ComboboxSelected>>", lambda e: on_change())
+        task_status_label = ttk.Label(row, text="")
+        task_status_label.pack(side="left", padx=10)
+        widgets.append({"index": index, "checked": checked_var, "profile_var": profile_var, "combo": combo, "task_status_label": task_status_label})
+    return widgets
 
 
-def format_time_remaining(seconds):
-    """Format remaining time in HH:MM:SS format."""
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    seconds = seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def get_all_tasks_info(state, now):
-    """Get every scheduled task of an instance in the real execution order.
-
-    Tasks whose run times fall within the same window
-    (TASK_GROUPING_WINDOW_SECONDS) run grouped by priority, since the worker
-    waits for the highest-priority in-window task instead of the one whose
-    timer was read earlier. This helper groups the tasks the same way and
-    lists each window in priority order, so the preview matches the order in
-    which the tasks will actually run; tasks in different windows keep their
-    chronological order.
-
-    Args:
-        state: The instance state (or None).
-        now: Current epoch time.
-
-    Returns:
-        List of (task name, remaining seconds) pairs in execution order;
-        tasks that are already due have a remaining time of 0.
-    """
-    tasks = getattr(state, "tasks", None) if state else None
-    if not tasks:
-        return []
-
-    ordered = sorted(tasks, key=lambda task: (task.get("next_run_time", 0), task.get("priority", 99)))
-
-    clusters = []
-    cluster = []
-    anchor = None
-    for task in ordered:
-        task_time = task.get("next_run_time", 0)
-        if cluster and task_time > anchor + TASK_GROUPING_WINDOW_SECONDS:
-            clusters.append(cluster)
-            cluster = []
-            anchor = None
-        if not cluster:
-            anchor = task_time
-        cluster.append(task)
-    if cluster:
-        clusters.append(cluster)
-
-    infos = []
-    for cluster in clusters:
-        cluster.sort(key=lambda task: (task.get("priority", 99), task.get("next_run_time", 0)))
-        for task in cluster:
-            remaining = max(0, int(task.get("next_run_time", 0) - now))
-            infos.append((task.get("name", "?"), remaining))
-    return infos
-
-
-def format_task_tooltip(state, now):
-    """Build the tooltip text with the countdown of every scheduled task.
-
-    Args:
-        state: The instance state (or None).
-        now: Current epoch time.
-
-    Returns:
-        One numbered line per task in execution order, "Name: HH:MM:SS" form;
-        tasks that are ready to run are shown as ready.
-    """
-    infos = get_all_tasks_info(state, now)
-    if not infos:
-        return "No programmed tasks"
-    lines = []
-    for position, (name, remaining) in enumerate(infos, start=1):
-        if remaining <= 0:
-            lines.append(f"{position}. {name}: ready")
-        else:
-            lines.append(f"{position}. {name}: {format_time_remaining(remaining)}")
-    return "\n".join(lines)
+def _build_running_rows(parent, instances, profiles, selection, tooltip_text):
+    """Create the read-only rows of the instances selected for the run."""
+    widgets = []
+    for inst in instances:
+        index = inst["index"]
+        selected = selection.get(str(index), {})
+        if not selected.get("checked"):
+            continue
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=2)
+        ttk.Label(row, text=f"Instance {index} ({inst['name']})").pack(side="left", padx=5)
+        profile_var = tk.StringVar(value=selected.get("profile", profiles[0] if profiles else ""))
+        combo = ttk.Combobox(row, values=profiles, textvariable=profile_var, state="disabled", width=20)
+        combo.pack(side="left", padx=5)
+        task_status_label = ttk.Label(row, text="")
+        task_status_label.pack(side="left", padx=10)
+        info_icon = ttk.Label(row, text="\u24d8", cursor="hand2")
+        info_icon.pack(side="left", padx=(0, 2))
+        Tooltip(info_icon, lambda idx=index: tooltip_text(idx))
+        widgets.append(
+            {
+                "index": index,
+                "checked": tk.BooleanVar(value=True),
+                "profile_var": profile_var,
+                "combo": combo,
+                "task_status_label": task_status_label,
+            }
+        )
+    return widgets
 
 
 def setup_instances_tab(notebook, profile_manager, log_message, task_definitions, emulator_state):
@@ -215,53 +154,9 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
         instance_selection = load_instance_selection()
 
         if not tool_running["value"]:
-            for inst in instances:
-                row = ttk.Frame(instance_list_frame)
-                row.pack(fill="x", pady=2)
-                checked_var = tk.BooleanVar()
-                idx_str = str(inst["index"])
-                checked_val = instance_selection.get(idx_str, {}).get("checked", False)
-                profile_val = instance_selection.get(idx_str, {}).get("profile", profiles[0] if profiles else "")
-                checked_var.set(checked_val)
-                cb = ttk.Checkbutton(row, variable=checked_var, command=controller.on_checkbox_or_profile_change)
-                cb.pack(side="left")
-                ttk.Label(row, text=f"Instance {inst['index']} ({inst['name']})").pack(side="left", padx=5)
-                profile_var = tk.StringVar(value=profile_val)
-                combo = ttk.Combobox(row, values=profiles, textvariable=profile_var, state="readonly", width=20)
-                combo.pack(side="left", padx=5)
-                combo.bind("<<ComboboxSelected>>", lambda e: controller.on_checkbox_or_profile_change())
-                task_status_label = ttk.Label(row, text="")
-                task_status_label.pack(side="left", padx=10)
-                instance_widgets.append({"index": inst["index"], "checked": checked_var, "profile_var": profile_var, "combo": combo, "task_status_label": task_status_label})
+            instance_widgets.extend(_build_editable_rows(instance_list_frame, instances, profiles, instance_selection, controller.on_checkbox_or_profile_change))
         else:
-            for inst in instances:
-                idx_str = str(inst["index"])
-                sel = instance_selection.get(idx_str, {})
-                if sel.get("checked"):
-                    row = ttk.Frame(instance_list_frame)
-                    row.pack(fill="x", pady=2)
-                    ttk.Label(row, text=f"Instance {inst['index']} ({inst['name']})").pack(side="left", padx=5)
-                    profile_val = sel.get("profile", profiles[0] if profiles else "")
-                    profile_var = tk.StringVar(value=profile_val)
-                    combo = ttk.Combobox(row, values=profiles, textvariable=profile_var, state="disabled", width=20)
-                    combo.pack(side="left", padx=5)
-                    task_status_label = ttk.Label(row, text="")
-                    task_status_label.pack(side="left", padx=10)
-                    info_icon = ttk.Label(row, text="\u24d8", cursor="hand2")
-                    info_icon.pack(side="left", padx=(0, 2))
-                    Tooltip(
-                        info_icon,
-                        lambda idx=inst["index"]: format_task_tooltip(controller.state_for(idx), time.time()),
-                    )
-                    instance_widgets.append(
-                        {
-                            "index": inst["index"],
-                            "checked": tk.BooleanVar(value=True),
-                            "profile_var": profile_var,
-                            "combo": combo,
-                            "task_status_label": task_status_label,
-                        }
-                    )
+            instance_widgets.extend(_build_running_rows(instance_list_frame, instances, profiles, instance_selection, lambda idx: format_task_tooltip(controller.state_for(idx), time.time())))
 
     def update_and_refresh():
         refresh_instances.force_update = True
@@ -271,6 +166,25 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
     emulator_state["refresh_instances"] = refresh_instances
     start_btn.config(command=lambda: on_start_tool())
     stop_btn.config(command=lambda: on_stop_tool())
+
+    def set_running_controls(running):
+        """Show the controls of the running or the editable state."""
+        if running:
+            refresh_btn.pack_forget()
+            start_btn.pack_forget()
+            emu_limit_spin.pack_forget()
+            for child in button_frame.winfo_children():
+                if isinstance(child, ttk.Label):
+                    child.pack_forget()
+            stop_btn.pack(side="left", padx=10, pady=10)
+            return
+        stop_btn.pack_forget()
+        refresh_btn.pack(side="left", padx=5)
+        emu_limit_spin.pack(side="left", padx=5)
+        for child in button_frame.winfo_children():
+            if isinstance(child, ttk.Label):
+                child.pack(side="left", padx=5)
+        start_btn.pack(side="left", padx=10, pady=10)
 
     def on_start_tool():
         # Abort before switching to the running UI if the backend cannot
@@ -287,27 +201,13 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
             return
 
         tool_running["value"] = True
-        # Hide controls and show stop
-        refresh_btn.pack_forget()
-        start_btn.pack_forget()
-        emu_limit_spin.pack_forget()
-        for child in button_frame.winfo_children():
-            if isinstance(child, ttk.Label):
-                child.pack_forget()
-        stop_btn.pack(side="left", padx=10, pady=10)
+        set_running_controls(True)
         # Refresh the shown instance rows to the running state
         refresh_instances()
 
     def on_stop_tool():
         tool_running["value"] = False
-        # Show controls and hide stop
-        stop_btn.pack_forget()
-        refresh_btn.pack(side="left", padx=5)
-        emu_limit_spin.pack(side="left", padx=5)
-        for child in button_frame.winfo_children():
-            if isinstance(child, ttk.Label):
-                child.pack(side="left", padx=5)
-        start_btn.pack(side="left", padx=10, pady=10)
+        set_running_controls(False)
         refresh_instances()
         controller.stop_tool()
 
@@ -328,45 +228,16 @@ def setup_instances_tab(notebook, profile_manager, log_message, task_definitions
                 continue
 
             state = controller.state_for(idx)
-
-            if controller.is_active(idx):
-                if state is not None and state.opening:
-                    task_name, _ = get_next_task_info(state, now)
-                    label.config(text=f"Opening... First task: {task_name}" if task_name else "Opening...")
-                elif state is not None and state.current_task_name:
-                    label.config(text=f"Executing: {state.current_task_name}")
-                else:
-                    task_name, next_time = get_next_task_info(state, now)
-                    if task_name and next_time and next_time > now:
-                        label.config(text=f"Next: {task_name} in {format_time_remaining(int(next_time - now))}")
-                    elif task_name:
-                        label.config(text=f"Executing: {task_name}")
-                    else:
-                        label.config(text="No programmed tasks")
-            else:
-                task_name, next_time = get_next_task_info(state, now)
-                queue_pos = controller.pending_position(idx)
-                retry_remaining = controller.retry_seconds_remaining(idx, now)
-
-                if controller.is_aborted(idx):
-                    label.config(text="Game not installed - install it and press Start")
-                elif queue_pos:
-                    if task_name:
-                        if next_time:
-                            label.config(text=f"In queue ({queue_pos}) - Next: {task_name} in {format_time_remaining(int(next_time - now))}")
-                        else:
-                            label.config(text=f"In queue ({queue_pos}) - Waiting to execute: {task_name}")
-                    else:
-                        label.config(text=f"In queue ({queue_pos})")
-                elif retry_remaining > 0:
-                    label.config(text=f"Retry paused - {format_time_remaining(int(retry_remaining))}")
-                elif task_name:
-                    if next_time:
-                        label.config(text=f"Standby - Next: {task_name} in {format_time_remaining(int(next_time - now))}")
-                    else:
-                        label.config(text=f"Standby - Waiting to execute: {task_name}")
-                else:
-                    label.config(text="Standby")
+            label.config(
+                text=format_instance_status(
+                    state,
+                    now=now,
+                    active=controller.is_active(idx),
+                    aborted=controller.is_aborted(idx),
+                    queue_position=controller.pending_position(idx),
+                    retry_seconds=controller.retry_seconds_remaining(idx, now),
+                )
+            )
 
     def update_profile_comboboxes():
         """Refresh the profile options of every instance combobox.

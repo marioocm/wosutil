@@ -76,60 +76,68 @@ _INTEL_MODE_LABELS = {
 }
 
 
-def _ordered_tasks(TASK_DEFINITIONS):
+def _ordered_tasks(task_definitions):
     """Return task definitions sorted by priority (lower = higher priority)."""
-    return sorted(TASK_DEFINITIONS.values(), key=lambda t: t["priority"])
+    return sorted(task_definitions.values(), key=lambda task: task["priority"])
 
 
-def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_changed=None):
-    """Setup the preferences tab in the GUI.
-
-    Args:
-        notebook: The parent notebook widget.
-        TASK_DEFINITIONS: Dictionary of task definitions.
-        log_message: Logging function.
-        on_emulator_changed (callable, optional): Called with the new emulator
-            code and configured paths after a save that changed either setting,
-            so the GUI can switch backends without restarting.
-    """
-    preferences_tab = ttk.Frame(notebook)
-    notebook.add(preferences_tab, text="Preferences")
-
-    # --- Scrollable container ---
-    # The tab holds many sections; without scrolling the bottom ones (schedule
-    # memory, debug mode, save button) are unreachable on small windows.
-    canvas = tk.Canvas(preferences_tab, highlightthickness=0, bg="#34495E")
-    canvas_scrollbar = ttk.Scrollbar(preferences_tab, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
-    scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-    canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=canvas_scrollbar.set)
+def _make_scrollable(parent):
+    """Create a vertically scrollable frame and return its content frame."""
+    canvas = tk.Canvas(parent, highlightthickness=0, bg="#34495E")
+    scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+    content = ttk.Frame(canvas)
+    content.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    window = canvas.create_window((0, 0), window=content, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
     canvas.pack(side="left", fill="both", expand=True)
-    canvas_scrollbar.pack(side="right", fill="y")
+    scrollbar.pack(side="right", fill="y")
 
-    def _stretch_frame(event):
-        # Keep the inner frame as wide as the canvas so no background gap
-        # shows between the content and the scrollbar.
-        canvas.itemconfigure(canvas_window, width=event.width)
+    def stretch(event):
+        canvas.itemconfigure(window, width=event.width)
 
-    canvas.bind("<Configure>", _stretch_frame)
-
-    def _on_mousewheel(event):
+    def on_mousewheel(event):
         canvas.yview_scroll(int(-event.delta / 120), "units")
 
-    def _bind_mousewheel(widget):
-        widget.bind("<MouseWheel>", _on_mousewheel)
-        for child in widget.winfo_children():
-            _bind_mousewheel(child)
+    canvas.bind("<Configure>", stretch)
+    canvas.bind("<MouseWheel>", on_mousewheel)
+    content.bind("<MouseWheel>", on_mousewheel)
+    return content
 
-    _bind_mousewheel(scrollable_frame)
 
-    # --- Emulator selection ---
-    emulator_frame = ttk.LabelFrame(scrollable_frame, text="Emulator")
-    emulator_frame.pack(pady=10, padx=10, fill="x")
+def _choice_value(variable, labels, default):
+    """Return the internal value matching a label shown in a combobox."""
+    label = variable.get()
+    return next((value for value, text in labels.items() if text == label), default)
 
-    emulator_row = ttk.Frame(emulator_frame)
-    emulator_row.pack(anchor="w", padx=10, pady=10)
+
+def _validated_march(variable, default, minimum, maximum, label, log_message):
+    """Validate one march spinbox, restoring the saved value when invalid."""
+    value = variable.get()
+    if value < minimum or value > maximum:
+        log_message(f"{label} must be between {minimum} and {maximum}, keeping {default}.", "warning")
+        variable.set(default)
+        return default
+    return value
+
+
+def _valid_march_list(variables, minimum, maximum):
+    """Return the list of march values, or None when one is out of range."""
+    marches = []
+    for variable in variables:
+        value = variable.get()
+        if value < minimum or value > maximum:
+            return None
+        marches.append(value)
+    return marches
+
+
+def _build_emulator_section(parent, path_parent):
+    """Build the emulator selector and its path editor."""
+    frame = ttk.LabelFrame(parent, text="Emulator")
+    frame.pack(pady=10, padx=10, fill="x")
+
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10)
 
     preferences = load_preferences()
     emulator_paths = get_emulator_paths(preferences)
@@ -141,19 +149,12 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         current_emulator = EMULATOR_MUMU
 
     emulator_var = tk.StringVar(value=_EMULATOR_LABELS.get(current_emulator, current_emulator))
-    emulator_options = installed + [code for code in _EMULATOR_LABELS if code not in installed]
-    ttk.Label(emulator_row, text="Default emulator:").pack(side="left", padx=5)
-    emulator_combo = ttk.Combobox(
-        emulator_row,
-        textvariable=emulator_var,
-        values=[_EMULATOR_LABELS[code] for code in emulator_options],
-        state="readonly",
-        width=20,
-    )
+    options = installed + [code for code in _EMULATOR_LABELS if code not in installed]
+    ttk.Label(row, text="Default emulator:").pack(side="left", padx=5)
+    emulator_combo = ttk.Combobox(row, textvariable=emulator_var, values=[_EMULATOR_LABELS[code] for code in options], state="readonly", width=20)
     emulator_combo.pack(side="left", padx=5)
 
     path_vars = {emulator: {key: tk.StringVar(value=emulator_paths[emulator][key]) for key, _, _ in fields} for emulator, fields in _EMULATOR_PATH_FIELDS.items()}
-    path_parent = notebook.winfo_toplevel()
 
     def browse_path(variable, path_type, title):
         """Select a directory or file and update its entry field."""
@@ -179,13 +180,7 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         dialog.transient(path_parent)
         dialog.grab_set()
 
-        ttk.Label(
-            dialog,
-            text="Select the custom folders or configuration file, then click OK.",
-            wraplength=600,
-            justify="left",
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-
+        ttk.Label(dialog, text="Select the custom folders or configuration file, then click OK.", wraplength=600, justify="left").pack(anchor="w", padx=15, pady=(15, 10))
         emulator_path_frame = ttk.LabelFrame(dialog, text=_EMULATOR_LABELS[emulator])
         emulator_path_frame.pack(fill="x", padx=15, pady=5)
         for key, label, path_type in _EMULATOR_PATH_FIELDS[emulator]:
@@ -198,20 +193,18 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
 
         ttk.Button(dialog, text="OK", command=dialog.destroy).pack(pady=(10, 15))
 
-    ttk.Button(emulator_row, text="Configure paths...", command=open_emulator_paths).pack(side="left", padx=5)
+    ttk.Button(row, text="Configure paths...", command=open_emulator_paths).pack(side="left", padx=5)
+    return {"var": emulator_var, "path_vars": path_vars}
 
-    # --- Task priorities ---
-    priority_frame = ttk.LabelFrame(scrollable_frame, text="Task Priorities")
-    priority_frame.pack(pady=10, padx=10, fill="x")
 
-    ttk.Label(
-        priority_frame,
-        text="Order the tasks by priority (top = highest priority). Click Save to apply.",
-    ).pack(anchor="w", padx=10, pady=(5, 5))
+def _build_priority_section(parent, task_definitions):
+    """Build the task priority list and its move buttons."""
+    frame = ttk.LabelFrame(parent, text="Task Priorities")
+    frame.pack(pady=10, padx=10, fill="x")
+    ttk.Label(frame, text="Order the tasks by priority (top = highest priority). Click Save to apply.").pack(anchor="w", padx=10, pady=(5, 5))
 
-    list_frame = ttk.Frame(priority_frame)
+    list_frame = ttk.Frame(frame)
     list_frame.pack(fill="x", padx=10, pady=5)
-
     task_list = tk.Listbox(
         list_frame,
         height=10,
@@ -224,7 +217,6 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         font=("Arial", 10),
     )
     task_list.pack(side="left", fill="both", expand=True)
-
     scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=task_list.yview)
     scrollbar.pack(side="left", fill="y")
     task_list.configure(yscrollcommand=scrollbar.set)
@@ -234,15 +226,15 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
     def refresh_list():
         ordered_ids.clear()
         task_list.delete(0, tk.END)
-        for i, task in enumerate(_ordered_tasks(TASK_DEFINITIONS), start=1):
+        for position, task in enumerate(_ordered_tasks(task_definitions), start=1):
             ordered_ids.append(task["id"])
-            task_list.insert(tk.END, f"{i}. {task['name']}")
+            task_list.insert(tk.END, f"{position}. {task['name']}")
 
     def move_selected(direction):
-        index = task_list.curselection()
-        if not index:
+        selected = task_list.curselection()
+        if not selected:
             return
-        index = index[0]
+        index = selected[0]
         target = index + direction
         if target < 0 or target >= task_list.size():
             return
@@ -253,239 +245,223 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         task_id = ordered_ids.pop(index)
         ordered_ids.insert(target, task_id)
 
-    move_buttons = ttk.Frame(priority_frame)
+    move_buttons = ttk.Frame(frame)
     move_buttons.pack(fill="x", padx=10, pady=(0, 5))
     ttk.Button(move_buttons, text="Move Up", command=lambda: move_selected(-1)).pack(side="left", padx=5)
     ttk.Button(move_buttons, text="Move Down", command=lambda: move_selected(1)).pack(side="left", padx=5)
 
-    # --- Kill beasts march selection ---
-    kill_beast_frame = ttk.LabelFrame(scrollable_frame, text="Kill Beasts")
-    kill_beast_frame.pack(pady=10, padx=10, fill="x")
+    refresh_list()
+    return {"ordered_ids": ordered_ids}
 
-    march_row = ttk.Frame(kill_beast_frame)
-    march_row.pack(anchor="w", padx=10, pady=10)
 
+def _build_kill_beast_section(parent):
+    """Build the kill-beasts march selector."""
+    frame = ttk.LabelFrame(parent, text="Kill Beasts")
+    frame.pack(pady=10, padx=10, fill="x")
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10)
     march_var = tk.IntVar(value=get_kill_beast_march())
-    march_touched = {"value": False}
-    march_var.trace_add("write", lambda *_: march_touched.__setitem__("value", True))
-    ttk.Label(march_row, text="Select our killing beasts march:").pack(side="left", padx=5)
-    march_spinbox = ttk.Spinbox(
-        march_row,
-        from_=KILL_BEAST_MARCH_MIN,
-        to=KILL_BEAST_MARCH_MAX,
-        textvariable=march_var,
-        width=4,
-    )
-    march_spinbox.pack(side="left", padx=5)
+    touched = {"value": False}
+    march_var.trace_add("write", lambda *_: touched.__setitem__("value", True))
+    ttk.Label(row, text="Select our killing beasts march:").pack(side="left", padx=5)
+    ttk.Spinbox(row, from_=KILL_BEAST_MARCH_MIN, to=KILL_BEAST_MARCH_MAX, textvariable=march_var, width=4).pack(side="left", padx=5)
+    return {"var": march_var, "touched": touched}
 
-    # --- Bear trap squads selection ---
-    bear_trap_frame = ttk.LabelFrame(scrollable_frame, text="Bear Trap")
-    bear_trap_frame.pack(pady=10, padx=10, fill="x")
 
-    bear_trap_row = ttk.Frame(bear_trap_frame)
-    bear_trap_row.pack(anchor="w", padx=10, pady=10)
+def _build_bear_trap_section(parent):
+    """Build the bear trap march selectors."""
+    frame = ttk.LabelFrame(parent, text="Bear Trap")
+    frame.pack(pady=10, padx=10, fill="x")
 
-    ttk.Label(
-        bear_trap_row,
-        text="Select squad to join during bear trap (one per march slot, 1-12):",
-    ).pack(side="left", padx=5)
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10)
+    ttk.Label(row, text="Select squad to join during bear trap (one per march slot, 1-12):").pack(side="left", padx=5)
 
-    bear_march_vars = [tk.IntVar(value=march) for march in get_bear_trap_marches()]
-    for i, var in enumerate(bear_march_vars, start=1):
-        slot_row = ttk.Frame(bear_trap_frame)
+    march_vars = [tk.IntVar(value=march) for march in get_bear_trap_marches()]
+    for position, variable in enumerate(march_vars, start=1):
+        slot_row = ttk.Frame(frame)
         slot_row.pack(anchor="w", padx=10, pady=(0, 5))
-        ttk.Label(slot_row, text=f"March {i}:").pack(side="left", padx=5)
-        ttk.Spinbox(
-            slot_row,
-            from_=BEAR_TRAP_MARCH_MIN,
-            to=BEAR_TRAP_MARCH_MAX,
-            textvariable=var,
-            width=4,
-        ).pack(side="left", padx=5)
+        ttk.Label(slot_row, text=f"March {position}:").pack(side="left", padx=5)
+        ttk.Spinbox(slot_row, from_=BEAR_TRAP_MARCH_MIN, to=BEAR_TRAP_MARCH_MAX, textvariable=variable, width=4).pack(side="left", padx=5)
 
-    bear_call_march_row = ttk.Frame(bear_trap_frame)
-    bear_call_march_row.pack(anchor="w", padx=10, pady=(0, 10))
-    bear_call_march_var = tk.IntVar(value=get_bear_rally_call_march())
-    bear_call_march_touched = {"value": False}
-    bear_call_march_var.trace_add("write", lambda *_: bear_call_march_touched.__setitem__("value", True))
+    call_row = ttk.Frame(frame)
+    call_row.pack(anchor="w", padx=10, pady=(0, 10))
+    call_var = tk.IntVar(value=get_bear_rally_call_march())
+    call_touched = {"value": False}
+    call_var.trace_add("write", lambda *_: call_touched.__setitem__("value", True))
+    ttk.Label(call_row, text="Select the squad to call your rallies during bear trap:").pack(side="left", padx=5)
+    ttk.Spinbox(call_row, from_=BEAR_RALLY_CALL_MARCH_MIN, to=BEAR_RALLY_CALL_MARCH_MAX, textvariable=call_var, width=4).pack(side="left", padx=5)
+    return {"marches": march_vars, "call_var": call_var, "call_touched": call_touched}
+
+
+def _build_gather_section(parent):
+    """Build the ox gathering resource selector."""
+    frame = ttk.LabelFrame(parent, text="Ox Gathering")
+    frame.pack(pady=10, padx=10, fill="x")
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10)
+    variable = tk.StringVar(value=_GATHER_RESOURCE_LABELS[get_gather_resource()])
+    ttk.Label(row, text="Gather resource with the ox skill:").pack(side="left", padx=5)
+    ttk.Combobox(row, textvariable=variable, values=[_GATHER_RESOURCE_LABELS[resource] for resource in GATHER_RESOURCES], state="readonly", width=12).pack(side="left", padx=5)
+    return {"var": variable}
+
+
+def _build_intel_section(parent):
+    """Build the intel mission mode selector."""
+    frame = ttk.LabelFrame(parent, text="Intel")
+    frame.pack(pady=10, padx=10, fill="x")
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10)
+    variable = tk.StringVar(value=_INTEL_MODE_LABELS[get_intel_mode()])
+    ttk.Label(row, text="Complete intel missions with:").pack(side="left", padx=5)
+    ttk.Combobox(row, textvariable=variable, values=[_INTEL_MODE_LABELS[mode] for mode in INTEL_MODES], state="readonly", width=35).pack(side="left", padx=5)
     ttk.Label(
-        bear_call_march_row,
-        text="Select the squad to call your rallies during bear trap:",
-    ).pack(side="left", padx=5)
-    ttk.Spinbox(
-        bear_call_march_row,
-        from_=BEAR_RALLY_CALL_MARCH_MIN,
-        to=BEAR_RALLY_CALL_MARCH_MAX,
-        textvariable=bear_call_march_var,
-        width=4,
-    ).pack(side="left", padx=5)
-
-    # --- Ox gathering resource selection ---
-    gather_resource_frame = ttk.LabelFrame(scrollable_frame, text="Ox Gathering")
-    gather_resource_frame.pack(pady=10, padx=10, fill="x")
-
-    gather_resource_row = ttk.Frame(gather_resource_frame)
-    gather_resource_row.pack(anchor="w", padx=10, pady=10)
-
-    gather_resource_var = tk.StringVar(value=_GATHER_RESOURCE_LABELS[get_gather_resource()])
-    ttk.Label(gather_resource_row, text="Gather resource with the ox skill:").pack(side="left", padx=5)
-    ttk.Combobox(
-        gather_resource_row,
-        textvariable=gather_resource_var,
-        values=[_GATHER_RESOURCE_LABELS[resource] for resource in GATHER_RESOURCES],
-        state="readonly",
-        width=12,
-    ).pack(side="left", padx=5)
-
-    # --- Intel mission mode ---
-    intel_frame = ttk.LabelFrame(scrollable_frame, text="Intel")
-    intel_frame.pack(pady=10, padx=10, fill="x")
-
-    intel_row = ttk.Frame(intel_frame)
-    intel_row.pack(anchor="w", padx=10, pady=10)
-
-    intel_mode_var = tk.StringVar(value=_INTEL_MODE_LABELS[get_intel_mode()])
-    ttk.Label(intel_row, text="Complete intel missions with:").pack(side="left", padx=5)
-    ttk.Combobox(
-        intel_row,
-        textvariable=intel_mode_var,
-        values=[_INTEL_MODE_LABELS[mode] for mode in INTEL_MODES],
-        state="readonly",
-        width=35,
-    ).pack(side="left", padx=5)
-
-    ttk.Label(
-        intel_frame,
+        frame,
         text="Execute All completes every available mission instantly using extra stamina; Classic sends marches for each mission.",
         wraplength=600,
         justify="left",
     ).pack(anchor="w", padx=15, pady=(0, 10))
+    return {"var": variable}
 
-    # --- Mystery shop redemption level ---
-    mystery_shop_frame = ttk.LabelFrame(scrollable_frame, text="Mystery Shop")
-    mystery_shop_frame.pack(pady=10, padx=10, fill="x")
 
-    mystery_shop_row = ttk.Frame(mystery_shop_frame)
-    mystery_shop_row.pack(anchor="w", padx=10, pady=10)
+def _build_mystery_shop_section(parent):
+    """Build the mystery shop redemption level selector."""
+    frame = ttk.LabelFrame(parent, text="Mystery Shop")
+    frame.pack(pady=10, padx=10, fill="x")
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10)
+    variable = tk.StringVar(value=_MYSTERY_SHOP_LEVEL_LABELS[get_mystery_shop_level()])
+    ttk.Label(row, text="Redeem in the mystery shop:").pack(side="left", padx=5)
+    ttk.Combobox(row, textvariable=variable, values=[_MYSTERY_SHOP_LEVEL_LABELS[level] for level in MYSTERY_SHOP_LEVELS], state="readonly", width=35).pack(side="left", padx=5)
+    return {"var": variable}
 
-    mystery_shop_var = tk.StringVar(value=_MYSTERY_SHOP_LEVEL_LABELS[get_mystery_shop_level()])
-    ttk.Label(mystery_shop_row, text="Redeem in the mystery shop:").pack(side="left", padx=5)
-    ttk.Combobox(
-        mystery_shop_row,
-        textvariable=mystery_shop_var,
-        values=[_MYSTERY_SHOP_LEVEL_LABELS[level] for level in MYSTERY_SHOP_LEVELS],
-        state="readonly",
-        width=35,
-    ).pack(side="left", padx=5)
 
-    # --- Schedule memory ---
-    schedule_frame = ttk.LabelFrame(scrollable_frame, text="Scheduling")
-    schedule_frame.pack(pady=10, padx=10, fill="x")
-
-    schedule_row = ttk.Frame(schedule_frame)
-    schedule_row.pack(anchor="w", padx=10, pady=10, fill="x")
-
-    remember_var = tk.BooleanVar(value=get_remember_schedule())
-    ttk.Checkbutton(schedule_row, text="", variable=remember_var).pack(side="left", padx=5)
+def _build_schedule_section(parent):
+    """Build the schedule-memory toggle."""
+    frame = ttk.LabelFrame(parent, text="Scheduling")
+    frame.pack(pady=10, padx=10, fill="x")
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10, fill="x")
+    variable = tk.BooleanVar(value=get_remember_schedule())
+    ttk.Checkbutton(row, text="", variable=variable).pack(side="left", padx=5)
     ttk.Label(
-        schedule_row,
+        row,
         text="Remember the task schedule between sessions (pending tasks keep their wait after a restart)",
         wraplength=500,
         justify="left",
     ).pack(side="left", fill="x", expand=True)
+    return {"var": variable}
 
-    # --- Background emulator windows ---
-    background_frame = ttk.LabelFrame(scrollable_frame, text="Emulator Windows")
-    background_frame.pack(pady=10, padx=10, fill="x")
 
-    background_row = ttk.Frame(background_frame)
-    background_row.pack(anchor="w", padx=10, pady=10, fill="x")
-
-    start_minimized_var = tk.BooleanVar(value=get_start_minimized())
-    ttk.Checkbutton(background_row, text="", variable=start_minimized_var).pack(side="left", padx=5)
+def _build_background_section(parent):
+    """Build the start-minimized toggle."""
+    frame = ttk.LabelFrame(parent, text="Emulator Windows")
+    frame.pack(pady=10, padx=10, fill="x")
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10, fill="x")
+    variable = tk.BooleanVar(value=get_start_minimized())
+    ttk.Checkbutton(row, text="", variable=variable).pack(side="left", padx=5)
     ttk.Label(
-        background_row,
+        row,
         text="Start emulators minimized (keep them out of the foreground while the tool runs)",
         wraplength=500,
         justify="left",
     ).pack(side="left", fill="x", expand=True)
+    return {"var": variable}
 
-    # --- Debug mode ---
-    debug_frame = ttk.LabelFrame(scrollable_frame, text="Debug")
-    debug_frame.pack(pady=10, padx=10, fill="x")
 
-    debug_row = ttk.Frame(debug_frame)
-    debug_row.pack(anchor="w", padx=10, pady=10)
+def _build_debug_section(parent):
+    """Build the debug-mode toggle."""
+    frame = ttk.LabelFrame(parent, text="Debug")
+    frame.pack(pady=10, padx=10, fill="x")
+    row = ttk.Frame(frame)
+    row.pack(anchor="w", padx=10, pady=10)
+    variable = tk.BooleanVar(value=get_debug_mode())
+    ttk.Checkbutton(row, text="Debug mode (verbose logs and OCR debug captures)", variable=variable).pack(side="left", padx=5)
+    return {"var": variable}
 
-    debug_var = tk.BooleanVar(value=get_debug_mode())
-    ttk.Checkbutton(
-        debug_row,
-        text="Debug mode (verbose logs and OCR debug captures)",
-        variable=debug_var,
-    ).pack(side="left", padx=5)
 
-    # --- Save ---
+def setup_preferences_tab(notebook, task_definitions, log_message, on_emulator_changed=None):
+    """Set up the preferences tab in the GUI.
+
+    Args:
+        notebook: The parent notebook widget.
+        task_definitions: Dictionary of task definitions.
+        log_message: Logging function.
+        on_emulator_changed (callable, optional): Called with the new emulator
+            code and configured paths after a save that changed either setting,
+            so the GUI can switch backends without restarting.
+    """
+    preferences_tab = ttk.Frame(notebook)
+    notebook.add(preferences_tab, text="Preferences")
+
+    content = _make_scrollable(preferences_tab)
+    emulator = _build_emulator_section(content, notebook.winfo_toplevel())
+    priority = _build_priority_section(content, task_definitions)
+    kill_beast = _build_kill_beast_section(content)
+    bear_trap = _build_bear_trap_section(content)
+    gather = _build_gather_section(content)
+    intel = _build_intel_section(content)
+    mystery_shop = _build_mystery_shop_section(content)
+    schedule = _build_schedule_section(content)
+    background = _build_background_section(content)
+    debug = _build_debug_section(content)
+
     def save_preferences_action():
         prefs = load_preferences()
         previous_emulator = get_emulator(prefs)
         previous_emulator_paths = get_emulator_paths(prefs)
-        label = emulator_var.get()
-        new_emulator = next((code for code, lab in _EMULATOR_LABELS.items() if lab == label), EMULATOR_MUMU)
+
+        label = emulator["var"].get()
+        new_emulator = next((code for code, text in _EMULATOR_LABELS.items() if text == label), EMULATOR_MUMU)
         prefs["emulator"] = new_emulator
-        prefs["emulator_paths"] = {emulator: {key: variable.get().strip() for key, variable in fields.items()} for emulator, fields in path_vars.items()}
+        prefs["emulator_paths"] = {code: {key: variable.get().strip() for key, variable in fields.items()} for code, fields in emulator["path_vars"].items()}
         new_emulator_paths = get_emulator_paths(prefs)
         prefs["emulator_paths"] = new_emulator_paths
+
         prefs["task_priorities"] = {}
-        for i, task_id in enumerate(ordered_ids, start=1):
-            TASK_DEFINITIONS[task_id]["priority"] = i
-            prefs["task_priorities"][task_id] = i
-        march = march_var.get()
-        if march < KILL_BEAST_MARCH_MIN or march > KILL_BEAST_MARCH_MAX:
-            log_message(f"Killing beasts march must be between {KILL_BEAST_MARCH_MIN} and {KILL_BEAST_MARCH_MAX}, keeping {get_kill_beast_march(prefs)}.", "warning")
-            march_var.set(get_kill_beast_march(prefs))
-        elif march_touched["value"] or "kill_beast_march" in prefs:
+        for position, task_id in enumerate(priority["ordered_ids"], start=1):
+            task_definitions[task_id]["priority"] = position
+            prefs["task_priorities"][task_id] = position
+
+        march = _validated_march(
+            kill_beast["var"],
+            get_kill_beast_march(prefs),
+            KILL_BEAST_MARCH_MIN,
+            KILL_BEAST_MARCH_MAX,
+            "Killing beasts march",
+            log_message,
+        )
+        if kill_beast["touched"]["value"] or "kill_beast_march" in prefs:
             prefs["kill_beast_march"] = march
-        bear_marches = []
-        invalid_bear = False
-        for var in bear_march_vars:
-            march = var.get()
-            if march < BEAR_TRAP_MARCH_MIN or march > BEAR_TRAP_MARCH_MAX:
-                invalid_bear = True
-                break
-            bear_marches.append(march)
-        if invalid_bear:
+
+        bear_marches = _valid_march_list(bear_trap["marches"], BEAR_TRAP_MARCH_MIN, BEAR_TRAP_MARCH_MAX)
+        if bear_marches is None:
             log_message(
                 f"Bear trap marches must be between {BEAR_TRAP_MARCH_MIN} and {BEAR_TRAP_MARCH_MAX}, keeping the saved values.",
                 "warning",
             )
         else:
             prefs["bear_trap_marches"] = bear_marches
-        bear_call_march = bear_call_march_var.get()
-        if bear_call_march < BEAR_RALLY_CALL_MARCH_MIN or bear_call_march > BEAR_RALLY_CALL_MARCH_MAX:
-            log_message(
-                f"Bear rally call march must be between {BEAR_RALLY_CALL_MARCH_MIN} and {BEAR_RALLY_CALL_MARCH_MAX}, keeping {get_bear_rally_call_march(prefs)}.",
-                "warning",
-            )
-            bear_call_march_var.set(get_bear_rally_call_march(prefs))
-        elif bear_call_march_touched["value"] or "bear_rally_call_march" in prefs:
+
+        bear_call_march = _validated_march(
+            bear_trap["call_var"],
+            get_bear_rally_call_march(prefs),
+            BEAR_RALLY_CALL_MARCH_MIN,
+            BEAR_RALLY_CALL_MARCH_MAX,
+            "Bear rally call march",
+            log_message,
+        )
+        if bear_trap["call_touched"]["value"] or "bear_rally_call_march" in prefs:
             prefs["bear_rally_call_march"] = bear_call_march
-        resource = next(
-            (resource for resource, label in _GATHER_RESOURCE_LABELS.items() if label == gather_resource_var.get()),
-            get_gather_resource(prefs),
-        )
-        prefs["gather_resource"] = resource
-        prefs["intel_mode"] = next(
-            (mode for mode, label in _INTEL_MODE_LABELS.items() if label == intel_mode_var.get()),
-            get_intel_mode(prefs),
-        )
-        level = next(
-            (level for level, label in _MYSTERY_SHOP_LEVEL_LABELS.items() if label == mystery_shop_var.get()),
-            get_mystery_shop_level(prefs),
-        )
-        prefs["mystery_shop_level"] = level
-        prefs["debug_mode"] = bool(debug_var.get())
-        prefs["remember_schedule"] = bool(remember_var.get())
-        prefs["start_minimized"] = bool(start_minimized_var.get())
+
+        prefs["gather_resource"] = _choice_value(gather["var"], _GATHER_RESOURCE_LABELS, get_gather_resource(prefs))
+        prefs["intel_mode"] = _choice_value(intel["var"], _INTEL_MODE_LABELS, get_intel_mode(prefs))
+        prefs["mystery_shop_level"] = _choice_value(mystery_shop["var"], _MYSTERY_SHOP_LEVEL_LABELS, get_mystery_shop_level(prefs))
+        prefs["debug_mode"] = bool(debug["var"].get())
+        prefs["remember_schedule"] = bool(schedule["var"].get())
+        prefs["start_minimized"] = bool(background["var"].get())
+
         if save_preferences(prefs):
             log_message("Preferences saved successfully.", "success")
             paths_changed = new_emulator_paths != previous_emulator_paths
@@ -494,6 +470,4 @@ def setup_preferences_tab(notebook, TASK_DEFINITIONS, log_message, on_emulator_c
         else:
             log_message("Error saving preferences.", "error")
 
-    ttk.Button(scrollable_frame, text="Save Preferences", command=save_preferences_action).pack(pady=10)
-
-    refresh_list()
+    ttk.Button(content, text="Save Preferences", command=save_preferences_action).pack(pady=10)
