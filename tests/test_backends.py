@@ -1,5 +1,6 @@
 """Unit tests for the emulator backend layer."""
 
+import json
 import os
 import tempfile
 import unittest
@@ -18,6 +19,23 @@ bst.instance.Pie64.display_name="Mario"
 bst.instance.Pie64.adb_port="5555"
 bst.instance.Pie64.status.adb_port="5555"
 """
+
+
+def vm_dir_helper(folders, names=None):
+    """Create a temp MuMu vms dir holding the given instance folders.
+
+    Args:
+        folders (list): Instance folder names, e.g. ["MuMuPlayerGlobal-15.0-0"].
+        names (dict, optional): playerName by folder.
+    """
+    directory = tempfile.mkdtemp(suffix=".vms")
+    for folder in folders:
+        configs = os.path.join(directory, folder, "configs")
+        os.makedirs(configs, exist_ok=True)
+        name = (names or {}).get(folder, "Instance")
+        with open(os.path.join(configs, "extra_config.json"), "w", encoding="utf-8") as f:
+            json.dump({"playerName": name}, f)
+    return directory
 
 
 class TestConfParsing(unittest.TestCase):
@@ -78,6 +96,85 @@ class TestMumuBackend(unittest.TestCase):
     def test_no_adb_warnings(self):
         """MuMu produces no ADB access warnings."""
         self.assertEqual(backends.MuMuBackend().check_adb_access(), [])
+
+
+class TestMumuDiscovery(unittest.TestCase):
+    """MuMu instances are discovered from the vms folder."""
+
+    def setUp(self):
+        """Create a backend bound to a temp vms dir with two series."""
+        self.vms = vm_dir_helper(["MuMuPlayerGlobal-15.0-0", "MuMuPlayerGlobal-12.0-1"])
+        self.backend = backends.MuMuBackend(log_func=lambda *a, **k: None, instance_base_path=self.vms)
+
+    def test_vm_name_matches_the_instance_folder(self):
+        """The folder of the instance series is used as the VM name."""
+        self.assertEqual(self.backend._vm_name(0), "MuMuPlayerGlobal-15.0-0")
+        self.assertEqual(self.backend._vm_name(1), "MuMuPlayerGlobal-12.0-1")
+
+    def test_vm_name_falls_back_when_the_folder_is_missing(self):
+        """A missing folder falls back to the 12.0 series guess."""
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None, instance_base_path="nonexistent_dir")
+        self.assertEqual(backend._vm_name(2), "MuMuPlayerGlobal-12.0-2")
+
+    def test_device_executable_uses_the_instance_series(self):
+        """Each series resolves to its own nx_device shell next to vms."""
+        expected = os.path.normpath(os.path.join(os.path.dirname(self.vms), "nx_device", "15.0", "shell", "MuMuNxDevice.exe"))
+        self.assertEqual(self.backend._device_executable(0), expected)
+
+    def test_device_argv_launches_the_vm_directly(self):
+        """The launch argv targets the instance folder without the manager."""
+        expected = [
+            os.path.normpath(os.path.join(os.path.dirname(self.vms), "nx_device", "15.0", "shell", "MuMuNxDevice.exe")),
+            "-v",
+            "0",
+            "--vm",
+            "MuMuPlayerGlobal-15.0-0",
+        ]
+        self.assertEqual(self.backend._device_argv(0), expected)
+
+    def test_get_instances_reads_folders_and_names(self):
+        """Indices come from the folder names, names from extra_config.json."""
+        vms = vm_dir_helper(
+            ["MuMuPlayerGlobal-15.0-0", "MuMuPlayerGlobal-12.0-1", "not-an-instance"],
+            {"MuMuPlayerGlobal-15.0-0": "Healer", "MuMuPlayerGlobal-12.0-1": "Antnee"},
+        )
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None, instance_base_path=vms)
+        with patch("wosutil.emulator.backends.save_instance_cache") as mock_save:
+            instances = backend.get_instances()
+
+        self.assertEqual(instances, [{"index": 0, "name": "Healer"}, {"index": 1, "name": "Antnee"}])
+        mock_save.assert_called_once_with(instances)
+
+    def test_get_instances_missing_dir_returns_empty(self):
+        """A missing vms dir yields no instances."""
+        backend = backends.MuMuBackend(log_func=lambda *a, **k: None, instance_base_path="nonexistent_dir")
+        self.assertEqual(backend.get_instances(), [])
+
+    def test_matches_device_and_hypervisor_processes(self):
+        """The shell and the hypervisor both identify the instance."""
+        with patch(
+            "wosutil.emulator.backends._iter_processes",
+            return_value=[
+                (object(), "MuMuNxDevice.exe", ["MuMuNxDevice.exe", "-v", "0", "--vm", "MuMuPlayerGlobal-15.0-0"]),
+                (object(), "MuMuVMMHeadless.exe", ["MuMuVMMHeadless.exe", "--comment", "MuMuPlayerGlobal-15.0-0", "--startvm", "abc"]),
+                (object(), "MuMuVMMHeadless.exe", ["MuMuVMMHeadless.exe", "--comment", "MuMuPlayerGlobal-12.0-10", "--startvm", "def"]),
+            ],
+        ):
+            matches = self.backend._matching_processes(0)
+
+        self.assertEqual(len(matches), 2)
+
+    def test_other_instance_does_not_match(self):
+        """Index 1 does not match a folder belonging to instance 10."""
+        with patch(
+            "wosutil.emulator.backends._iter_processes",
+            return_value=[
+                (object(), "MuMuNxDevice.exe", ["MuMuNxDevice.exe", "-v", "10", "--vm", "MuMuPlayerGlobal-15.0-10"]),
+            ],
+        ):
+            matches = self.backend._matching_processes(1)
+
+        self.assertEqual(matches, [])
 
 
 class TestBlueStacksBackend(unittest.TestCase):
@@ -335,7 +432,7 @@ class TestProcessMatching(unittest.TestCase):
     def test_ldplayer_index_one_does_not_match_index_ten(self):
         """LDPlayer instance 1 is distinct from instance 10."""
         backend = backends.LDPlayerBackend.__new__(backends.LDPlayerBackend)
-        backend._index_map = {1: {"index": 1, "display_name": "Instance 1"}}
+        backend._instances = [{"index": 1, "name": "leidian1", "display_name": "Instance 1"}]
         expected = object()
         equals_form = object()
         wrong_instance = object()
@@ -355,7 +452,7 @@ class TestProcessMatching(unittest.TestCase):
     def test_bluestacks_instance_name_is_compared_as_an_argument(self):
         """A similarly named BlueStacks instance is not selected."""
         backend = backends.BlueStacksBackend.__new__(backends.BlueStacksBackend)
-        backend._index_map = {0: {"name": "Pie64"}}
+        backend._instances = [{"index": 0, "name": "Pie64", "display_name": "Mario", "adb_port": "5555"}]
         expected = object()
         wrong_instance = object()
         with patch.object(
@@ -469,9 +566,15 @@ class TestQuietWindowHandling(unittest.TestCase):
         backend = backends.MuMuBackend(log_func=lambda *a, **k: None)
         shell = Mock()
         vm = Mock()
+        calls = {"count": 0}
+
+        def matches(_index):
+            calls["count"] += 1
+            return [shell, vm] if calls["count"] == 1 else [vm]
+
         with (
             patch.object(backends.MuMuBackend, "_vm_name", return_value="MuMuPlayerGlobal-12.0-1"),
-            patch.object(backends.MuMuBackend, "_matching_processes", side_effect=[[shell, vm], [shell, vm], [vm], [vm], [vm], [vm], [vm], [vm], [vm], [vm], [vm]]),
+            patch.object(backends.MuMuBackend, "_matching_processes", side_effect=matches),
             patch.object(backends.MuMuBackend, "_graceful_stop", return_value=False),
             patch(
                 "wosutil.emulator.backends._iter_processes",
@@ -548,10 +651,21 @@ class TestQuietWindowHandling(unittest.TestCase):
         """LDPlayer tries ldconsole quit before terminating dnplayer."""
         backend = backends.LDPlayerBackend(log_func=lambda *a, **k: None, config_dir=ldplayer_config_dir_helper({"leidian0.config": LDPLAYER_INSTANCE_0}))
         proc = Mock()
-        with patch("wosutil.emulator.backends.run_process_robust") as mock_run, patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]):
+        with patch("wosutil.emulator.backends.run_process_robust", return_value=Mock(returncode=1)) as mock_run, patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]):
             self.assertTrue(backend.stop_instance(0))
         mock_run.assert_called_once_with([backend.console_path, "quit", "--index", "0"], timeout=15)
         proc.terminate.assert_called_once()
+
+    def test_ldplayer_stop_waits_for_an_accepted_quit(self):
+        """A successful ldconsole quit is waited on instead of killing dnplayer."""
+        backend = backends.LDPlayerBackend(log_func=lambda *a, **k: None, config_dir=ldplayer_config_dir_helper({"leidian0.config": LDPLAYER_INSTANCE_0}))
+        proc = Mock()
+        with (
+            patch("wosutil.emulator.backends.run_process_robust", return_value=Mock(returncode=0)),
+            patch.object(backend, "_matching_processes", side_effect=[[proc], [proc], []]),
+        ):
+            self.assertTrue(backend.stop_instance(0))
+        proc.terminate.assert_not_called()
 
     def test_bluestacks_start_minimizes_player_windows(self):
         """HD-Player windows are minimized on launch and on success."""

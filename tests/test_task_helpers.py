@@ -1340,7 +1340,7 @@ class TestEnsureCityScreenNotInstalled(unittest.TestCase):
             patch("wosutil.tool.tasks.navigation.is_wos_running", return_value=False),
             patch("wosutil.tool.tasks.navigation.is_wos_installed", return_value=False),
             patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
-            patch("wosutil.tool.tasks.navigation.get_multi_instance_manager") as mock_manager,
+            patch("wosutil.tool.tasks.navigation.get_active_backend") as mock_manager,
         ):
             from wosutil.tool.tasks.navigation import ensure_city_screen
 

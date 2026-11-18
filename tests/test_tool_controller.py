@@ -7,48 +7,50 @@ from unittest.mock import MagicMock, patch
 
 from wosutil.emulator.emulator_manager import AdbCommandError
 from wosutil.stop import stop_signal
-from wosutil.tool.tool_instances_controller import MultiInstanceToolController, pick_scheduled_task
+from wosutil.tool.tool_instances_controller import InstanceState, MultiInstanceToolController, pick_scheduled_task
+
+TASK_A = {"id": "a", "name": "Task A", "function": lambda instance_index: True, "priority": 1, "reschedule_seconds": 1000}
+TASK_B = {"id": "b", "name": "Task B", "function": lambda instance_index: True, "priority": 2, "reschedule_seconds": 2000}
+TASK_C = {"id": "c", "name": "Task C", "function": lambda instance_index: True, "priority": 3, "reschedule_seconds": 3000}
+TASK_DEFINITIONS = {"a": TASK_A, "b": TASK_B, "c": TASK_C}
 
 
-class FakeManager:
-    """Backend stub that reports blocked ADB access."""
+class FakeBackend:
+    """Minimal emulator backend stub."""
 
-    def check_adb_access(self):
-        """Return a blocking warning."""
-        return ["ADB access is blocked."]
-
-
-class FakeManagerOpen(FakeManager):
-    """Backend stub with unrestricted ADB access."""
-
-    def check_adb_access(self):
-        """Return no warnings."""
-        return []
-
-
-class FakeManagerRunning(FakeManagerOpen):
-    """Backend stub for a running, controllable instance."""
-
-    def __init__(self):
-        """Initialize the call counters."""
-        self.stop_calls = 0
+    def __init__(self, warnings=None, start_result=True):
+        """Initialize the stub."""
+        self.warnings = list(warnings or [])
+        self.start_result = start_result
         self.start_calls = 0
+        self.stop_calls = 0
 
-    def _is_instance_running(self, index):
-        """The instance is always up."""
-        return True
+    def check_adb_access(self):
+        """Return the configured ADB warnings."""
+        return list(self.warnings)
 
     def start_instance(self, index):
-        """Record a start call."""
+        """Record a start and return the configured result."""
         self.start_calls += 1
+        return self.start_result
 
     def stop_instance(self, index):
-        """Record a stop call."""
+        """Record a stop."""
         self.stop_calls += 1
+        return True
 
 
-class TestStartToolAbort(unittest.TestCase):
-    """Tests for the start-time ADB access guard."""
+def _checked_widget(index=0, profile_name="All"):
+    """Build a checked instance widget for the given index."""
+    checked = MagicMock()
+    checked.get.return_value = True
+    profile_var = MagicMock()
+    profile_var.get.return_value = profile_name
+    return {"index": index, "checked": checked, "profile_var": profile_var}
+
+
+class ControllerTestCase(unittest.TestCase):
+    """Base test case with a controller factory and clean stop signal."""
 
     def setUp(self):
         """Ensure the global stop signal is clear between tests."""
@@ -58,216 +60,380 @@ class TestStartToolAbort(unittest.TestCase):
         """Do not leak the stop signal into other tests."""
         stop_signal.clear()
 
-    def _make_controller(self, manager):
+    def _make_controller(self, backend=None, dialogs=None, widgets=None):
         """Build a controller with mock dependencies and a log capture."""
         self.logs = []
         return MultiInstanceToolController(
             log_message=lambda msg, level="info": self.logs.append((msg, level)),
-            TASK_DEFINITIONS={},
-            multi_instance_manager=manager,
-            profile_manager=MagicMock(),
-            instances_profile_managers={},
-            instance_queue=[],
-            active_instances=set(),
-            instance_widgets=[],
-            save_instance_selection=lambda selection: None,
-            load_instance_selection=lambda: {},
+            task_definitions=dict(TASK_DEFINITIONS),
+            backend=backend or FakeBackend(),
+            profiles={"All": ["a", "b"], "All2": ["a", "c"]},
+            instance_widgets=[] if widgets is None else widgets,
+            dialog_queue=dialogs,
         )
+
+    def _state(self, tasks=None, profile_name="All"):
+        """Build an instance state with the given running tasks."""
+        return InstanceState(profile_name=profile_name, tasks=list([dict(TASK_A)] if tasks is None else tasks))
+
+
+class TestStartToolAbort(ControllerTestCase):
+    """Tests for the start-time ADB access guard and session locking."""
 
     def test_start_tool_aborts_when_adb_blocked(self):
         """start_tool refuses to run and logs the warning when ADB is blocked."""
-        controller = self._make_controller(FakeManager())
+        controller = self._make_controller(FakeBackend(warnings=["ADB access is blocked."]))
         self.assertFalse(controller.start_tool())
         self.assertFalse(controller.tool_running)
         self.assertTrue(any("ADB access is blocked" in msg for msg, _level in self.logs))
 
     def test_start_tool_runs_when_adb_ok(self):
         """start_tool runs normally when the backend has no warnings."""
-        controller = self._make_controller(FakeManagerOpen())
-        self.assertTrue(controller.start_tool())
+        controller = self._make_controller()
+        with patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=False):
+            self.assertTrue(controller.start_tool())
         self.assertTrue(controller.tool_running)
 
     def test_start_tool_refuses_to_overlap_a_running_session(self):
         """A second start cannot reset the state of the current session."""
-        controller = self._make_controller(FakeManagerOpen())
+        controller = self._make_controller()
         controller.tool_running = True
 
         self.assertFalse(controller.start_tool())
         self.assertTrue(controller.tool_running)
         self.assertTrue(any("already running" in msg for msg, _level in self.logs))
 
-    def test_old_worker_cannot_remove_a_newer_thread_reference(self):
-        """A stale worker must not delete a replacement thread entry."""
-        controller = self._make_controller(FakeManagerOpen())
-        old_thread = object()
-        current_thread = object()
-        controller.instance_threads[0] = current_thread
+    def test_start_tool_refuses_while_a_previous_session_is_stopping(self):
+        """A live worker from the previous session blocks a new start."""
+        controller = self._make_controller()
+        worker = MagicMock()
+        worker.is_alive.return_value = True
+        controller.instance_threads[0] = worker
 
-        controller._remove_thread_reference(0, old_thread)
-
-        self.assertIs(controller.instance_threads[0], current_thread)
+        self.assertFalse(controller.start_tool())
+        self.assertFalse(controller.tool_running)
+        self.assertTrue(any("still stopping" in msg for msg, _level in self.logs))
 
     def test_stop_tool_keeps_reference_to_worker_that_is_still_alive(self):
         """Stopping does not forget a thread that exceeded the join timeout."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
         worker = MagicMock()
         worker.is_alive.return_value = True
         controller.tool_running = True
-        controller.active_instances.add(0)
-        controller.instance_queue.append((0, "profile_x"))
+        controller._active_instances.add(0)
+        controller._selected_instances[0] = "All"
+        controller.states[0] = self._state()
         controller.instance_threads[0] = worker
 
         controller.stop_tool()
 
         self.assertIs(controller.instance_threads[0], worker)
         worker.join.assert_called_once_with(timeout=5.0)
-        self.assertEqual(manager.stop_calls, 1)
-        self.assertEqual(controller.active_instances, set())
-        self.assertEqual(controller.instance_queue, [])
+        self.assertEqual(backend.stop_calls, 1)
+        self.assertEqual(controller._active_instances, set())
+        self.assertEqual(controller.states, {})
 
 
-class TestGameNotInstalledAbort(unittest.TestCase):
+class TestGameNotInstalledAbort(ControllerTestCase):
     """The instance aborts without retries when the game is not installed."""
 
-    def setUp(self):
-        """Ensure the global stop signal is clear between tests."""
-        stop_signal.clear()
-
-    def _make_controller(self, manager):
-        """Build a controller with mock dependencies and a log capture."""
-        self.logs = []
-        return MultiInstanceToolController(
-            log_message=lambda msg, level="info": self.logs.append((msg, level)),
-            TASK_DEFINITIONS={},
-            multi_instance_manager=manager,
-            profile_manager=MagicMock(),
-            instances_profile_managers={},
-            instance_queue=[],
-            active_instances=set(),
-            instance_widgets=[],
-            save_instance_selection=lambda selection: None,
-            load_instance_selection=lambda: {},
-            dialog_queue=None,
-        )
-
     def test_worker_aborts_without_requeue_when_game_missing(self):
-        """Missing game: clear error, one stop, no relaunch and no requeue.
-
-        Regression guard: previously each failed game launch closed the
-        emulator and re-queued the instance, restarting it in a loop.
-        """
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
+        """Missing game: clear error, one stop, no relaunch and no retry."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state(tasks=[])
         with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False),
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=False),
             patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
         ):
-            controller.run_profile_on_instance_with_slot(0, "profile_x")
+            controller._run_instance(0)
         mock_launch.assert_not_called()
-        self.assertEqual(manager.stop_calls, 1)
-        self.assertEqual(manager.start_calls, 0)
-        self.assertNotIn(0, controller.active_instances)
-        self.assertEqual(controller.instance_queue, [])
+        self.assertEqual(backend.stop_calls, 1)
+        self.assertEqual(backend.start_calls, 1)
+        self.assertNotIn(0, controller._active_instances)
+        self.assertEqual(controller._launch_attempts, {})
+        self.assertTrue(controller.is_aborted(0))
         self.assertTrue(any("not installed" in msg for msg, _level in self.logs))
 
     def test_worker_queues_dialog_when_game_missing(self):
         """A (title, text) dialog request is queued for the GUI main thread."""
-        manager = FakeManagerRunning()
         dialogs = queue.Queue()
-        controller = self._make_controller(manager)
-        controller.dialog_queue = dialogs
+        controller = self._make_controller(dialogs=dialogs)
+        controller.states[0] = self._state(tasks=[])
         with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False),
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=False),
             patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
         ):
-            controller.run_profile_on_instance_with_slot(0, "profile_x")
+            controller._run_instance(0)
         mock_launch.assert_not_called()
         title, text = dialogs.get_nowait()
         self.assertEqual(title, "Game not installed")
         self.assertIn("com.gof.global", text)
 
-    def test_worker_never_requeues_when_game_missing(self):
-        """The launch-attempt counter stays untouched for a missing game."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
+
+class TestLaunchFailures(ControllerTestCase):
+    """Launch failures are counted, then the instance backs off."""
+
+    def test_start_failure_counts_toward_retry_attempts(self):
+        """A failed emulator start releases the slot and counts an attempt."""
+        backend = FakeBackend(start_result=False)
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state()
+
+        controller._run_instance(0)
+
+        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertNotIn(0, controller._active_instances)
+        self.assertEqual(backend.stop_calls, 1)
+
+    def test_start_failure_pauses_after_max_attempts(self):
+        """Consecutive start failures block the instance for the cooldown."""
+        backend = FakeBackend(start_result=False)
+        controller = self._make_controller(backend)
+        controller.max_launch_attempts = 1
+        controller.states[0] = self._state()
+
+        controller._run_instance(0)
+
+        self.assertGreater(controller._retry_blocked_until[0], time.time())
+        self.assertEqual(controller._launch_attempts[0], 0)
+
+    def test_adb_failure_restarts_the_emulator_before_giving_up(self):
+        """A failed ADB connection triggers one emulator restart attempt."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state()
         with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=False),
-            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=False),
+            patch("wosutil.tool.tool_instances_controller.force_restart_emulator", return_value=False) as mock_restart,
         ):
-            controller.run_profile_on_instance_with_slot(0, "profile_x")
-            controller.run_profile_on_instance_with_slot(0, "profile_x")
-        mock_launch.assert_not_called()
-        self.assertEqual(manager.stop_calls, 2)
-        self.assertEqual(controller.instance_launch_attempts, {})
+            controller._run_instance(0)
+        mock_restart.assert_called_once_with(0, backend)
+        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertEqual(backend.stop_calls, 1)
+
+    def test_game_launch_failure_counts_toward_retry_attempts(self):
+        """A failed game launch releases the slot and counts an attempt."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state()
+        with (
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.retry_operation", return_value=False),
+        ):
+            controller._run_instance(0)
+        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertEqual(backend.stop_calls, 1)
+
+    def test_startup_exception_counts_toward_retry_attempts(self):
+        """An ADB crash during startup must count as a launch failure."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state()
+
+        def run_once(operation, **_kwargs):
+            return operation()
+
+        with (
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.retry_operation", side_effect=run_once),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", side_effect=AdbCommandError("boom")),
+        ):
+            controller._run_instance(0)
+
+        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertNotIn(0, controller._active_instances)
+        self.assertEqual(backend.stop_calls, 1)
+
+    def test_startup_exception_backs_off_after_max_attempts(self):
+        """Consecutive startup crashes pause the instance instead of spinning."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.max_launch_attempts = 1
+        controller.states[0] = self._state()
+
+        def run_once(operation, **_kwargs):
+            return operation()
+
+        with (
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.retry_operation", side_effect=run_once),
+            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", side_effect=AdbCommandError("boom")),
+        ):
+            controller._run_instance(0)
+
+        self.assertGreater(controller._retry_blocked_until[0], time.time())
 
 
-class TestLaunchRetryQueue(unittest.TestCase):
-    """The instance queue keeps progressing after a launch is abandoned."""
+class TestInstanceWorker(ControllerTestCase):
+    """The worker runs tasks and closes idle or unhealthy instances."""
+
+    def _startup_patches(self, controller, launch_result=True):
+        """Patch a successful startup up to the task loop."""
+        return (
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.retry_operation", return_value=launch_result),
+            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
+            patch("wosutil.tool.tasks.task_automation.reconcile_bear_trap_schedule", return_value=False),
+        )
+
+    def test_idle_close_stops_the_emulator_without_requeue(self):
+        """A far next task closes the emulator and the scheduler keeps the slot."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state(tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}])
+        patches = self._startup_patches(controller)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            controller._run_instance(0)
+        self.assertEqual(backend.stop_calls, 1)
+        self.assertNotIn(0, controller._active_instances)
+        self.assertTrue(any("more than" in msg for msg, _level in self.logs))
+
+    def test_health_check_failure_restarts_or_releases_the_slot(self):
+        """An unhealthy emulator is restarted; a failed restart counts a failure."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.health_check_interval = -1
+        controller.states[0] = self._state(tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}])
+        patches = self._startup_patches(controller)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False),
+            patch("wosutil.tool.tool_instances_controller.force_restart_emulator", return_value=False) as mock_restart,
+        ):
+            controller._run_instance(0)
+        mock_restart.assert_called_once_with(0, backend)
+        self.assertEqual(controller._launch_attempts[0], 1)
+        self.assertEqual(backend.stop_calls, 1)
+
+    def test_no_tasks_releases_the_slot(self):
+        """An empty profile closes the instance and stops scheduling it."""
+        backend = FakeBackend()
+        controller = self._make_controller(backend)
+        controller.states[0] = self._state(tasks=[])
+        controller._selected_instances[0] = "All"
+        controller.tool_running = True
+        patches = self._startup_patches(controller)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            controller._run_instance(0)
+        self.assertEqual(backend.stop_calls, 1)
+        with controller._state_lock:
+            self.assertIsNone(controller._next_run_time(0))
+
+
+class TestScheduler(ControllerTestCase):
+    """The due-time scheduler replaces the old shared queue."""
 
     def setUp(self):
-        """Ensure the global stop signal is clear between tests."""
-        stop_signal.clear()
+        """Create a controller that can launch up to three instances."""
+        super().setUp()
+        self.controller = self._make_controller()
+        self.controller.set_max_instances(3)
+        self.controller.tool_running = True
 
-    def tearDown(self):
-        """Do not leak the stop signal into other tests."""
-        stop_signal.clear()
+    def _select(self, index, next_run_time, profile_name="All"):
+        """Register a selected instance with a single scheduled task."""
+        self.controller._selected_instances[index] = profile_name
+        self.controller.states[index] = self._state(tasks=[{"id": "x", "name": "X", "priority": 1, "next_run_time": next_run_time}])
 
-    def test_exhausted_retries_wake_the_next_instance(self):
-        """A failed instance must not leave other queued instances stranded."""
-        controller = MultiInstanceToolController(
-            log_message=lambda _msg, level="info": None,
-            TASK_DEFINITIONS={},
-            multi_instance_manager=FakeManagerOpen(),
-            profile_manager=MagicMock(),
-            instances_profile_managers={},
-            instance_queue=[(1, "profile_y")],
-            active_instances={0},
-            instance_widgets=[],
-            save_instance_selection=lambda _selection: None,
-            load_instance_selection=lambda: {},
-        )
-        controller.max_launch_attempts = 1
-
-        with patch.object(controller, "launch_next_instances") as launch_next:
-            controller._requeue_with_limit(0, "profile_x")
-
-        self.assertNotIn(0, controller.active_instances)
-        self.assertEqual(controller.instance_queue, [(1, "profile_y"), (0, "profile_x")])
-        self.assertGreater(controller._retry_blocked_until[0], time.time())
-        launch_next.assert_called_once_with()
-
-    def test_retry_cooldown_expires_and_instance_requeues(self):
-        """A failed instance is retried after the cooldown, not dropped."""
-        controller = MultiInstanceToolController(
-            log_message=lambda _msg, level="info": None,
-            TASK_DEFINITIONS={},
-            multi_instance_manager=FakeManagerOpen(),
-            profile_manager=MagicMock(),
-            instances_profile_managers={},
-            instance_queue=[(0, "profile_x")],
-            active_instances={0},
-            instance_widgets=[],
-            save_instance_selection=lambda _selection: None,
-            load_instance_selection=lambda: {},
-        )
-        controller.max_launch_attempts = 1
-        with patch.object(controller, "launch_next_instances"):
-            controller._requeue_with_limit(0, "profile_x")
-        # After the cooldown the counter is reset for a fresh attempt.
-        self.assertEqual(controller.instance_launch_attempts[0], 0)
-        controller._retry_blocked_until[0] = time.time() - 1
+    def _launch(self):
+        """Run one scheduler pass and return the patched Thread factory."""
         with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
-            fake_thread = MagicMock()
-            mock_thread.return_value = fake_thread
-            controller.launch_next_instances()
-        fake_thread.start.assert_called_once()
-        _, kwargs = mock_thread.call_args
-        self.assertEqual(kwargs["args"], (0, "profile_x"))
-        self.assertEqual(kwargs["target"], controller.run_profile_on_instance_with_slot)
+            mock_thread.return_value = MagicMock()
+            self.controller.launch_due_instances()
+        return mock_thread
+
+    def test_due_instance_is_started(self):
+        """An instance whose task is due starts immediately."""
+        self._select(0, time.time() - 1)
+        thread_factory = self._launch()
+        thread_factory.return_value.start.assert_called_once()
+        self.assertEqual(thread_factory.call_args.kwargs["args"], (0,))
+        self.assertIn(0, self.controller._active_instances)
+
+    def test_future_task_within_startup_window_is_started(self):
+        """The instance opens shortly before its next task."""
+        self._select(0, time.time() + 30)
+        self._launch().return_value.start.assert_called_once()
+
+    def test_future_task_outside_startup_window_is_not_started(self):
+        """A distant task keeps the emulator closed."""
+        self._select(0, time.time() + 61)
+        self._launch().return_value.start.assert_not_called()
+        self.assertEqual(self.controller._active_instances, set())
+
+    def test_instance_without_tasks_is_not_started(self):
+        """A profile with no tasks never opens an emulator."""
+        self.controller._selected_instances[0] = "All"
+        self.controller.states[0] = self._state(tasks=[])
+        self._launch().return_value.start.assert_not_called()
+
+    def test_aborted_instance_is_not_started(self):
+        """A permanently aborted instance is never resurrected."""
+        self._select(0, time.time() - 1)
+        self.controller._aborted_instances.add(0)
+        self._launch().return_value.start.assert_not_called()
+
+    def test_retry_blocked_instance_is_not_started_until_cooldown(self):
+        """A paused instance is skipped while the retry cooldown runs."""
+        self._select(0, time.time() - 1)
+        self.controller._retry_blocked_until[0] = time.time() + 300
+        self._launch().return_value.start.assert_not_called()
+
+    def test_active_instance_is_not_started_twice(self):
+        """An instance already running keeps its slot."""
+        self._select(0, time.time() - 1)
+        self.controller._active_instances.add(0)
+        self._launch().return_value.start.assert_not_called()
+
+    def test_emulator_limit_is_honored(self):
+        """No instance starts when every slot is busy."""
+        self.controller.set_max_instances(1)
+        self._select(0, time.time() - 1)
+        self.controller._active_instances.add(1)
+        self._launch().return_value.start.assert_not_called()
+
+    def test_earliest_task_gets_the_free_slot_first(self):
+        """The free slot goes to the instance whose task is closest."""
+        now = time.time()
+        self._select(0, now + 40)
+        self._select(1, now - 5)
+        self.controller.set_max_instances(1)
+        thread_factory = self._launch()
+        thread_factory.return_value.start.assert_called_once()
+        self.assertEqual(thread_factory.call_args.kwargs["args"], (1,))
+
+    def test_stale_thread_reference_does_not_block_takeover(self):
+        """A dead thread entry from an old session does not block a launch."""
+        self._select(0, time.time() - 1)
+        dead = MagicMock()
+        dead.is_alive.return_value = False
+        self.controller.instance_threads[0] = dead
+        self._launch().return_value.start.assert_called_once()
+
+    def test_pending_position_reflects_start_order(self):
+        """Waiting instances are ordered by their next task time."""
+        now = time.time()
+        self._select(0, now + 200)
+        self._select(1, now + 100)
+        self.assertEqual(self.controller.pending_position(1), 1)
+        self.assertEqual(self.controller.pending_position(0), 2)
+        self.assertIsNone(self.controller.pending_position(2))
+
+    def test_retry_seconds_remaining_zero_without_cooldown(self):
+        """An instance without a cooldown reports no remaining pause."""
+        self.assertEqual(self.controller.retry_seconds_remaining(0), 0.0)
 
 
 class TestPickScheduledTask(unittest.TestCase):
@@ -296,12 +462,7 @@ class TestPickScheduledTask(unittest.TestCase):
         self.assertEqual(wait_until, 1003)
 
     def test_highest_priority_of_window_is_the_wait_target(self):
-        """Among in-window tasks, the highest priority is waited for, not the nearest.
-
-        A task whose timer was read earlier but with less priority must not
-        jump ahead of a more urgent one read a bit later: the whole batch is
-        grouped by priority.
-        """
+        """Among in-window tasks, the highest priority is waited for, not the nearest."""
         state = [
             self._task("a", "Due first", 6, 990),
             self._task("b", "Most urgent later", 1, 1004),
@@ -324,10 +485,7 @@ class TestPickScheduledTask(unittest.TestCase):
 
     def test_same_priority_does_not_skip_ahead(self):
         """A same-priority task does not delay the due one."""
-        state = [
-            self._task("a", "Due", 6, 990),
-            self._task("b", "Same priority later", 6, 1003),
-        ]
+        state = [self._task("a", "Due", 6, 990), self._task("b", "Same priority later", 6, 1003)]
         task, wait_until = pick_scheduled_task(state, 1000)
         self.assertEqual(task["id"], "a")
         self.assertIsNone(wait_until)
@@ -347,94 +505,51 @@ class TestPickScheduledTask(unittest.TestCase):
         self.assertIsNone(wait_until)
 
 
-TASK_A = {"id": "a", "name": "Task A", "function": lambda instance_index: True, "priority": 1, "reschedule_seconds": 1000}
-TASK_B = {"id": "b", "name": "Task B", "function": lambda instance_index: True, "priority": 2, "reschedule_seconds": 2000}
-TASK_C = {"id": "c", "name": "Task C", "function": lambda instance_index: True, "priority": 3, "reschedule_seconds": 3000}
-
-
-class TestScheduleMemory(unittest.TestCase):
+class TestScheduleMemory(ControllerTestCase):
     """The controller restores the saved schedule when memory is enabled."""
 
-    def setUp(self):
-        """Ensure the global stop signal is clear between tests."""
-        stop_signal.clear()
-
-    def _make_controller(self, manager):
-        """Build a controller with mock dependencies and a log capture."""
-        self.logs = []
-        return MultiInstanceToolController(
-            log_message=lambda msg, level="info": self.logs.append((msg, level)),
-            TASK_DEFINITIONS={"a": TASK_A, "b": TASK_B, "c": TASK_C},
-            multi_instance_manager=manager,
-            profile_manager=MagicMock(),
-            instances_profile_managers={},
-            instance_queue=[],
-            active_instances=set(),
-            instance_widgets=[],
-            save_instance_selection=lambda selection: None,
-            load_instance_selection=lambda: {},
-            dialog_queue=None,
-        )
-
-    def _checked_instance(self, profile_name="All"):
-        """Build a checked instance widget for index 0 with the given profile."""
-        checked = MagicMock()
-        checked.get.return_value = True
-        profile_var = MagicMock()
-        profile_var.get.return_value = profile_name
-        return {"index": 0, "checked": checked, "profile_var": profile_var}
-
     def _start_with_remember(self, controller, saved_schedule, profile_name="All", task_names=("a", "b")):
-        """Run start_tool with the remember-schedule preference and a fake ProfileManager."""
-        pm_mock = MagicMock()
-        pm_mock.profiles = {profile_name: list(task_names)}
+        """Run start_tool with the remember-schedule preference and a saved schedule."""
+        controller.profiles[profile_name] = list(task_names)
         with (
-            patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock),
-            patch.object(controller, "launch_next_instances"),
+            patch.object(controller, "launch_due_instances"),
             patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True),
             patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved_schedule),
             patch("wosutil.tool.tool_instances_controller.save_task_schedule"),
         ):
-            controller.instance_widgets.append(self._checked_instance(profile_name))
+            controller.instance_widgets.append(_checked_widget(profile_name=profile_name))
             self.assertTrue(controller.start_tool())
-        return controller.instances_profile_managers[0].running_tasks_state
+        return controller.states[0].tasks
 
     def test_start_tool_restores_saved_next_run_times(self):
         """A saved future time keeps the remaining wait of the task."""
-        controller = self._make_controller(FakeManagerOpen())
-        state = self._start_with_remember(
-            controller,
-            {"0": {"a": {"next_run_time": 5000.0, "reschedule_seconds": 400.0}}},
-        )
-        by_id = {t["id"]: t for t in state}
-        self.assertEqual(by_id["a"]["next_run_time"], 5000.0)
+        controller = self._make_controller()
+        future = time.time() + 5000
+        tasks = self._start_with_remember(controller, {"0": {"a": {"next_run_time": future, "reschedule_seconds": 400.0}}})
+        by_id = {task["id"]: task for task in tasks}
+        self.assertEqual(by_id["a"]["next_run_time"], future)
         self.assertEqual(by_id["a"]["reschedule_seconds"], 400.0)
         # The task without a saved entry runs at startup (current behavior)
         self.assertLessEqual(by_id["b"]["next_run_time"], time.time())
 
     def test_start_tool_keeps_overdue_times_so_task_runs_immediately(self):
         """A saved time in the past stays due and runs immediately at startup."""
-        controller = self._make_controller(FakeManagerOpen())
-        state = self._start_with_remember(
-            controller,
-            {"0": {"a": {"next_run_time": 100.0}}},
-        )
-        by_id = {t["id"]: t for t in state}
+        controller = self._make_controller()
+        tasks = self._start_with_remember(controller, {"0": {"a": {"next_run_time": 100.0}}})
+        by_id = {task["id"]: task for task in tasks}
         self.assertEqual(by_id["a"]["next_run_time"], 100.0)
 
     def test_start_tool_keeps_schedule_of_tasks_shared_between_profiles(self):
         """Switching profile keeps the schedule of the tasks present in both."""
-        controller = self._make_controller(FakeManagerOpen())
-        # The schedule was saved while the instance ran profile "All" (tasks a, b);
-        # the user switches to profile "All2" (tasks a, c).
+        controller = self._make_controller()
         saved = {
             "0": {
                 "a": {"next_run_time": 5000.0, "reschedule_seconds": 400.0},
                 "b": {"next_run_time": 6000.0},
             }
         }
-        state = self._start_with_remember(controller, saved, profile_name="All2", task_names=("a", "c"))
-        by_id = {t["id"]: t for t in state}
+        tasks = self._start_with_remember(controller, saved, profile_name="All2", task_names=("a", "c"))
+        by_id = {task["id"]: task for task in tasks}
         # The shared task keeps its schedule; the new task runs at startup
         self.assertEqual(by_id["a"]["next_run_time"], 5000.0)
         self.assertEqual(by_id["a"]["reschedule_seconds"], 400.0)
@@ -442,18 +557,15 @@ class TestScheduleMemory(unittest.TestCase):
 
     def test_persist_keeps_entries_of_tasks_not_in_the_current_profile(self):
         """Persisting keeps the schedule of tasks that are not in the current profile."""
-        controller = self._make_controller(FakeManagerOpen())
+        controller = self._make_controller()
         saved = {"0": {"a": {"next_run_time": 5000.0}, "z": {"next_run_time": 7000.0}}}
-        pm_mock = MagicMock()
-        pm_mock.profiles = {"All": ["a", "b"]}
         with (
-            patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock),
-            patch.object(controller, "launch_next_instances"),
+            patch.object(controller, "launch_due_instances"),
             patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True),
             patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value=saved),
             patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save,
         ):
-            controller.instance_widgets.append(self._checked_instance())
+            controller.instance_widgets.append(_checked_widget())
             self.assertTrue(controller.start_tool())
         persisted = mock_save.call_args.args[0]
         # The profile only contains a and b, but z is kept for a future switch back
@@ -462,7 +574,7 @@ class TestScheduleMemory(unittest.TestCase):
 
     def test_start_tool_does_not_wipe_schedule_without_selected_instances(self):
         """Starting with no instances selected never writes an empty schedule."""
-        controller = self._make_controller(FakeManagerOpen())
+        controller = self._make_controller()
         with (
             patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=True),
             patch("wosutil.tool.tool_instances_controller.load_task_schedule", return_value={"0": {"a": {"next_run_time": 1.0}}}),
@@ -473,80 +585,50 @@ class TestScheduleMemory(unittest.TestCase):
 
     def test_start_tool_keeps_current_behavior_when_memory_disabled(self):
         """Memory off: every task is scheduled to run at startup, as before."""
-        controller = self._make_controller(FakeManagerOpen())
-        pm_mock = MagicMock()
-        pm_mock.profiles = {"All": ["a", "b"]}
+        controller = self._make_controller()
         with (
-            patch("wosutil.tool.profiles.profile_manager.ProfileManager", return_value=pm_mock),
-            patch.object(controller, "launch_next_instances"),
+            patch.object(controller, "launch_due_instances"),
             patch("wosutil.tool.tool_instances_controller.get_remember_schedule", return_value=False),
             patch("wosutil.tool.tool_instances_controller.load_task_schedule") as mock_load,
         ):
-            controller.instance_widgets.append(self._checked_instance())
+            controller.instance_widgets.append(_checked_widget())
             self.assertTrue(controller.start_tool())
         mock_load.assert_not_called()
-        state = controller.instances_profile_managers[0].running_tasks_state
-        self.assertEqual(len(state), 2)
-        for task in state:
+        tasks = controller.states[0].tasks
+        self.assertEqual(len(tasks), 2)
+        for task in tasks:
             self.assertLessEqual(task["next_run_time"], time.time())
 
 
-class TestSchedulePersistenceInWorker(unittest.TestCase):
+class TestSchedulePersistenceInWorker(ControllerTestCase):
     """The worker persists the schedule after every task run."""
 
-    def setUp(self):
-        """Ensure the global stop signal is clear between tests."""
-        stop_signal.clear()
-
-    def tearDown(self):
-        """Do not leak the stop signal into other tests."""
-        stop_signal.clear()
-
-    def _make_controller(self, manager):
-        """Build a controller with mock dependencies and a log capture."""
-        self.logs = []
-        return MultiInstanceToolController(
-            log_message=lambda msg, level="info": self.logs.append((msg, level)),
-            TASK_DEFINITIONS={"a": TASK_A},
-            multi_instance_manager=manager,
-            profile_manager=MagicMock(),
-            instances_profile_managers={},
-            instance_queue=[],
-            active_instances=set(),
-            instance_widgets=[],
-            save_instance_selection=lambda selection: None,
-            load_instance_selection=lambda: {},
-            dialog_queue=None,
-        )
-
-    def _run_worker_once(self, controller, pm):
+    def _run_worker_once(self, controller, state):
         """Run the instance worker synchronously with the emulator stack stubbed."""
-        controller.instances_profile_managers[0] = pm
-        controller._selected_instances = {0}
+        controller.states[0] = state
+        controller._selected_instances[0] = "All"
         with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
-            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.verify_adb_connected", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.is_wos_installed", return_value=True),
+            patch("wosutil.tool.tool_instances_controller.retry_operation", return_value=True),
             patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
+            patch("wosutil.tool.tasks.task_automation.reconcile_bear_trap_schedule", return_value=False),
         ):
-            controller.run_profile_on_instance_with_slot(0, "All")
+            controller._run_instance(0)
 
     def test_worker_persists_rescheduled_task_after_run(self):
         """After a task runs and reschedules, its new times are persisted."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
+        controller = self._make_controller()
         controller._task_schedule = {}
-        pm = MagicMock()
-        pm.running_tasks_state = [dict(TASK_A)]
-        pm.current_task_name = None
+        task = dict(TASK_A)
 
         def fake_task(instance_index):
             stop_signal.set()
             return (True, 500)
 
-        pm.running_tasks_state[0]["function"] = fake_task
+        task["function"] = fake_task
         with patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save:
-            self._run_worker_once(controller, pm)
+            self._run_worker_once(controller, self._state(tasks=[task]))
         mock_save.assert_called_once()
         entry = mock_save.call_args.args[0]["0"]["a"]
         self.assertAlmostEqual(entry["next_run_time"], time.time() + 500, delta=5)
@@ -554,263 +636,18 @@ class TestSchedulePersistenceInWorker(unittest.TestCase):
 
     def test_worker_does_not_persist_when_memory_disabled(self):
         """Memory off: no schedule is written to disk."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
+        controller = self._make_controller()
         controller._task_schedule = None
-        pm = MagicMock()
-        pm.running_tasks_state = [dict(TASK_A)]
-        pm.current_task_name = None
+        task = dict(TASK_A)
 
         def fake_task(instance_index):
             stop_signal.set()
             return (True, 500)
 
-        pm.running_tasks_state[0]["function"] = fake_task
+        task["function"] = fake_task
         with patch("wosutil.tool.tool_instances_controller.save_task_schedule") as mock_save:
-            self._run_worker_once(controller, pm)
+            self._run_worker_once(controller, self._state(tasks=[task]))
         mock_save.assert_not_called()
-
-    def _run_crashing_worker(self, controller):
-        """Run the worker with a game launch that always blows up on ADB."""
-        with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
-            patch(
-                "wosutil.tool.tasks.navigation.launch_and_reach_city_screen",
-                side_effect=AdbCommandError("ADB operation 'force-stop game' failed with exit code 1"),
-            ),
-            patch("wosutil.tool.tool_instances_controller.time.sleep"),
-            patch.object(controller, "launch_next_instances"),
-        ):
-            controller.run_profile_on_instance_with_slot(0, "All")
-
-    def test_worker_error_counts_toward_retry_attempts(self):
-        """An ADB crash must count as a launch failure and re-queue the instance."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
-        self._run_crashing_worker(controller)
-        self.assertEqual(controller.instance_launch_attempts[0], 1)
-        self.assertIn((0, "All"), controller.instance_queue)
-        self.assertNotIn(0, controller.active_instances)
-
-    def test_worker_error_backs_off_after_max_attempts(self):
-        """Consecutive ADB crashes must pause the instance instead of spinning."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
-        controller.max_launch_attempts = 1
-        self._run_crashing_worker(controller)
-        self.assertGreater(controller._retry_blocked_until[0], time.time())
-        self.assertIn((0, "All"), controller.instance_queue)
-
-    def _run_idle_worker(self, controller, profile_name="All"):
-        """Run the worker whose next task is far away (idle-close path)."""
-        pm = MagicMock()
-        pm.running_tasks_state = [{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}]
-        controller.instances_profile_managers[0] = pm
-        with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
-            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
-            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
-        ):
-            controller.run_profile_on_instance_with_slot(0, profile_name)
-
-    def test_duplicate_worker_yields_without_touching_the_slot(self):
-        """A second worker must not stop the emulator owned by the live one."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
-        controller.active_instances.add(0)
-        other = MagicMock()
-        other.is_alive.return_value = True
-        controller.instance_threads[0] = other
-        with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
-            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen") as mock_launch,
-            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
-        ):
-            controller.run_profile_on_instance_with_slot(0, "All")
-        mock_launch.assert_not_called()
-        self.assertEqual(manager.start_calls, 0)
-        self.assertEqual(manager.stop_calls, 0)
-        self.assertIn(0, controller.active_instances)
-        self.assertIs(controller.instance_threads[0], other)
-        self.assertTrue(any("Duplicate worker" in msg for msg, _level in self.logs))
-
-    def test_stale_thread_reference_does_not_block_takeover(self):
-        """A dead thread entry must not stop the replacement worker."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
-        other = MagicMock()
-        other.is_alive.return_value = False
-        controller.instance_threads[0] = other
-        self._run_idle_worker(controller)
-        self.assertIn((0, "All"), controller.instance_queue)
-        self.assertTrue(any("Task cycle finished" in msg for msg, _level in self.logs))
-
-    def test_idle_close_marks_stopping_during_stop(self):
-        """The intentional close is visible so health checks back off meanwhile."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
-        seen = {}
-        real_stop = manager.stop_instance
-
-        def stop_and_check(index):
-            seen["marked"] = controller._stop_in_progress(index)
-            return real_stop(index)
-
-        manager.stop_instance = stop_and_check
-        self._run_idle_worker(controller)
-        self.assertTrue(seen.get("marked"))
-        self.assertFalse(controller._stop_in_progress(0))
-
-    def test_health_check_yields_when_close_in_progress(self):
-        """No forced restart under a worker that is already closing the instance."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
-        # Negative interval: fires on the first pass however coarse the clock is.
-        controller.health_check_interval = -1
-        controller.instances_profile_managers[0] = MagicMock()
-        controller._stopping_instances.add(0)
-        self.addCleanup(controller._stopping_instances.discard, 0)
-        with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
-            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
-            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
-            patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False),
-            patch("wosutil.tool.tool_instances_controller.force_restart_emulator") as mock_restart,
-        ):
-            controller.run_profile_on_instance_with_slot(0, "All")
-        mock_restart.assert_not_called()
-        self.assertEqual(manager.stop_calls, 0)
-        self.assertEqual(controller.instance_queue, [])
-        self.assertTrue(any("already in progress" in msg for msg, _level in self.logs))
-
-    def test_health_check_restarts_when_no_close_in_progress(self):
-        """The guard only skips restarts, it never disables them."""
-        manager = FakeManagerRunning()
-        controller = self._make_controller(manager)
-        # Negative interval: fires on the first pass however coarse the clock is.
-        controller.health_check_interval = -1
-        pm = MagicMock()
-        pm.running_tasks_state = [{"id": "x", "name": "X", "priority": 1, "next_run_time": time.time() + 1000}]
-        controller.instances_profile_managers[0] = pm
-        with (
-            patch("wosutil.emulator.emulator_manager.verify_adb_connected", return_value=True),
-            patch("wosutil.emulator.emulator_manager.is_wos_installed", return_value=True),
-            patch("wosutil.tool.tasks.navigation.launch_and_reach_city_screen", return_value=True),
-            patch("wosutil.tool.tool_instances_controller.sync_utc_time"),
-            patch("wosutil.tool.tool_instances_controller.check_emulator_health", return_value=False),
-            patch("wosutil.tool.tool_instances_controller.force_restart_emulator", return_value=True) as mock_restart,
-        ):
-            controller.run_profile_on_instance_with_slot(0, "All")
-        mock_restart.assert_called_once()
-        self.assertGreaterEqual(manager.stop_calls, 1)
-
-
-class TestSelfHealingQueue(unittest.TestCase):
-    """The launcher re-queues selected instances that fell out of the queue."""
-
-    def setUp(self):
-        """Ensure the global stop signal is clear between tests."""
-        stop_signal.clear()
-
-    def tearDown(self):
-        """Do not leak the stop signal into other tests."""
-        stop_signal.clear()
-
-    def _make_controller(self):
-        """Build a controller ready to launch up to 3 instances."""
-        controller = MultiInstanceToolController(
-            log_message=lambda _msg, level="info": None,
-            TASK_DEFINITIONS={},
-            multi_instance_manager=FakeManagerOpen(),
-            profile_manager=MagicMock(),
-            instances_profile_managers={},
-            instance_queue=[],
-            active_instances=set(),
-            instance_widgets=[],
-            save_instance_selection=lambda _selection: None,
-            load_instance_selection=lambda: {},
-        )
-        max_var = MagicMock()
-        max_var.get.return_value = 3
-        controller.max_instances_var = max_var
-        return controller
-
-    def _pm_with_tasks(self):
-        """A profile manager whose next task is already due."""
-        pm = MagicMock()
-        pm.running_tasks_state = [{"id": "x", "name": "X", "next_run_time": time.time() - 1}]
-        return pm
-
-    def _checked_widget(self, index=0, profile_name="All"):
-        """A checked instance widget for the given index."""
-        checked = MagicMock()
-        checked.get.return_value = True
-        profile_var = MagicMock()
-        profile_var.get.return_value = profile_name
-        return {"index": index, "checked": checked, "profile_var": profile_var}
-
-    def test_lost_instance_is_requeued_and_launched_when_due(self):
-        """A selected instance missing from the queue is launched again."""
-        controller = self._make_controller()
-        controller._selected_instances = {0}
-        controller.instances_profile_managers[0] = self._pm_with_tasks()
-        controller.instance_widgets.append(self._checked_widget())
-        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
-            fake_thread = MagicMock()
-            mock_thread.return_value = fake_thread
-            controller.launch_next_instances()
-        fake_thread.start.assert_called_once()
-        _, kwargs = mock_thread.call_args
-        self.assertEqual(kwargs["args"], (0, "All"))
-
-    def test_instance_without_scheduled_tasks_is_not_requeued(self):
-        """A profile with no tasks stays out of the queue (no busy loop)."""
-        controller = self._make_controller()
-        controller._selected_instances = {0}
-        pm = MagicMock()
-        pm.running_tasks_state = []
-        controller.instances_profile_managers[0] = pm
-        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
-            controller.launch_next_instances()
-        mock_thread.assert_not_called()
-        self.assertEqual(controller.instance_queue, [])
-
-    def test_aborted_instance_is_not_requeued(self):
-        """A permanently aborted instance (game missing) is never resurrected."""
-        controller = self._make_controller()
-        controller._selected_instances = {0}
-        controller._aborted_instances = {0}
-        controller.instances_profile_managers[0] = self._pm_with_tasks()
-        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
-            controller.launch_next_instances()
-        mock_thread.assert_not_called()
-        self.assertEqual(controller.instance_queue, [])
-
-    def test_retry_blocked_instance_is_not_launched_until_cooldown(self):
-        """A paused instance is skipped while the retry cooldown runs."""
-        controller = self._make_controller()
-        controller._selected_instances = {0}
-        controller._retry_blocked_until[0] = time.time() + 300
-        controller.instances_profile_managers[0] = self._pm_with_tasks()
-        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
-            controller.launch_next_instances()
-        mock_thread.assert_not_called()
-        self.assertEqual(controller.instance_queue, [])
-
-    def test_active_instance_is_not_duplicated_in_the_queue(self):
-        """An instance already running keeps its slot and is not re-queued."""
-        controller = self._make_controller()
-        controller._selected_instances = {0}
-        controller.active_instances.add(0)
-        controller.instances_profile_managers[0] = self._pm_with_tasks()
-        with patch("wosutil.tool.tool_instances_controller.threading.Thread") as mock_thread:
-            controller.launch_next_instances()
-        mock_thread.assert_not_called()
-        self.assertEqual(controller.instance_queue, [])
 
 
 if __name__ == "__main__":

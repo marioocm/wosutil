@@ -5,11 +5,11 @@ import unittest
 from wosutil.gui.gui_instances import get_next_task_info
 
 
-class _FakePM:
-    """Minimal profile manager stub exposing the tasks state."""
+class _FakeState:
+    """Minimal instance state stub exposing the task list."""
 
     def __init__(self, tasks):
-        self.running_tasks_state = tasks
+        self.tasks = tasks
 
 
 class TestGetNextTaskInfo(unittest.TestCase):
@@ -27,7 +27,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
 
     def test_empty_state_returns_nothing(self):
         """No tasks means no next task."""
-        self.assertEqual(get_next_task_info(_FakePM([]), 1000), (None, None))
+        self.assertEqual(get_next_task_info(_FakeState([]), 1000), (None, None))
 
     def test_none_state_returns_nothing(self):
         """A missing state means no next task."""
@@ -35,7 +35,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
 
     def test_picks_highest_priority_among_due_tasks(self):
         """The due task with the smallest priority number is the next one."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Low urgency due", 50, 0),
                 self._task("b", "High urgency due", 1, 900),
@@ -48,7 +48,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
 
     def test_due_task_wins_over_earlier_future_task(self):
         """A due task with lower priority beats a not-yet-due urgent one."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Due but low priority", 10, 1),
                 self._task("b", "Not due yet urgent", 1, 2000),
@@ -60,7 +60,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
 
     def test_waiting_returns_earliest_future_task_with_time(self):
         """With nothing due, the earliest future task is returned with its time."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Rescheduled sooner", 50, 1500),
                 self._task("b", "Next in future", 1, 2000),
@@ -78,7 +78,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
         can differ by a second or two; the priority order must win instead of
         the task that was read earlier.
         """
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Due low priority", 10, 990),
                 self._task("b", "Due urgent in 2s", 1, 1002),
@@ -90,7 +90,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
 
     def test_higher_priority_task_outside_window_does_not_block(self):
         """A higher-priority task more than 5s away does not delay the due one."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Due low priority", 10, 1000),
                 self._task("b", "Urgent much later", 1, 3000),
@@ -102,7 +102,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
 
     def test_lower_priority_task_within_window_does_not_block(self):
         """A due task is not delayed by a lower-priority task that is close."""
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("a", "Due urgent", 1, 1000),
                 self._task("b", "Relaxed close", 10, 1002),
@@ -120,7 +120,7 @@ class TestGetNextTaskInfo(unittest.TestCase):
         for it within the 5s window, so it executes first and the preview
         must say so.
         """
-        pm = _FakePM(
+        pm = _FakeState(
             [
                 self._task("send_pet_adventure_chests", "Send Pet Adventure Chests", 9, 1787616002.5451596),
                 self._task("claim_pet_adventure_ally_treasure", "Claim Pet Adventure Ally Treasure", 10, 1787616002.6933224),

@@ -321,12 +321,14 @@ def _no_window_creation_flags():
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _hidden_startupinfo():
-    """Return a STARTUPINFO hiding the child console window (None elsewhere).
+def _startupinfo(show_window):
+    """Return a STARTUPINFO with the requested window show state (None off-Windows).
 
-    Used together with :func:`_no_window_creation_flags` for console
-    helpers. GUI emulator windows use :func:`_minimized_startupinfo`
-    instead so they appear minimized rather than hidden.
+    Args:
+        show_window (int): ``wShowWindow`` value, e.g. SW_HIDE or SW_SHOWMINNOACTIVE.
+
+    Returns:
+        subprocess.STARTUPINFO or None: The configured startup info.
     """
     if os.name != "nt":
         return None
@@ -335,8 +337,13 @@ def _hidden_startupinfo():
         return None
     startupinfo = startupinfo_cls()
     startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
-    startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    startupinfo.wShowWindow = show_window
     return startupinfo
+
+
+def _hidden_startupinfo():
+    """Return a STARTUPINFO hiding the child console window (None elsewhere)."""
+    return _startupinfo(getattr(subprocess, "SW_HIDE", 0))
 
 
 def _terminate_process_tree(process):
@@ -376,32 +383,15 @@ def run_process_robust(command: list, timeout: int = 30):
     Returns:
         subprocess.CompletedProcess or None if the command timed out.
     """
-    try:
-        with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
-            process = subprocess.Popen(
-                command,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                creationflags=_no_window_creation_flags(),
-                startupinfo=_hidden_startupinfo(),
-            )
-            try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                _terminate_process_tree(process)
-                return None
-            stdout_file.seek(0)
-            stderr_file.seek(0)
-            stdout_bytes = stdout_file.read()
-            stderr_bytes = stderr_file.read()
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=process.returncode,
-            stdout=stdout_bytes.decode("utf-8", errors="replace"),
-            stderr=stderr_bytes.decode("utf-8", errors="replace"),
-        )
-    except OSError as e:
-        return subprocess.CompletedProcess(args=command, returncode=-1, stdout="", stderr=str(e))
+    result = run_process_robust_bytes(command, timeout)
+    if result is None:
+        return None
+    return subprocess.CompletedProcess(
+        args=result.args,
+        returncode=result.returncode,
+        stdout=result.stdout.decode("utf-8", errors="replace"),
+        stderr=result.stderr.decode("utf-8", errors="replace"),
+    )
 
 
 def run_process_robust_bytes(command: list, timeout: int = 30):
@@ -464,15 +454,7 @@ def _minimized_startupinfo():
     the window can appear already minimized. Only meaningful on Windows; the
     post-launch minimize sweep covers emulators that ignore it.
     """
-    if os.name != "nt":
-        return None
-    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
-    if startupinfo_cls is None:
-        return None
-    startupinfo = startupinfo_cls()
-    startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
-    startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimized, not activated
-    return startupinfo
+    return _startupinfo(7)  # SW_SHOWMINNOACTIVE: minimized, not activated
 
 
 def _detached_creation_flags():

@@ -1,16 +1,20 @@
 """Multi-instance tool controller.
 
-Manages running automation tasks across multiple emulator instances with threading and memory optimization.
+Runs the selected profiles across emulator instances. Each instance is a
+worker thread; a lightweight scheduler starts the instances whose next task is
+close and lets them close the emulator while they wait for a distant one, so
+the emulator limit is never exceeded and no manual queue maintenance is
+needed.
 """
 
-import contextlib
 import gc
 import threading
 import time
-from typing import Dict, Set
+from dataclasses import dataclass, field
+from typing import Optional
 
 from wosutil.config import INSTANCE_SELECTION_FILE, WHITEOUT_PACKAGE
-from wosutil.emulator.emulator_manager import check_emulator_health, force_restart_emulator
+from wosutil.emulator.emulator_manager import check_emulator_health, force_restart_emulator, is_wos_installed, verify_adb_connected
 from wosutil.preferences import get_remember_schedule
 from wosutil.stop import ToolStopped, stop_signal
 from wosutil.tool.profiles.profile_utils import build_running_tasks_state
@@ -39,9 +43,21 @@ INSTANCE_KEEPALIVE_WINDOW_SECONDS = 120
 
 # Seconds an instance waits before being retried after exhausting its
 # consecutive launch attempts. The retry is delayed instead of being dropped
-# so transient emulator/hypervisor failures (e.g. a crashed virtualization
-# service) recover without a full tool restart.
+# so transient emulator/hypervisor failures recover without a full restart.
 RETRY_COOLDOWN_SECONDS = 600
+
+# Default number of emulators opened at the same time.
+DEFAULT_MAX_INSTANCES = 2
+
+
+@dataclass
+class InstanceState:
+    """Runtime scheduling state of one instance."""
+
+    profile_name: str
+    tasks: list = field(default_factory=list)
+    current_task_name: Optional[str] = None
+    opening: bool = False
 
 
 def pick_scheduled_task(task_state, now):
@@ -49,10 +65,8 @@ def pick_scheduled_task(task_state, now):
 
     Tasks aimed at the same instant (e.g. several events scheduled for 00:00
     UTC) can end up with run times a second or two apart because of timer
-    reading noise. Without grouping, the task whose time was read earlier
-    runs first even when another, higher-priority task belongs to the same
-    window. This helper prefers the higher-priority task: when a task is
-    already due, the highest-priority task due within
+    reading noise. This helper prefers the higher-priority task of the
+    window: when a task is already due, the highest-priority task due within
     TASK_GROUPING_WINDOW_SECONDS ahead is returned instead, and the caller
     waits (at most the window) for it. Ties on priority keep the earliest
     time order.
@@ -64,9 +78,9 @@ def pick_scheduled_task(task_state, now):
 
     Returns:
         tuple: (task, wait_until). When the task must run right now,
-            ``wait_until`` is None. When the caller must wait, ``wait_until``
-            is the timestamp the returned task becomes due. (None, None) when
-            no task is scheduled.
+        ``wait_until`` is None. When the caller must wait, ``wait_until`` is
+        the timestamp the returned task becomes due. (None, None) when no
+        task is scheduled.
     """
     due = [t for t in task_state if t.get("next_run_time", 0) <= now]
     if not due:
@@ -84,7 +98,7 @@ def pick_scheduled_task(task_state, now):
 
 
 def load_instance_selection():
-    """Loads the instance selection from the JSON file using utility functions.
+    """Load the instance selection from the JSON file.
 
     Returns:
         dict: Dictionary with instance selection data.
@@ -93,7 +107,7 @@ def load_instance_selection():
 
 
 def save_instance_selection(selection):
-    """Saves the instance selection to the JSON file using utility functions.
+    """Save the instance selection to the JSON file.
 
     Args:
         selection (dict): Dictionary with instance selection data.
@@ -105,126 +119,422 @@ def save_instance_selection(selection):
 
 
 class MultiInstanceToolController:
-    """Controls the automation tool for managing multiple emulator instances and their profiles.
+    """Run the selected profiles across emulator instances."""
 
-    Handles starting, stopping, and scheduling tasks for each instance with memory optimization.
-    """
-
-    def __init__(
-        self,
-        log_message,
-        TASK_DEFINITIONS,
-        multi_instance_manager,
-        profile_manager,
-        instances_profile_managers,
-        instance_queue,
-        active_instances,
-        instance_widgets,
-        save_instance_selection,
-        load_instance_selection,
-        dialog_queue=None,
-    ):
-        """Initialize the multi-instance tool controller.
+    def __init__(self, log_message, task_definitions, backend, profiles, instance_widgets, dialog_queue=None):
+        """Initialize the controller.
 
         Args:
             log_message: Logging function.
-            TASK_DEFINITIONS: Task definitions.
-            multi_instance_manager: Multi-instance manager.
-            profile_manager: Profile manager.
-            instances_profile_managers: Dict of instance to profile managers.
-            instance_queue: Queue for instances.
-            active_instances: Set of active instances.
-            instance_widgets: Dict of instance widgets.
-            save_instance_selection: Function to save selection.
-            load_instance_selection: Function to load selection.
-            dialog_queue (queue.Queue, optional): Queue where the worker threads
-                push (title, text) pairs the GUI must show as dialogs. None
-                disables dialogs.
+            task_definitions (dict): Task definitions.
+            backend: The emulator backend used to start/stop instances.
+            profiles (dict): Task profiles (name -> task ids).
+            instance_widgets (list): Instance rows shown in the GUI.
+            dialog_queue (queue.Queue, optional): Queue where worker threads
+                push (title, text) pairs the GUI must show as dialogs.
         """
         self.log_message = log_message
-        self.TASK_DEFINITIONS = TASK_DEFINITIONS
-        self.multi_instance_manager = multi_instance_manager
-        self.profile_manager = profile_manager
-        self.instances_profile_managers = instances_profile_managers
-        self.instance_queue = instance_queue
-        self.active_instances = active_instances
+        self.task_definitions = task_definitions
+        self.backend = backend
+        self.profiles = profiles
         self.instance_widgets = instance_widgets
-        self.save_instance_selection = save_instance_selection
-        self.load_instance_selection = load_instance_selection
         self.dialog_queue = dialog_queue
-        self.max_instances_var = None
-        self.tool_should_stop = stop_signal
-        self.tool_running = False
+
         self.max_launch_attempts = 3
-        self.instance_launch_attempts: Dict[int, int] = {}
-        # Timestamps until which an instance must not be relaunched after
-        # exhausting its consecutive launch attempts (retry cooldown).
-        self._retry_blocked_until: Dict[int, float] = {}
-
-        # Memory management
-        self._state_lock = threading.RLock()
-        self.instance_threads: Dict[int, threading.Thread] = {}
-        self.last_memory_cleanup = time.time()
-        self.memory_cleanup_interval = 300  # 5 minutes
-
         # Seconds between emulator health probes while tasks run.
         self.health_check_interval = 60
+        self.tool_running = False
+        self.tool_should_stop = stop_signal
 
-        # Instances with an intentional close already underway (idle shutdown,
-        # error cleanup): a periodic health check must not force-restart
-        # under the thread that is closing them.
-        self._stopping_instances: Set[int] = set()
-
-        # Task schedule memory (persisted between sessions)
+        self._state_lock = threading.RLock()
         self._schedule_lock = threading.Lock()
+
+        self.states: dict[int, InstanceState] = {}
+        self._selected_instances: dict[int, str] = {}
+        self._active_instances: set[int] = set()
+        self.instance_threads: dict[int, threading.Thread] = {}
+        self._launch_attempts: dict[int, int] = {}
+        self._retry_blocked_until: dict[int, float] = {}
+        self._aborted_instances: set[int] = set()
+        self._max_instances = DEFAULT_MAX_INSTANCES
         self._task_schedule = None
-        self._selected_instances: set = set()
-        # Instances that must not be launched again in this session (e.g. the
-        # game is not installed): the self-healing queue must not resurrect
-        # them, or they would enter an endless start/abort loop.
-        self._aborted_instances: set = set()
 
-    def _discard_active_instance(self, index):
-        """Remove an instance from the active set while holding the state lock."""
+    # --- Public state used by the GUI ---
+
+    def set_backend(self, backend):
+        """Replace the emulator backend (e.g. after a Preferences change)."""
+        self.backend = backend
+
+    def set_max_instances(self, value):
+        """Set the maximum number of simultaneously open emulators."""
         with self._state_lock:
-            self.active_instances.discard(index)
+            self._max_instances = max(1, safe_int(value, DEFAULT_MAX_INSTANCES))
 
-    def _enqueue_instance(self, index, profile_name):
-        """Queue an instance once so concurrent retries cannot duplicate it."""
+    def state_for(self, index):
+        """Return the scheduling state of an instance (None when not selected)."""
         with self._state_lock:
-            if not any(queued_index == index for queued_index, _ in self.instance_queue):
-                self.instance_queue.append((index, profile_name))
+            return self.states.get(index)
 
-    def _profile_name_for(self, index):
-        """Return the profile selected for an instance ('' when unknown)."""
+    def is_active(self, index):
+        """Return True when the instance has a running worker."""
+        with self._state_lock:
+            return index in self._active_instances
+
+    def is_aborted(self, index):
+        """Return True when the instance was permanently aborted (game missing)."""
+        with self._state_lock:
+            return index in self._aborted_instances
+
+    def retry_seconds_remaining(self, index, now=None):
+        """Return the seconds the instance is paused before its next retry."""
+        now = time.time() if now is None else now
+        with self._state_lock:
+            return max(0.0, self._retry_blocked_until.get(index, 0) - now)
+
+    def pending_position(self, index):
+        """Return the 1-based start order of a waiting instance (None if absent)."""
+        with self._state_lock:
+            pending = [(next_run, idx) for idx, next_run in self._pending_instances_locked() if next_run is not None]
+        pending.sort()
+        for position, (_next_run, idx) in enumerate(pending, start=1):
+            if idx == index:
+                return position
+        return None
+
+    def on_checkbox_or_profile_change(self):
+        """Persist the instance selection and profile choices."""
+        selection = {}
         for inst in self.instance_widgets:
-            if inst["index"] == index:
-                return inst["profile_var"].get()
-        return ""
+            selection[str(inst["index"])] = {"checked": inst["checked"].get(), "profile": inst["profile_var"].get()}
+        save_instance_selection(selection)
 
-    def _heal_queue(self):
-        """Re-queue selected instances that fell out of the queue.
+    # --- Tool lifecycle ---
 
-        A worker can leave the queue without re-queueing itself (startup
-        failure, crash, health-check abort, ...). Such an instance would stay
-        shown as "waiting to execute" forever while the launcher never starts
-        it again. Re-adding every selected instance that is not active, not
-        queued, not paused by the retry cooldown and still has scheduled
-        tasks makes the launcher self-healing: a lost instance is picked up
-        again on the next launch pass instead of needing a manual restart.
+    def start_tool(self):
+        """Start the automation tool.
+
+        Returns:
+            bool: True if the tool started, False if it was rejected (already
+            running, previous session still stopping, or ADB blocked).
+        """
+        with self._state_lock:
+            if self.tool_running:
+                self.log_message("The tool is already running.", level="warning")
+                return False
+            if any(thread.is_alive() for thread in self.instance_threads.values()):
+                self.log_message("The previous tool session is still stopping. Try again in a moment.", level="warning")
+                return False
+            self.tool_running = True
+            self.states.clear()
+            self._selected_instances.clear()
+            self._active_instances.clear()
+            self.instance_threads.clear()
+            self._launch_attempts.clear()
+            self._retry_blocked_until.clear()
+            self._aborted_instances.clear()
+
+        self.tool_should_stop.clear()
+
+        adb_warnings = self.backend.check_adb_access()
+        if adb_warnings:
+            for warning in adb_warnings:
+                self.log_message(warning, level="error")
+            self.log_message("Tool start aborted: ADB access to the emulator is blocked. Fix the error above and press Start again.", level="error")
+            with self._state_lock:
+                self.tool_running = False
+            return False
+
+        # The schedule memory keeps pending tasks between sessions; without it
+        # every task starts due right away.
+        self._task_schedule = load_task_schedule() if get_remember_schedule() else None
+        now = time.time()
+        with self._state_lock:
+            for inst in self.instance_widgets:
+                if not inst["checked"].get():
+                    continue
+                idx = inst["index"]
+                profile_name = inst["profile_var"].get()
+                if self._task_schedule is not None:
+                    tasks = self._build_tasks(profile_name, load_saved_tasks(self._task_schedule, idx), now)
+                else:
+                    tasks = build_running_tasks_state(profile_name, self.profiles, self.task_definitions, now)
+                self.states[idx] = InstanceState(profile_name=profile_name, tasks=tasks)
+                self._selected_instances[idx] = profile_name
+
+        if self._task_schedule is not None and self._selected_instances:
+            self._persist_schedules()
+        self.launch_due_instances()
+        return True
+
+    def stop_tool(self):
+        """Stop the tool, close the emulators and wait for the workers."""
+        with self._state_lock:
+            self.tool_running = False
+            self.tool_should_stop.set()
+            active_instances = list(self._active_instances)
+            worker_threads = list(self.instance_threads.values())
+
+        for idx in active_instances:
+            self.log_message(f"Closing emulator of instance {idx} while stopping the tool...", "info")
+            self._close_instance(idx)
+
+        for thread in worker_threads:
+            if thread.is_alive():
+                thread.join(timeout=5.0)
+
+        with self._state_lock:
+            live_threads = [thread for thread in self.instance_threads.values() if thread.is_alive()]
+            self._active_instances.clear()
+            self._selected_instances.clear()
+            self._launch_attempts.clear()
+            self._retry_blocked_until.clear()
+            self._aborted_instances.clear()
+            self.states.clear()
+            if not live_threads:
+                self.instance_threads.clear()
+
+        gc.collect()
+
+        if live_threads:
+            self.log_message(f"Tool stop requested, but {len(live_threads)} worker thread(s) are still finishing.", level="warning")
+        self.log_message("Tool stopped and resources cleaned up", level="info")
+
+    # --- Scheduler ---
+
+    def launch_due_instances(self):
+        """Start the selected instances whose next task is close, up to the limit.
+
+        The emulator limit is honored by only starting as many workers as free
+        slots exist. Callers invoke this periodically (the GUI calls it once per
+        second); it does not block and returns immediately when nothing is due.
+        """
+        if not self.tool_running:
+            return
+        to_start = []
+        with self._state_lock:
+            free_slots = self._max_instances - len(self._active_instances)
+            if free_slots <= 0:
+                return
+            now = time.time()
+            due = []
+            for idx in self._selected_instances:
+                if idx in self._active_instances or idx in self._aborted_instances:
+                    continue
+                if now < self._retry_blocked_until.get(idx, 0):
+                    continue
+                next_run = self._next_run_time(idx)
+                if next_run is None or next_run - now > TASK_STARTUP_WINDOW_SECONDS:
+                    continue
+                due.append((next_run, idx))
+            due.sort()
+            for _next_run, idx in due[:free_slots]:
+                thread = threading.Thread(target=self._run_instance, args=(idx,), daemon=True, name=f"Instance-{idx}")
+                self._active_instances.add(idx)
+                self.instance_threads[idx] = thread
+                to_start.append(thread)
+        for thread in to_start:
+            thread.start()
+
+    def _pending_instances_locked(self):
+        """Yield ``(index, next_run_time)`` of instances that can be started.
+
+        The caller must hold ``_state_lock``.
         """
         now = time.time()
         for idx in self._selected_instances:
-            if idx in self.active_instances or idx in self._aborted_instances:
-                continue
-            if any(queued_index == idx for queued_index, _ in self.instance_queue):
+            if idx in self._active_instances or idx in self._aborted_instances:
                 continue
             if now < self._retry_blocked_until.get(idx, 0):
                 continue
-            pm = self.instances_profile_managers.get(idx)
-            if pm is None or not getattr(pm, "running_tasks_state", None):
+            yield idx, self._next_run_time(idx)
+
+    def _next_run_time(self, index):
+        """Return the earliest scheduled time of an instance (None without tasks).
+
+        The caller must hold ``_state_lock``.
+        """
+        state = self.states.get(index)
+        tasks = state.tasks if state else []
+        return min((task.get("next_run_time", 0) for task in tasks), default=None)
+
+    def _build_tasks(self, profile_name, saved_tasks, now):
+        """Build the runtime task list of a profile, applying a saved schedule."""
+        task_names = self.profiles.get(profile_name, [])
+        task_defs = sorted((self.task_definitions[name] for name in task_names if name in self.task_definitions), key=lambda task: task["priority"])
+        return build_task_state(task_defs, saved_tasks, now)
+
+    # --- Worker ---
+
+    def _run_instance(self, index):
+        """Run one instance worker, always releasing its slot afterwards."""
+        with instance_log_context(index):
+            try:
+                self._instance_worker(index)
+            except ToolStopped:
+                self.log_message(f"Tool stopped while working on instance {index}.", "info")
+            except Exception as e:
+                self.log_message(f"Error in instance {index}: {e}", "error")
+                self._record_launch_failure(index)
+            finally:
+                state = self.states.get(index)
+                if state is not None:
+                    state.opening = False
+                    state.current_task_name = None
+                # Close the emulator before releasing the slot: the scheduler
+                # must never start a new worker on the same instance while the
+                # previous one is still shutting it down. A stop request is
+                # handled by stop_tool().
+                if not self.tool_should_stop.is_set():
+                    self._close_instance(index)
+                self._release_slot(index)
+                self._remove_thread_reference(index, threading.current_thread())
+
+    def _instance_worker(self, index):
+        """Open the instance, launch the game and run its tasks."""
+        state = self.states.get(index)
+        if state is None:
+            return
+        state.opening = True
+        state.current_task_name = None
+
+        if not self.backend.start_instance(index):
+            self._record_launch_failure(index)
+            return
+
+        if not verify_adb_connected(index):
+            self.log_message(f"Could not connect ADB to instance {index}. Restarting the emulator...", "error")
+            if not force_restart_emulator(index, self.backend) or not verify_adb_connected(index):
+                self.log_message(f"ADB connection still failed after restart for instance {index}.", "error")
+                self._record_launch_failure(index)
+                return
+
+        # The game missing is a permanent condition: closing/restarting the
+        # emulator can never fix it, so abort this instance instead of looping.
+        if not is_wos_installed(index):
+            self._abort_instance(index)
+            return
+
+        from wosutil.tool.tasks.navigation import launch_and_reach_city_screen
+
+        if not retry_operation(lambda: launch_and_reach_city_screen(instance_index=index), max_attempts=3, delay=5.0, retry_on_false=True):
+            self.log_message(f"Could not launch the game on instance {index}.", "error")
+            self._record_launch_failure(index)
+            return
+
+        with self._state_lock:
+            self._launch_attempts.pop(index, None)
+        state.opening = False
+
+        if self.tool_should_stop.is_set():
+            return
+
+        # The game clock is the first thing to sync every time an instance is
+        # opened: several tasks reschedule to 00:00 UTC.
+        try:
+            sync_utc_time(index)
+        except Exception as e:
+            self.log_message(f"Error syncing the game UTC clock on instance {index}: {e}", "error")
+
+        from wosutil.tool.tasks.task_automation import reconcile_bear_trap_schedule
+
+        if state.tasks and reconcile_bear_trap_schedule(index, state.tasks):
+            self._persist_schedules()
+
+        last_health_check = time.time()
+        while not self.tool_should_stop.is_set():
+            now = time.time()
+
+            if now - last_health_check > self.health_check_interval:
+                if not check_emulator_health(index):
+                    self.log_message(f"Emulator instance {index} appears to be hanging. Attempting restart...", "warning")
+                    if force_restart_emulator(index, self.backend) and retry_operation(lambda: verify_adb_connected(index), max_attempts=3, delay=2.0, retry_on_false=True):
+                        self.log_message(f"Emulator instance {index} restarted successfully during operation.", "success")
+                    else:
+                        self.log_message(f"Could not recover emulator instance {index}.", "error")
+                        self._record_launch_failure(index)
+                        return
+                last_health_check = now
+
+            next_task, wait_until = pick_scheduled_task(state.tasks, now)
+            if next_task is None:
+                self.log_message(f"No tasks scheduled for profile '{state.profile_name}' on instance {index}.", "info")
+                return
+            if wait_until is not None:
+                if wait_until - now > INSTANCE_KEEPALIVE_WINDOW_SECONDS:
+                    self.log_message(
+                        f"The next task for instance {index} is more than {INSTANCE_KEEPALIVE_WINDOW_SECONDS} seconds away. Closing the emulator and freeing the slot.",
+                        "info",
+                    )
+                    return
+                state.current_task_name = None
+                self.tool_should_stop.wait(timeout=min(max(1, int(wait_until - now)), 10))
                 continue
-            self._enqueue_instance(idx, self._profile_name_for(idx))
+
+            task = next_task
+            state.current_task_name = task.get("name", "?")
+            self.log_message(f"Executing task '{state.current_task_name}' on instance {index}...", "info")
+            try:
+                result = task["function"](instance_index=index)
+                if isinstance(result, tuple) and len(result) == 2:
+                    result, new_reschedule = result
+                    if isinstance(new_reschedule, (int, float)) and new_reschedule > 0:
+                        task["reschedule_seconds"] = new_reschedule
+                if result:
+                    self.log_message(f"Task '{state.current_task_name}' completed successfully on instance {index}.", "success")
+                else:
+                    self.log_message(f"Task '{state.current_task_name}' failed on instance {index}.", "warning")
+            except ToolStopped:
+                raise
+            except Exception as e:
+                self.log_message(f"Exception while running task '{state.current_task_name}' on instance {index}: {e}", "error")
+            task["next_run_time"] = time.time() + task.get("reschedule_seconds", 60)
+            # Tasks configured to run right after this one are due immediately
+            # (the loop is serial per instance).
+            for other in state.tasks:
+                if other.get("run_after") == task.get("id"):
+                    other["next_run_time"] = time.time()
+            state.current_task_name = None
+            self._persist_schedules()
+            self.tool_should_stop.wait(timeout=2)
+
+        self.log_message(f"Task cycle finished for instance {index}.", "info")
+
+    def _abort_instance(self, index):
+        """Permanently abort an instance whose game is not installed."""
+        with self._state_lock:
+            self._aborted_instances.add(index)
+        message = (
+            f"Whiteout Survival ({WHITEOUT_PACKAGE}) is not installed on instance {index}. "
+            "Install the game on this instance (e.g. from the emulator's app store or Google Play) "
+            "and press Start again. The instance will not be retried automatically."
+        )
+        self.log_message(message, "error")
+        if self.dialog_queue is not None:
+            self.dialog_queue.put(("Game not installed", message))
+
+    def _record_launch_failure(self, index):
+        """Count a launch failure and pause the instance after repeated ones."""
+        paused = False
+        with self._state_lock:
+            attempts = self._launch_attempts.get(index, 0) + 1
+            if attempts >= self.max_launch_attempts:
+                self._retry_blocked_until[index] = time.time() + RETRY_COOLDOWN_SECONDS
+                self._launch_attempts[index] = 0
+                paused = True
+            else:
+                self._launch_attempts[index] = attempts
+        if paused:
+            self.log_message(
+                f"Instance {index} has failed {self.max_launch_attempts} consecutive startup attempts. Pausing it for {RETRY_COOLDOWN_SECONDS // 60} minutes before retrying.",
+                level="error",
+            )
+
+    def _close_instance(self, index):
+        """Close an emulator instance, logging (but not raising) failures."""
+        try:
+            self.backend.stop_instance(index)
+        except Exception as e:
+            self.log_message(f"Error closing emulator instance {index}: {e}", "error")
 
     def _remove_thread_reference(self, index, thread):
         """Remove a worker reference only when it still belongs to that worker."""
@@ -232,665 +542,35 @@ class MultiInstanceToolController:
             if self.instance_threads.get(index) is thread:
                 del self.instance_threads[index]
 
-    def _another_worker_alive(self, index):
-        """Return True when a different live thread already owns the instance."""
+    def _release_slot(self, index):
+        """Free the instance slot so the scheduler can start it again."""
         with self._state_lock:
-            current = self.instance_threads.get(index)
-            return current is not None and current is not threading.current_thread() and current.is_alive()
+            self._active_instances.discard(index)
 
-    def _yield_worker(self, index, reason):
-        """Back out without touching slot ownership (it belongs to another thread)."""
-        self.log_message(reason, "warning")
-        self._remove_thread_reference(index, threading.current_thread())
-
-    @contextlib.contextmanager
-    def _intentional_stop(self, index):
-        """Mark an instance as being closed on purpose for the duration of the block."""
-        with self._state_lock:
-            self._stopping_instances.add(index)
-        try:
-            yield
-        finally:
-            with self._state_lock:
-                self._stopping_instances.discard(index)
-
-    def _stop_in_progress(self, index):
-        """Return True when another thread is already closing the instance on purpose."""
-        with self._state_lock:
-            return index in self._stopping_instances
-
-    def set_max_instances_var(self, max_instances_var):
-        """Sets the variable that controls the maximum number of simultaneous instances.
-
-        Args:
-            max_instances_var: Variable (e.g., tkinter.IntVar) for max instances.
-        """
-        self.max_instances_var = max_instances_var
-
-    def on_checkbox_or_profile_change(self):
-        """Saves the current selection of instances and profiles when a checkbox or profile is changed."""
-        selection = {}
-        for inst in self.instance_widgets:
-            idx = str(inst["index"])
-            selection[idx] = {"checked": inst["checked"].get(), "profile": inst["profile_var"].get()}
-        self.save_instance_selection(selection)
-
-    def cleanup_memory(self):
-        """Performs memory cleanup operations to prevent memory leaks."""
-        current_time = time.time()
-        if current_time - self.last_memory_cleanup > self.memory_cleanup_interval:
-            # Force garbage collection
-            gc.collect()
-
-            # Clean up completed threads
-            with self._state_lock:
-                completed_threads = [(instance_id, thread) for instance_id, thread in self.instance_threads.items() if not thread.is_alive()]
-                for instance_id, thread in completed_threads:
-                    if self.instance_threads.get(instance_id) is thread:
-                        del self.instance_threads[instance_id]
-
-            self.last_memory_cleanup = current_time
-            self.log_message("Memory cleanup completed", level="debug")
-
-    def start_tool(self):
-        """Starts the automation tool.
-
-        Initializes the queue and active instances, and schedules the first batch of
-        tasks for each selected instance. Refuses to start when the emulator
-        backend cannot control ADB (e.g. BlueStacks has ADB access disabled), to
-        avoid an endless start/retry loop.
-
-        Returns:
-            bool: True if the tool started, False if it was aborted.
-        """
-        with self._state_lock:
-            if self.tool_running:
-                self.log_message("The tool is already running.", level="warning")
-                return False
-            live_threads = [thread for thread in self.instance_threads.values() if thread.is_alive()]
-            if live_threads:
-                self.log_message("The previous tool session is still stopping. Try again in a moment.", level="warning")
-                return False
-            self.tool_running = True
-            self.instance_queue.clear()
-            self.active_instances.clear()
-            self.instance_launch_attempts.clear()
-            self._retry_blocked_until.clear()
-            self._aborted_instances.clear()
-            self.instance_threads.clear()
-
-        self.tool_should_stop.clear()
-
-        # Refuse to start when the backend cannot control the emulator.
-        adb_warnings = self.multi_instance_manager.check_adb_access()
-        if adb_warnings:
-            for warning in adb_warnings:
-                self.log_message(warning, level="error")
-            self.log_message(
-                "Tool start aborted: ADB access to the emulator is blocked. Fix the error above and press Start again.",
-                level="error",
-            )
-            with self._state_lock:
-                self.tool_running = False
-            return False
-
-        # Load the persisted schedule when the schedule memory is enabled;
-        # otherwise keep the legacy behavior (every task scheduled at startup).
-        self._task_schedule = load_task_schedule() if get_remember_schedule() else None
-        self._selected_instances.clear()
-
-        for inst in self.instance_widgets:
-            if inst["checked"].get():
-                idx = inst["index"]
-                profile_name = inst["profile_var"].get()
-
-                # Initialize the task state for the GUI
-                from wosutil.tool.profiles.profile_manager import ProfileManager
-
-                pm = ProfileManager(self.log_message)
-                task_names = pm.profiles.get(profile_name, [])
-                running_tasks_state = []
-                now = time.time()
-
-                # Sort tasks by priority (lower number = higher priority)
-                sorted_task_defs = sorted([self.TASK_DEFINITIONS[tname] for tname in task_names if tname in self.TASK_DEFINITIONS], key=lambda t: t["priority"])
-
-                self._selected_instances.add(idx)
-                if self._task_schedule is not None:
-                    # Resume the saved schedule: future times keep the remaining
-                    # wait, overdue times make the task run immediately. The
-                    # schedule is keyed by task, so switching profiles keeps
-                    # the state of the tasks shared between both profiles.
-                    saved_tasks = load_saved_tasks(self._task_schedule, idx)
-                    running_tasks_state = build_task_state(sorted_task_defs, saved_tasks, now)
-                else:
-                    for i, task_def in enumerate(sorted_task_defs):
-                        t = task_def.copy()
-                        # Only the highest priority task is scheduled for now, the rest for the future
-                        if i == 0:
-                            t["next_run_time"] = now
-                        else:
-                            t["next_run_time"] = now + t["reschedule_seconds"]
-                        running_tasks_state.append(t)
-
-                self.instances_profile_managers[idx] = pm
-                if self._task_schedule is not None:
-                    pm.running_tasks_state = running_tasks_state
-                else:
-                    pm.running_tasks_state = build_running_tasks_state(profile_name, pm.profiles, self.TASK_DEFINITIONS)
-                if running_tasks_state:
-                    pm.next_run_time = min(t["next_run_time"] for t in running_tasks_state)
-                else:
-                    pm.next_run_time = None
-                pm.current_task_name = None
-                self._enqueue_instance(idx, profile_name)
-
-        if self._task_schedule is not None and self._selected_instances:
-            self._persist_schedules()
-        self.launch_next_instances()
-        return True
+    # --- Schedule persistence ---
 
     def _persist_schedules(self):
-        """Persist the running task schedule of every instance (thread-safe).
+        """Persist the running task schedule of every selected instance.
 
         Only active when the schedule memory is enabled and at least one
         instance is selected (an empty selection must never wipe the saved
-        schedule): worker threads call this after every task run so a crash
-        or shutdown never loses state.
-
-        Only the tasks of the selected instances are updated; entries of tasks
-        that are not in the current profile (e.g. from a previous profile of
-        the same instance) are kept so they can be resumed later.
+        schedule). Only the tasks of the selected instances are updated;
+        entries of tasks that are not in the current profile are kept so they
+        can be resumed later.
         """
-        if self._task_schedule is None or not self._selected_instances:
+        if self._task_schedule is None:
+            return
+        with self._state_lock:
+            selected = list(self._selected_instances)
+            states = {idx: self.states.get(idx) for idx in selected}
+        if not selected:
             return
         with self._schedule_lock:
-            for idx in self._selected_instances:
-                pm = self.instances_profile_managers.get(idx)
-                if pm is None:
+            for idx in selected:
+                state = states.get(idx)
+                if state is None:
                     continue
                 instance_entry = self._task_schedule.setdefault(str(idx), {})
-                instance_entry.update(snapshot_instance_schedule(getattr(pm, "running_tasks_state", []) or []))
+                instance_entry.update(snapshot_instance_schedule(state.tasks))
             if not save_task_schedule(self._task_schedule):
                 self.log_message("Error saving the task schedule.", level="error")
-
-    def _queue_sort_key(self, item):
-        """Key to order the queue by the instance's next task time (earlier = first).
-
-        The queue does not follow arrival order: the instance whose next task is
-        closest goes first. Python's sort is stable, so ties keep arrival order.
-        """
-        idx, _profile_name = item
-        pm = self.instances_profile_managers.get(idx)
-        now = time.time()
-        if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
-            return min(t.get("next_run_time", now) for t in pm.running_tasks_state)
-        return now
-
-    def launch_next_instances(self):
-        """Launches the next set of emulator instances up to the maximum allowed."""
-        max_simul = safe_int(self.max_instances_var.get() if self.max_instances_var else 2, 2)
-
-        while not self.tool_should_stop.is_set():
-            with self._state_lock:
-                if len(self.active_instances) >= max_simul:
-                    return
-                # Re-queue selected instances that were lost (worker exited
-                # without re-queueing, crashed, ...) so they are retried
-                # instead of staying stranded in the GUI forever.
-                self._heal_queue()
-                if not self.instance_queue:
-                    return
-                # Prioritize the instance whose next task is soonest, not the one
-                # that arrived first to the queue. Ties keep the arrival order.
-                self.instance_queue.sort(key=self._queue_sort_key)
-                # Drop stale entries for instances that are already active.
-                # Filter in place so the list shared with the GUI keeps the
-                # same reference and the shown queue order stays in sync.
-                self.instance_queue[:] = [item for item in self.instance_queue if item[0] not in self.active_instances]
-                now = time.time()
-                candidate = None
-                for pos, (idx, _profile_name) in enumerate(self.instance_queue):
-                    # Skip instances paused by the retry cooldown; they are
-                    # picked up again once the cooldown expires.
-                    if now < self._retry_blocked_until.get(idx, 0):
-                        continue
-                    pm = self.instances_profile_managers.get(idx)
-                    next_run_time = None
-                    if pm and hasattr(pm, "running_tasks_state") and pm.running_tasks_state:
-                        next_run_time = min(t.get("next_run_time", now) for t in pm.running_tasks_state)
-                    if next_run_time is not None and next_run_time - now > TASK_STARTUP_WINDOW_SECONDS:
-                        # The queue is sorted by task time, so every remaining
-                        # instance has an even later task: nothing to launch.
-                        return
-                    candidate = pos
-                    break
-                if candidate is None:
-                    return
-                idx, profile_name = self.instance_queue.pop(candidate)
-                self.active_instances.add(idx)
-                thread = threading.Thread(
-                    target=self.run_profile_on_instance_with_slot,
-                    args=(idx, profile_name),
-                    daemon=True,
-                    name=f"Instance-{idx}",
-                )
-                self.instance_threads[idx] = thread
-            thread.start()
-            self.cleanup_memory()
-
-    def _requeue_with_limit(self, index, profile_name):
-        """Re-queues an instance for retry, backing off after max_launch_attempts.
-
-        Prevents the infinite loop of starting/closing the emulator when the
-        game or ADB keeps failing to come up: after the consecutive attempts
-        are exhausted, the instance is blocked for a cooldown period instead
-        of being dropped forever, so a transient emulator/hypervisor failure
-        (e.g. a crashed virtualization service) can recover without a full
-        tool restart.
-        """
-        with self._state_lock:
-            attempts = self.instance_launch_attempts.get(index, 0) + 1
-            self.instance_launch_attempts[index] = attempts
-            self.active_instances.discard(index)
-        if attempts >= self.max_launch_attempts:
-            with self._state_lock:
-                self._retry_blocked_until[index] = time.time() + RETRY_COOLDOWN_SECONDS
-                # Reset the counter so the next retry round starts fresh.
-                self.instance_launch_attempts[index] = 0
-            self.log_message(
-                f"Instance {index} has failed {attempts} consecutive startup attempts. Pausing it for {RETRY_COOLDOWN_SECONDS // 60} minutes before retrying.",
-                level="error",
-            )
-            # The failed instance already released its slot above. Re-queue it
-            # (the launcher skips it while the cooldown runs) and wake the
-            # queue so another selected instance can use that slot.
-            self._enqueue_instance(index, profile_name)
-            self.launch_next_instances()
-            return
-        self._enqueue_instance(index, profile_name)
-        self.launch_next_instances()
-
-    def run_profile_on_instance_with_slot(self, index, profile_name):
-        """Runs the profile automation for a specific emulator instance in a separate thread.
-
-        Handles emulator startup, ADB connection, game launch, and task scheduling.
-
-        Args:
-            index (int): Emulator instance index.
-            profile_name (str): Name of the profile to run.
-        """
-        from wosutil.emulator.emulator_manager import (
-            is_wos_installed,
-            verify_adb_connected,
-        )
-        from wosutil.tool.profiles.profile_manager import ProfileManager
-        from wosutil.tool.tasks.navigation import launch_and_reach_city_screen
-
-        def instance_worker():
-            if self._another_worker_alive(index):
-                # A live thread already owns this slot (stale requeue racing
-                # a worker that never exited): back out without stopping its
-                # emulator or releasing its slot.
-                self._yield_worker(index, f"Duplicate worker for instance {index} detected (another thread is active); yielding.")
-                return
-            # Cleared on the yield paths below, where the slot belongs to
-            # another thread and this worker must leave it alone.
-            owns_slot = True
-            try:
-                pm = self.instances_profile_managers.get(index)
-                if pm is None:
-                    pm = ProfileManager(self.log_message)
-                    self.instances_profile_managers[index] = pm
-                # Opening phase (emulator start, ADB, game launch): the GUI shows
-                # "Opening..." until the game is ready to run tasks.
-                pm.opening_state = True
-
-                # Use retry operation for emulator startup
-                def start_emulator():
-                    running = self.multi_instance_manager._is_instance_running(index)
-                    if not running:
-                        self.multi_instance_manager.start_instance(index)
-                    else:
-                        self.log_message(f"Emulator on instance {index} is already running.", "info")
-                    # start_instance already waits for state=start_finished;
-                    # verify_adb_connected below waits until the device is reachable.
-                    return True
-
-                # Retry emulator startup with exponential backoff
-                if not retry_operation(start_emulator, max_attempts=3, delay=5.0, retry_on_false=True):
-                    self.log_message(f"Failed to start emulator on instance {index}. Closing any partial startup and trying next instance.", "error")
-                    # Try to close the emulator if it was partially started
-                    try:
-                        self.multi_instance_manager.stop_instance(index)
-                        self.log_message(f"Emulator instance {index} closed due to startup failure.", "info")
-                    except Exception as e:
-                        self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                    self._requeue_with_limit(index, profile_name)
-                    return
-
-                # Retry ADB connection with reduced attempts and better error handling
-                def connect_adb():
-                    return verify_adb_connected(instance_index=index)
-
-                # Add timeout protection for ADB connection phase
-                adb_start_time = time.time()
-                adb_timeout = 60  # 60 seconds max for ADB connection phase
-
-                # Reduce max attempts from 10 to 5 to avoid long hangs
-                if not retry_operation(connect_adb, max_attempts=5, delay=3.0, retry_on_false=True):
-                    # Check if we've exceeded the timeout for ADB connection phase
-                    if time.time() - adb_start_time > adb_timeout:
-                        self.log_message(
-                            f"ADB connection phase timed out after {adb_timeout} seconds for instance {index}. Instance appears stuck, re-queuing for retry.",
-                            "error",
-                        )
-                        try:
-                            self.multi_instance_manager.stop_instance(index)
-                            self.log_message(f"Emulator instance {index} closed due to ADB timeout.", "info")
-                        except Exception as e:
-                            self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                        self._requeue_with_limit(index, profile_name)
-                        return
-
-                    self.log_message(f"Could not connect ADB to instance {index} after 5 attempts. Checking emulator health...", "error")
-
-                    # Check if emulator is hanging
-                    if not check_emulator_health(index):
-                        self.log_message(f"Emulator instance {index} is hanging. Attempting force restart...", "warning")
-
-                        # Try force restart
-                        if force_restart_emulator(index, self.multi_instance_manager):
-                            # Try ADB connection again after restart
-                            if retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
-                                self.log_message(f"ADB connection successful after force restart for instance {index}.", "success")
-                            else:
-                                self.log_message(f"ADB connection still failed after force restart for instance {index}. Re-queuing instance for retry.", "error")
-                                self._requeue_with_limit(index, profile_name)
-                                return
-                        else:
-                            self.log_message(f"Force restart failed for instance {index}. Re-queuing instance for retry.", "error")
-                            self._requeue_with_limit(index, profile_name)
-                            return
-                    else:
-                        # Emulator seems healthy but ADB still fails, try manual restart
-                        self.log_message(f"Emulator instance {index} appears healthy but ADB connection fails. Attempting manual restart...", "warning")
-                        try:
-                            self.multi_instance_manager.stop_instance(index)
-                            time.sleep(3)  # Wait for emulator to close
-                            self.multi_instance_manager.start_instance(index)
-                            time.sleep(5)  # Wait for emulator to start
-
-                            # Try ADB connection again after restart
-                            if retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
-                                self.log_message(f"ADB connection successful after manual restart for instance {index}.", "success")
-                            else:
-                                self.log_message(f"ADB connection still failed after manual restart for instance {index}. Re-queuing instance for retry.", "error")
-                                self._requeue_with_limit(index, profile_name)
-                                return
-                        except Exception as e:
-                            self.log_message(f"Error during manual emulator restart for instance {index}: {e}", "error")
-                            self._requeue_with_limit(index, profile_name)
-                            return
-
-                if self.tool_should_stop.is_set():
-                    self._discard_active_instance(index)
-                    return
-
-                # The game missing is a permanent condition: closing/restarting
-                # the emulator can never fix it, so warn the user and abort this
-                # instance instead of entering the start/stop retry loop.
-                if not is_wos_installed(index):
-                    self.log_message(
-                        f"Whiteout Survival ({WHITEOUT_PACKAGE}) is not installed on instance {index}. "
-                        "Install the game on this instance (e.g. from the emulator's app store or Google Play) "
-                        "and press Start again. The instance will not be retried automatically.",
-                        "error",
-                    )
-                    with self._state_lock:
-                        self._aborted_instances.add(index)
-                    if self.dialog_queue is not None:
-                        self.dialog_queue.put(
-                            (
-                                "Game not installed",
-                                f"Whiteout Survival ({WHITEOUT_PACKAGE}) is not installed on instance {index}.\n\n"
-                                "Install the game on this instance (e.g. from the emulator's app store or Google Play) "
-                                "and press Start again. The instance will not be retried automatically.",
-                            )
-                        )
-                    try:
-                        self.multi_instance_manager.stop_instance(index)
-                        self.log_message(f"Emulator instance {index} closed because the game is not installed.", "info")
-                    except Exception as e:
-                        self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                    self._discard_active_instance(index)
-                    return
-
-                # Retry game launch usando retry_operation
-                def try_launch_game():
-                    return launch_and_reach_city_screen(instance_index=index)
-
-                # Add timeout protection for game launch phase
-                game_launch_start_time = time.time()
-                game_launch_timeout = 120  # 120 seconds max for game launch phase
-
-                if not retry_operation(try_launch_game, max_attempts=3, delay=5.0, retry_on_false=True):
-                    # Check if we've exceeded the timeout for game launch phase
-                    if time.time() - game_launch_start_time > game_launch_timeout:
-                        self.log_message(
-                            f"Game launch phase timed out after {game_launch_timeout} seconds for instance {index}. Instance appears stuck, re-queuing for retry.",
-                            "error",
-                        )
-                        try:
-                            self.multi_instance_manager.stop_instance(index)
-                            self.log_message(f"Emulator instance {index} closed due to game launch timeout.", "info")
-                        except Exception as e:
-                            self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                        self._requeue_with_limit(index, profile_name)
-                        return
-
-                    self.log_message(f"Critical failure launching the game on instance {index}. Closing and re-queuing.", "error")
-
-                    def requeue_instance():
-                        try:
-                            self.multi_instance_manager.stop_instance(index)
-                            self.log_message(f"Emulator instance {index} closed due to game launch failure.", "info")
-                        except Exception as e:
-                            self.log_message(f"Error closing emulator instance {index}: {e}", "error")
-                        self._requeue_with_limit(index, profile_name)
-
-                    requeue_instance()
-                    return
-
-                # Game launched successfully: reset consecutive launch failure counter
-                with self._state_lock:
-                    self.instance_launch_attempts[index] = 0
-                pm.opening_state = False
-
-                # The game clock (UTC date and time) is the first thing to sync
-                # every time an instance is opened: several tasks reschedule to
-                # 00:00 UTC and need the clock to compute the exact delay.
-                if self.tool_should_stop.is_set():
-                    self._discard_active_instance(index)
-                    return
-                try:
-                    sync_utc_time(index)
-                except Exception as e:
-                    self.log_message(f"Error syncing the game UTC clock on instance {index}: {e}", "error")
-
-                # Continue with task execution...
-                pm = self.instances_profile_managers.get(index)
-                if not pm:
-                    pm = ProfileManager(self.log_message)
-                    self.instances_profile_managers[index] = pm
-                    # Only initialize tasks if this is the first time for this instance
-                    pm.running_tasks_state = build_running_tasks_state(profile_name, pm.profiles, self.TASK_DEFINITIONS)
-                # If pm already exists, keep the existing task state to preserve scheduled times
-
-                # The Bear Hunt times just read from the task list are the
-                # source of truth: a stale saved schedule (e.g. produced by an
-                # old OCR misread) must not postpone the task to a wrong date.
-                from wosutil.tool.tasks.task_automation import reconcile_bear_trap_schedule
-
-                if pm.running_tasks_state and reconcile_bear_trap_schedule(index, pm.running_tasks_state):
-                    pm.next_run_time = min(t["next_run_time"] for t in pm.running_tasks_state)
-                    self._persist_schedules()
-
-                # Main task loop
-                last_health_check = time.time()
-
-                while not self.tool_should_stop.is_set():
-                    now = time.time()
-
-                    # Periodic health check
-                    if now - last_health_check > self.health_check_interval:
-                        if not check_emulator_health(index):
-                            if self._stop_in_progress(index):
-                                # Another thread is already closing this
-                                # instance on purpose: yield instead of
-                                # force-restarting under its feet.
-                                owns_slot = False
-                                self._yield_worker(index, f"Close of instance {index} is already in progress; yielding.")
-                                return
-                            self.log_message(f"Emulator instance {index} appears to be hanging during operation. Attempting restart...", "warning")
-                            if force_restart_emulator(index, self.multi_instance_manager):
-                                self.log_message(f"Emulator instance {index} restarted successfully during operation.", "success")
-                                # Re-verify ADB connection after restart
-                                if not retry_operation(connect_adb, max_attempts=3, delay=2.0, retry_on_false=True):
-                                    self.log_message(f"ADB connection failed after restart during operation for instance {index}. Closing instance.", "error")
-                                    self._discard_active_instance(index)
-                                    self.launch_next_instances()
-                                    break
-                            else:
-                                self.log_message(f"Force restart failed during operation for instance {index}. Closing instance.", "error")
-                                self._discard_active_instance(index)
-                                self.launch_next_instances()
-                                break
-                        last_health_check = now
-
-                    # Choose the task to run or wait for, grouping close run
-                    # times so the priority order wins over timer-reading noise.
-                    next_task, wait_until = pick_scheduled_task(getattr(pm, "running_tasks_state", []), now)
-                    if next_task is None:
-                        # No scheduled tasks, exit
-                        self.log_message(f"No tasks scheduled for profile '{profile_name}' on instance {index}.", "info")
-                        self._discard_active_instance(index)
-                        self.launch_next_instances()
-                        break
-                    if wait_until is not None:
-                        sleep_time = max(1, int(wait_until - now))
-                        # If the next task is more than INSTANCE_KEEPALIVE_WINDOW_SECONDS away, close the emulator, free the slot and requeue
-                        if wait_until - now > INSTANCE_KEEPALIVE_WINDOW_SECONDS:
-                            self.log_message(
-                                f"The next task for instance {index} is more than {INSTANCE_KEEPALIVE_WINDOW_SECONDS} seconds away. Closing the emulator, freeing the slot and requeuing.",
-                                "info",
-                            )
-                            with self._intentional_stop(index):
-                                self.multi_instance_manager.stop_instance(index)
-                            self._discard_active_instance(index)
-                            self._enqueue_instance(index, profile_name)
-                            self.launch_next_instances()
-                            break
-                        pm.current_task_name = None
-                        # Wait reactive to stop
-                        self.tool_should_stop.wait(timeout=min(sleep_time, 10))
-                        continue
-                    # Run the pending task with the highest priority
-                    task = next_task
-                    pm.current_task_name = task.get("name", "?")
-                    self.log_message(f"Executing task '{pm.current_task_name}' on instance {index}...", "info")
-                    try:
-                        # If stop was pressed, do not run more tasks
-                        if self.tool_should_stop.is_set():
-                            break
-                        result = task["function"](instance_index=index)
-                        # Support for functions returning (result, reschedule_seconds)
-                        if isinstance(result, tuple) and len(result) == 2:
-                            result, new_reschedule = result
-                            if isinstance(new_reschedule, (int, float)) and new_reschedule > 0:
-                                task["reschedule_seconds"] = new_reschedule
-                        if result:
-                            self.log_message(f"Task '{pm.current_task_name}' completed successfully on instance {index}.", "success")
-                        else:
-                            self.log_message(f"Task '{pm.current_task_name}' failed on instance {index}.", "warning")
-                    except Exception as e:
-                        self.log_message(f"Exception while running task '{pm.current_task_name}' on instance {index}: {e}", "error")
-                    # Reschedule the task
-                    task["next_run_time"] = time.time() + task.get("reschedule_seconds", 60)
-                    # Reschedule tasks that must run right after this one (the loop is serial per instance)
-                    for other in pm.running_tasks_state:
-                        if other.get("run_after") == task.get("id"):
-                            other["next_run_time"] = time.time()
-                    pm.next_run_time = min(t["next_run_time"] for t in pm.running_tasks_state)
-                    pm.current_task_name = None
-                    self._persist_schedules()
-                    # Short wait before the next iteration, reactive to stop
-                    self.tool_should_stop.wait(timeout=2)
-                self.log_message(f"Task cycle finished for instance {index}.", "info")
-
-            except ToolStopped:
-                self.log_message(f"Tool stopped while working on instance {index}.", "info")
-                self._discard_active_instance(index)
-
-            except Exception as e:
-                self.log_message(f"Error in instance {index}: {e}", "error")
-                # Close the emulator on any error
-                try:
-                    with self._intentional_stop(index):
-                        self.multi_instance_manager.stop_instance(index)
-                    self.log_message(f"Emulator instance {index} closed due to error.", "info")
-                except Exception as close_error:
-                    self.log_message(f"Error closing emulator instance {index}: {close_error}", "error")
-                # Count the failure like any other launch failure: after
-                # max_launch_attempts consecutive errors the instance backs
-                # off for RETRY_COOLDOWN_SECONDS instead of spinning in a
-                # tight stop/retry loop that hammers the shared ADB server.
-                self._requeue_with_limit(index, profile_name)
-            finally:
-                if owns_slot:
-                    self._discard_active_instance(index)
-                self._remove_thread_reference(index, threading.current_thread())
-
-        # Bind the thread to the instance so every emitted log carries a
-        # "[index]" prefix (see wosutil.utils.instance_log_context).
-        with instance_log_context(index):
-            instance_worker()
-
-    def stop_tool(self):
-        """Stops the automation tool and cleans up resources."""
-        with self._state_lock:
-            self.tool_running = False
-            self.tool_should_stop.set()
-            active_instances = list(self.active_instances)
-            worker_threads = list(self.instance_threads.items())
-
-        # Close all active emulators before cleaning up
-        for idx in active_instances:
-            try:
-                self.log_message(f"Closing emulator of instance {idx} while stopping the tool...", "info")
-                self.multi_instance_manager.stop_instance(idx)
-            except Exception as e:
-                self.log_message(f"Error closing emulator of instance {idx}: {e}", "error")
-
-        # Wait for threads to finish
-        for _index, thread in worker_threads:
-            if thread.is_alive():
-                thread.join(timeout=5.0)
-
-        with self._state_lock:
-            live_threads = [thread for thread in self.instance_threads.values() if thread.is_alive()]
-            self.active_instances.clear()
-            self.instance_queue.clear()
-            self.instance_launch_attempts.clear()
-            if not live_threads:
-                self.instance_threads.clear()
-
-        # Force garbage collection
-        gc.collect()
-
-        if live_threads:
-            self.log_message(
-                f"Tool stop requested, but {len(live_threads)} worker thread(s) are still finishing.",
-                level="warning",
-            )
-        self.log_message("Tool stopped and resources cleaned up", level="info")

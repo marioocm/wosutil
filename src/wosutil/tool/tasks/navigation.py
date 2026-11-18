@@ -14,12 +14,12 @@ from wosutil.config import (
     MAIN_SCREEN_MAX_ATTEMPTS,
     SCREEN_CHECK_THRESHOLD,
 )
-from wosutil.context import get_multi_instance_manager
 from wosutil.emulator.emulator_manager import (
     click_on,
     click_on_coordinates,
     delete_temp_screenshot,
     force_stop_game,
+    get_active_backend,
     is_wos_installed,
     is_wos_running,
     launch_game_activity,
@@ -551,7 +551,7 @@ def ensure_city_screen(instance_index):
     Returns:
         bool: True if city screen is reached, False otherwise.
     """
-    multi_instance_manager = get_multi_instance_manager()
+    backend = get_active_backend()
     # Step 1: Check if the game is running
     if not is_wos_running(instance_index):
         if not is_wos_installed(instance_index):
@@ -565,23 +565,21 @@ def ensure_city_screen(instance_index):
             retry_on_false=True,
         ):
             log_message(f"Failed to launch game after 3 attempts on instance {instance_index}. Restarting emulator...", "error")
-            if multi_instance_manager:
-                try:
-                    multi_instance_manager.stop_instance(instance_index)
-                    if stop_signal.wait(timeout=5):
-                        raise ToolStopped()
-                    multi_instance_manager.start_instance(instance_index)
-                    if stop_signal.wait(timeout=30):
-                        raise ToolStopped()
-                    log_message(f"Emulator {instance_index} restarted. Attempting to launch game again...", "info")
-                    if not launch_and_reach_city_screen(instance_index):
-                        log_message(f"Failed to launch game after emulator restart on instance {instance_index}.", "error")
-                        return False
-                except Exception as e:
-                    log_message(f"Error restarting emulator {instance_index}: {e}", "error")
+            try:
+                backend.stop_instance(instance_index)
+                if stop_signal.wait(timeout=5):
+                    raise ToolStopped()
+                backend.start_instance(instance_index)
+                if stop_signal.wait(timeout=30):
+                    raise ToolStopped()
+                log_message(f"Emulator {instance_index} restarted. Attempting to launch game again...", "info")
+                if not launch_and_reach_city_screen(instance_index):
+                    log_message(f"Failed to launch game after emulator restart on instance {instance_index}.", "error")
                     return False
-            else:
-                log_message(f"No multi_instance_manager provided, cannot restart emulator {instance_index}.", "error")
+            except ToolStopped:
+                raise
+            except Exception as e:
+                log_message(f"Error restarting emulator {instance_index}: {e}", "error")
                 return False
         else:
             log_message(f"Game successfully launched on instance {instance_index}.", "success")

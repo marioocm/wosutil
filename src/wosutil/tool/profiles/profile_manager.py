@@ -30,10 +30,6 @@ class ProfileManager:
             )
             self.profiles = {DEFAULT_PROFILE_NAME: get_all_task_ids()}
             self.save_profiles()
-        self.running_tasks_state = []
-        self.next_run_time = None
-        self.current_task_name = None
-        self.opening_state = False
 
     def load_profiles(self):
         """Loads profiles from the JSON file using utility functions.
