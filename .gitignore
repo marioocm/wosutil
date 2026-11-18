@@ -17,6 +17,8 @@ dist/
 
 # User data
 data/*
+# Downloaded desktop UI bundle (scripts/fetch_ui.py)
+src/wosutil/webui/static/
 
 # Local test captures
 tests/data/

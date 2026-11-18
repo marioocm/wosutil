@@ -6,6 +6,8 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 ## Structure
 - `main.py` → entry point, launches Tkinter GUI
 - `src/wosutil/` → pip-installable package (gui/, emulator/, tool/, template_creator.py)
+- `src/wosutil/ui/` → local HTTP server, browser launcher and UI bundle resolution/installation for the desktop shell
+- `ui.lock.json` → pinned UI manifest URL and SHA-256 consumed by `scripts/fetch_ui.py`
 - `templates/` → PNG images for OpenCV template matching
 - `data/` → JSON config (instance_cache.json, profiles.json, etc.), auto-created at runtime
 - `tests/` → pytest-based tests
@@ -13,6 +15,9 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 
 ## Key quirks
 - Pip-installable: `pip install -e .` (see `pyproject.toml`). Requires Python >= 3.11 (ONNX Runtime).
+- `wosutil-web` is the opt-in desktop shell: it serves the static UI bundle from a loopback HTTP server (`/api/state`, `/api/events` over SSE, `/api/command`) and opens it in a Chromium app window (Edge/Chrome). The UI bundle is built and published by `wosutil-site`; `scripts/fetch_ui.py` downloads the manifest pinned in `ui.lock.json` into `src/wosutil/webui/static/` (gitignored). `WOSUTIL_UI_DIR` overrides the bundle directory for development. The manifest's `apiVersion` must match `wosutil.ui.contract.API_VERSION`; incompatible bundles fall back to a built-in page.
+- `wosutil` still launches the Tkinter shell. The web shell is portable (Windows/macOS/Linux), but the emulator backends and `adb.exe` are Windows-only; Linux would open the UI without being able to automate anything until a backend is ported.
+- PyInstaller bundles the fetched UI as `webui` (`wosutil.spec`), and `scripts/build.ps1` runs the fetch step first.
 - `data/*` is gitignored; the `data/` directory and its JSON files are auto-created at runtime (`save_json_file` in `src/wosutil/utils.py`).
 - Linting/formatter: ruff, typechecking: mypy (see `pyproject.toml`).
 - Agents **must run** full check after code changes.
@@ -31,6 +36,8 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 ## Commands
 - Install: `.venv/Scripts/pip install -e ".[dev]"`
 - Run app: `python main.py` (or `wosutil` after install)
+- Run desktop shell: `wosutil-web` (or `python -m wosutil.ui.main`)
+- Fetch the pinned UI: `python scripts/fetch_ui.py` (`--from-dir ..\wosutil-site\dist\ui` for a local build)
 - Lint: `.venv/Scripts/ruff check .`
 - Format: `.venv/Scripts/ruff format .`
 - Typecheck: `.venv/Scripts/mypy src/wosutil/`

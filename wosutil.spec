@@ -14,6 +14,9 @@ ROOT_DIR = os.path.abspath(SPECPATH)
 
 rapidocr_datas = collect_data_files("rapidocr")
 
+webui_dir = os.path.join(ROOT_DIR, "src", "wosutil", "webui", "static")
+webui_datas = [(webui_dir, "webui")] if os.path.isdir(webui_dir) else []
+
 a = Analysis(
     [os.path.join(ROOT_DIR, "main.py")],
     pathex=[os.path.join(ROOT_DIR, "src")],
@@ -21,6 +24,7 @@ a = Analysis(
     datas=[
         (os.path.join(ROOT_DIR, "templates"), "templates"),
         *rapidocr_datas,
+        *webui_datas,
     ],
     hiddenimports=[],
     hookspath=[],
