@@ -2,7 +2,7 @@
 
 import unittest
 
-from wosutil.gui.gui_instance_status import (
+from wosutil.app.presentation import (
     format_instance_status,
     format_task_tooltip,
     format_time_remaining,
