@@ -16,6 +16,8 @@ from wosutil.app.preferences import EMULATOR_LABELS
 from wosutil.ui.bundle import UiBundle, safe_join
 from wosutil.ui.contract import API_VERSION
 
+mimetypes.add_type("font/woff2", ".woff2")
+
 HEARTBEAT_TIMEOUT_SECONDS = 15.0
 SUSPEND_GRACE_SECONDS = 4.0
 WATCHDOG_INTERVAL_SECONDS = 2.0
@@ -322,7 +324,6 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         """Serve the index, static assets and read-only API endpoints."""
-        self.app.touch()
         parts = urlsplit(self.path)
         query = parse_qs(parts.query)
         path = parts.path
@@ -334,12 +335,14 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/state":
             if not self._authorized(query):
                 return
+            self.app.touch()
             self._json(self.app.state_payload())
             return
 
         if path == "/api/logs":
             if not self._authorized(query):
                 return
+            self.app.touch()
             try:
                 after = int((query.get("after") or ["0"])[0])
             except ValueError:
@@ -350,12 +353,14 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/events":
             if not self._authorized(query):
                 return
+            self.app.touch()
             self._serve_events()
             return
 
         if path == "/":
             if not self._authorized(query):
                 return
+            self.app.touch()
             self._serve_index()
             return
 
@@ -363,12 +368,12 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         """Handle beacons and JSON commands."""
-        self.app.touch()
         parts = urlsplit(self.path)
         query = parse_qs(parts.query)
         path = parts.path
         if not self._authorized(query):
             return
+        self.app.touch()
 
         if path == "/api/command":
             payload = self._read_json()
@@ -437,6 +442,7 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         if file_path is None:
             self._json({"ok": False, "error": "Not found."}, status=404)
             return
+        self.app.touch()
         self._send_file(file_path)
 
     def _serve_events(self) -> None:
