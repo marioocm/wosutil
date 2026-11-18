@@ -16,6 +16,7 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - `data/*` is gitignored; the `data/` directory and its JSON files are auto-created at runtime (`save_json_file` in `src/wosutil/utils.py`).
 - Linting/formatter: ruff, typechecking: mypy (see `pyproject.toml`).
 - Agents **must run** full check after code changes.
+- `src/wosutil/adb.py` is the pure ADB transport (`AdbClient`); it knows nothing about emulators. Each emulator backend owns one client and only supplies the ADB serial per instance.
 - All emulator-specific code (instance discovery, start/stop, ADB serial and command shape) lives in `src/wosutil/emulator/backends.py`; add a new emulator by implementing `EmulatorBackend` and registering it in `create_backend`. `src/wosutil/emulator/emulator_manager.py` only exposes game/ADB actions on the active backend.
 - `src/wosutil/tool/tool_instances_controller.py` schedules due instances: an instance is opened when its next task is within `TASK_STARTUP_WINDOW_SECONDS` and closed when the next one is farther than `INSTANCE_KEEPALIVE_WINDOW_SECONDS`. There is no shared queue to maintain; add scheduling behavior there. The controller receives a plain `(instance_index, profile_name)` selection and does not depend on Tkinter.
 - `ProfileManager` only owns persisted profiles; per-instance runtime state is `InstanceState` wrapped by `InstanceRuntime` in the controller.

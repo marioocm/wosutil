@@ -17,7 +17,7 @@ from wosutil.config import (
 )
 from wosutil.emulator.backends import MuMuBackend
 from wosutil.stop import ToolStopped, stop_signal
-from wosutil.utils import get_coordinates, log_message, run_process_robust, run_process_robust_bytes
+from wosutil.utils import get_coordinates, log_message
 
 # PNG file signature: exec-out payloads must start with it, otherwise the
 # stream carried an error message instead of a screenshot.
@@ -117,12 +117,12 @@ def execute_adb_command(command_parts, instance_index, timeout=10, log_errors_as
     """
     stop_signal.check()
     backend = get_active_backend()
-    full_command = backend.build_adb_command(command_parts, instance_index)
-    short_command = " ".join(["adb", "-s", backend.get_serial(instance_index)] + command_parts)
+    serial = backend.get_serial(instance_index)
+    short_command = " ".join(["adb", "-s", serial] + command_parts)
 
     log_message(f"Executing on instance {instance_index}: {short_command}", level="adb")
 
-    result = run_process_robust(full_command, timeout=timeout)
+    result = backend.adb.run(serial, command_parts, timeout=timeout)
     if result is None:
         log_message(f"ADB command timed out after {timeout} seconds on instance {instance_index}: {short_command}", level="error")
         if log_errors_as_info:
@@ -154,12 +154,12 @@ def _list_adb_devices():
     Returns:
         dict: Mapping of device serial to connection state ("device", "offline", ...).
     """
-    return get_active_backend().list_devices()
+    return get_active_backend().adb.devices()
 
 
 def _connect_adb_device(serial):
     """Explicitly connects the ADB server to the emulator endpoint."""
-    get_active_backend().connect(serial)
+    get_active_backend().adb.connect(serial)
 
 
 def verify_adb_connected(instance_index, max_attempts=5, wait=3, cache_seconds=15):
@@ -329,8 +329,9 @@ def take_screenshot(instance_index):
     screenshot_ready = False
     try:
         log_message(f"Taking screenshot on instance {instance_index} via exec-out.", level="debug")
-        full_command = get_active_backend().build_adb_command(["exec-out", "screencap", "-p"], instance_index)
-        result = run_process_robust_bytes(full_command, timeout=10)
+        backend = get_active_backend()
+        serial = backend.get_serial(instance_index)
+        result = backend.adb.run_bytes(serial, ["exec-out", "screencap", "-p"], timeout=10)
         if result is None or result.returncode != 0 or not result.stdout.startswith(_PNG_SIGNATURE):
             log_message(f"Failed to take screenshot from the emulator on instance {instance_index}.", level="error")
             return None
@@ -631,7 +632,7 @@ def restart_adb_server():
             return False
         log_message("Restarting ADB server...", level="warning")
         try:
-            get_active_backend().restart_server()
+            get_active_backend().adb.restart_server()
             log_message("ADB server restarted successfully.", level="success")
             _last_adb_restart_time = now
             return True
