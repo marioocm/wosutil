@@ -63,11 +63,29 @@ def _require_adb_success(result, operation):
 def set_active_backend(backend):
     """Register the emulator backend used for every ADB command.
 
+    Switching backends invalidates the cached ADB verifications and the last
+    restart timestamp: both belong to the previous emulator/server and must
+    not skip the first verification of the new one.
+
     Args:
         backend: The EmulatorBackend instance to use.
     """
-    global _active_backend
+    global _active_backend, _last_adb_restart_time
     _active_backend = backend
+    _adb_verified_cache.clear()
+    _last_adb_restart_time = 0.0
+
+
+def invalidate_adb_verification(serial):
+    """Forget the cached successful ADB verification of one serial.
+
+    Call it after an instance is stopped or restarted: the cache is only valid
+    while the same ADB connection is known to be up.
+
+    Args:
+        serial (str): ADB serial whose verification must be discarded.
+    """
+    _adb_verified_cache.pop(serial, None)
 
 
 def get_active_backend():
@@ -664,6 +682,7 @@ def force_restart_emulator(instance_index, backend=None, boot_timeout=60):
     log_message(f"Force restarting emulator instance {instance_index} due to hanging...", level="warning")
 
     try:
+        invalidate_adb_verification(backend.get_serial(instance_index))
         backend.stop_instance(instance_index)
         stop_signal.check()
         time.sleep(3)  # Wait for emulator to close

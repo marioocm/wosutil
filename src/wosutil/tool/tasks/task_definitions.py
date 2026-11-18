@@ -40,16 +40,14 @@ def get_task_definitions():
     """
     task_definitions = {
         "play_bear_trap": {
-            "id": "play_bear_trap",
             "name": "Play Bear Trap",
             "description": "Recalls every march to prepare the bear trap attack and then attacks the bear trap with all marches.",
-            "function": lambda instance_index: play_bear_trap(instance_index),
+            "function": play_bear_trap,
             "priority": 0,
             "reschedule_seconds": BEAR_TRAP_SCHEDULE_RETRY_SECONDS,  # poll the task list; only runs when a hunt time was seen
             "category": "world",
         },
         "claim_idle": {
-            "id": "claim_idle",
             "name": "Claim Idle Income",
             "description": "Claims idle income from exploration area",
             "function": claim_idle_income,
@@ -58,7 +56,6 @@ def get_task_definitions():
             "category": "exploration",
         },
         "donate_tech": {
-            "id": "donate_tech",
             "name": "Donate to Alliance Tech",
             "description": "Donates resources to alliance technology",
             "function": donate_to_alliance_tech,
@@ -67,7 +64,6 @@ def get_task_definitions():
             "category": "alliance",
         },
         "autojoin": {
-            "id": "autojoin",
             "name": "Activate Auto-Join",
             "description": "Turns on auto-join for alliance rallies",
             "function": turn_on_autojoin,
@@ -76,7 +72,6 @@ def get_task_definitions():
             "category": "alliance",
         },
         "claim_island": {
-            "id": "claim_island",
             "name": "Claim Island Life Essence",
             "description": "Claims life essence from the island",
             "function": claim_island_idle,
@@ -85,7 +80,6 @@ def get_task_definitions():
             "category": "island",
         },
         "claim_mail": {
-            "id": "claim_mail",
             "name": "Claim Mail Rewards",
             "description": "Claims rewards from mail inbox",
             "function": claim_mail,
@@ -94,7 +88,6 @@ def get_task_definitions():
             "category": "mail",
         },
         "claim_alliance_chests": {
-            "id": "claim_alliance_chests",
             "name": "Claim Alliance Chests",
             "description": "Claims alliance chests from the alliance menu",
             "function": claim_alliance_chests,
@@ -103,7 +96,6 @@ def get_task_definitions():
             "category": "alliance",
         },
         "claim_triumph": {
-            "id": "claim_triumph",
             "name": "Claim Triumph Rewards",
             "description": "Claims triumph rewards from the alliance menu",
             "function": claim_triumph,
@@ -112,7 +104,6 @@ def get_task_definitions():
             "category": "alliance",
         },
         "claim_recruit_hero_free_chest": {
-            "id": "claim_recruit_hero_free_chest",
             "name": "Claim Recruit Hero Free Chest",
             "description": "Claims the free hero chests on the recruit hero chest screen.",
             "function": claim_recruit_hero_free_chest,
@@ -121,7 +112,6 @@ def get_task_definitions():
             "category": "heroes",
         },
         "claim_storehouse_stamina": {
-            "id": "claim_storehouse_stamina",
             "name": "Claim Storehouse Stamina",
             "description": "Claims stamina from the storehouse using the stamina shortcut on the city screen and reschedules from the on-screen timer.",
             "function": claim_storehouse_stamina,
@@ -130,7 +120,6 @@ def get_task_definitions():
             "category": "profile",
         },
         "do_intel_missions": {
-            "id": "do_intel_missions",
             "name": "Do Intel Missions",
             "description": "Completes intel missions using the mode selected in Preferences: Execute All (instant) or Classic (beasts, survivors, exploration).",
             "function": do_intel_missions,
@@ -139,7 +128,6 @@ def get_task_definitions():
             "category": "intel",
         },
         "claim_nomadic_shop_rss_and_vip": {
-            "id": "claim_nomadic_shop_rss_and_vip",
             "name": "Claim Nomadic Shop Resources and VIP",
             "description": "Claims resources (iron, coal, wood, meat) and VIP from the nomadic shop, using free refresh when available, and reschedules to 00:00 UTC when everything is claimed.",
             "function": claim_nomadic_shop_rss_and_vip,
@@ -148,7 +136,6 @@ def get_task_definitions():
             "category": "shop",
         },
         "claim_mystery_shop": {
-            "id": "claim_mystery_shop",
             "name": "Claim Mystery Shop Items",
             "description": "Claims redeemable items from the mystery shop (free items always, widgets depending on the user preference), rescheduling to 00:00 UTC when everything is claimed.",
             "function": claim_mystery_shop,
@@ -157,7 +144,6 @@ def get_task_definitions():
             "category": "shop",
         },
         "claim_vip_daily_rewards": {
-            "id": "claim_vip_daily_rewards",
             "name": "Claim VIP Daily Rewards",
             "description": "Claims the daily rewards from the VIP menu, rescheduling to the next 00:00 UTC once claimed.",
             "function": claim_vip_daily_rewards,
@@ -166,7 +152,6 @@ def get_task_definitions():
             "category": "vip",
         },
         "claim_tundra_trek_supplies": {
-            "id": "claim_tundra_trek_supplies",
             "name": "Claim Tundra Trek Supplies",
             "description": "Claims the free supplies from the tundra trek, using the on-screen timer to reschedule or 6 hours by default.",
             "function": claim_tundra_trek_supplies,
@@ -175,7 +160,6 @@ def get_task_definitions():
             "category": "tundra_trek",
         },
         "start_tundra_trek_idle": {
-            "id": "start_tundra_trek_idle",
             "name": "Start Tundra Trek Idle",
             "description": "Clicks the idle button on the tundra trek screen to start idle hunting, always right after claim tundra trek supplies.",
             "function": start_tundra_trek_idle,
@@ -185,7 +169,6 @@ def get_task_definitions():
             "run_after": "claim_tundra_trek_supplies",
         },
         "claim_pet_adventure_ally_treasure": {
-            "id": "claim_pet_adventure_ally_treasure",
             "name": "Claim Pet Adventure Ally Treasure",
             "description": "Claims the ally treasure from the pet adventure screen, rescheduling to the next 00:00 UTC once claimed.",
             "function": claim_pet_adventure_ally_treasure,
@@ -194,7 +177,6 @@ def get_task_definitions():
             "category": "pet_adventure",
         },
         "send_pet_adventure_chests": {
-            "id": "send_pet_adventure_chests",
             "name": "Send Pet Adventure Chests",
             "description": "Opens ready chests and starts available chests in pet adventure, prioritizing chest 3. When the daily attempts are exhausted it reschedules to the next 00:00 UTC.",
             "function": send_pet_adventure_chests,
@@ -203,7 +185,6 @@ def get_task_definitions():
             "category": "pet_adventure",
         },
         "activate_daily_pet_skills": {
-            "id": "activate_daily_pet_skills",
             "name": "Activate Daily Pet Skills",
             "description": "Activates the daily pet skills (wolf, ox, tapir, elk), gathers a tile with the active ox skill, and reschedules with the shortest on-screen timer or 6 hours by default.",
             "function": activate_daily_pet_skills,
@@ -212,7 +193,6 @@ def get_task_definitions():
             "category": "pet_adventure",
         },
         "train_troops": {
-            "id": "train_troops",
             "name": "Train Troops",
             "description": "Trains and promotes troops in the 3 camps, rescheduling with the shortest training timer or 6 hours by default.",
             "function": train_troops,
@@ -221,6 +201,11 @@ def get_task_definitions():
             "category": "troops",
         },
     }
+
+    # The dictionary key is the canonical task id: inject it so the two can
+    # never drift apart.
+    for task_id, task in task_definitions.items():
+        task["id"] = task_id
 
     # Apply user-defined priorities on top of the defaults
     for task_id, priority in get_task_priorities().items():

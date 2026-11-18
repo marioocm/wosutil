@@ -110,20 +110,6 @@ def get_debug_mode(preferences=None):
     return preferences.get("debug_mode", False) is True
 
 
-def set_debug_mode(enabled):
-    """Persist the debug (verbose) mode preference.
-
-    Args:
-        enabled (bool): New debug mode state.
-
-    Returns:
-        bool: True if saved successfully.
-    """
-    preferences = load_preferences() or {}
-    preferences["debug_mode"] = bool(enabled)
-    return save_preferences(preferences)
-
-
 def load_preferences():
     """Load preferences from the JSON file.
 
