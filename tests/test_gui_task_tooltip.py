@@ -2,7 +2,8 @@
 
 import unittest
 
-from wosutil.gui.gui_instances import (
+from wosutil.gui.gui_instance_status import (
+    format_instance_status,
     format_task_tooltip,
     format_time_remaining,
     get_all_tasks_info,
@@ -10,10 +11,12 @@ from wosutil.gui.gui_instances import (
 
 
 class _FakeState:
-    """Minimal instance state stub exposing the task list."""
+    """Minimal instance state stub exposing the task list and runtime flags."""
 
-    def __init__(self, tasks):
+    def __init__(self, tasks, opening=False, current_task_name=None):
         self.tasks = tasks
+        self.opening = opening
+        self.current_task_name = current_task_name
 
 
 class TestFormatTimeRemaining(unittest.TestCase):
@@ -127,6 +130,51 @@ class TestFormatTaskTooltip(unittest.TestCase):
             ]
         )
         self.assertEqual(format_task_tooltip(pm, 1000), "1. High priority: 00:00:02\n2. Low priority: ready")
+
+
+class TestFormatInstanceStatus(unittest.TestCase):
+    """Test cases for the status text shown next to an instance."""
+
+    def _status(self, state, **kwargs):
+        """Build a status with the defaults used by the GUI."""
+        values = {"now": 1000, "active": False, "aborted": False, "queue_position": None, "retry_seconds": 0}
+        values.update(kwargs)
+        return format_instance_status(state, **values)
+
+    def test_active_opening_shows_the_first_task(self):
+        """The opening phase previews the first task."""
+        state = _FakeState([{"name": "Claim supplies", "next_run_time": 1100}], opening=True)
+        self.assertEqual(self._status(state, active=True), "Opening... First task: Claim supplies")
+
+    def test_active_current_task_is_shown(self):
+        """The task being executed is shown while the worker runs it."""
+        state = _FakeState([], current_task_name="Train troops")
+        self.assertEqual(self._status(state, active=True), "Executing: Train troops")
+
+    def test_active_next_task_shows_the_countdown(self):
+        """A future task of an active instance shows its countdown."""
+        state = _FakeState([{"name": "Claim supplies", "next_run_time": 1100}])
+        self.assertEqual(self._status(state, active=True), "Next: Claim supplies in 00:01:40")
+
+    def test_active_without_tasks(self):
+        """An active instance with an empty profile says so."""
+        self.assertEqual(self._status(_FakeState([]), active=True), "No programmed tasks")
+
+    def test_inactive_states(self):
+        """The waiting, queued, paused and aborted labels keep their wording."""
+        due_task = _FakeState([{"name": "Claim supplies", "next_run_time": 900}])
+        future_task = _FakeState([{"name": "Claim supplies", "next_run_time": 1100}])
+        cases = [
+            (due_task, {"aborted": True}, "Game not installed - install it and press Start"),
+            (future_task, {"queue_position": 2}, "In queue (2) - Next: Claim supplies in 00:01:40"),
+            (due_task, {"queue_position": 2}, "In queue (2) - Waiting to execute: Claim supplies"),
+            (future_task, {"retry_seconds": 90}, "Retry paused - 00:01:30"),
+            (future_task, {}, "Standby - Next: Claim supplies in 00:01:40"),
+            (_FakeState([]), {}, "Standby"),
+        ]
+        for state, kwargs, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(self._status(state, **kwargs), expected)
 
 
 if __name__ == "__main__":

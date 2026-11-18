@@ -104,6 +104,58 @@ def _load_screenshot_and_template(screenshot_path: str, template_path: str, roi:
     return img, template
 
 
+def _load_roi_image(instance_index, roi=None, screenshot_path=None):
+    """Load a screenshot ROI as a PIL image, deleting the capture if owned.
+
+    Args:
+        instance_index (int): Emulator instance index.
+        roi (tuple, optional): Region of interest as (x, y, w, h).
+        screenshot_path (str, optional): Reuse an existing capture instead of
+            taking a new one. Owned captures are removed before returning.
+
+    Returns:
+        PIL.Image or None: The ROI crop, or None when no screenshot was taken.
+    """
+    from wosutil.emulator.emulator_manager import delete_temp_screenshot, take_screenshot
+
+    owned = screenshot_path is None
+    path = take_screenshot(instance_index) if owned else screenshot_path
+    if not path:
+        return None
+    try:
+        with Image.open(path) as opened_img:
+            img = opened_img.copy()
+    finally:
+        if owned:
+            delete_temp_screenshot(path)
+    if roi:
+        x, y, w, h = roi
+        img = img.crop((x, y, x + w, y + h))
+    return img
+
+
+def _load_screenshot_bgr(screenshot_path, roi=None):
+    """Load a screenshot as a BGR array, cropping it to the ROI when given.
+
+    Args:
+        screenshot_path (str): Path to the screenshot image file.
+        roi (tuple, optional): Region of interest as (x, y, w, h).
+
+    Returns:
+        tuple or None: (image, offset_x, offset_y), or None when the image
+            cannot be read.
+    """
+    img_bgr = cv2.imread(screenshot_path)
+    if img_bgr is None:
+        return None
+    offset_x = offset_y = 0
+    if roi:
+        x, y, w, h = roi
+        img_bgr = img_bgr[y : y + h, x : x + w]
+        offset_x, offset_y = x, y
+    return img_bgr, offset_x, offset_y
+
+
 def find_multiple_templates(
     template_path: str,
     screenshot_path: str,
@@ -341,27 +393,14 @@ def read_screen_time(
     Returns:
         int or None: Time in seconds if detected, None if not found or implausible.
     """
-    from wosutil.emulator.emulator_manager import delete_temp_screenshot, take_screenshot
-
     original_img: Optional[Image.Image] = None
     processed_img: Optional[Image.Image] = None
-    owned_screenshot = screenshot_path is None
 
     try:
-        if screenshot_path is None:
-            screenshot_path = take_screenshot(instance_index)
-        if not screenshot_path:
+        img = _load_roi_image(instance_index, roi, screenshot_path)
+        if img is None:
             log_message("Could not take screenshot for timer OCR.", level="error")
             return None
-        try:
-            with Image.open(screenshot_path) as opened_img:
-                img = opened_img.copy()
-        finally:
-            if owned_screenshot:
-                delete_temp_screenshot(screenshot_path)
-        if roi:
-            x, y, w, h = roi
-            img = img.crop((x, y, x + w, y + h))
         original_img = img.copy()
 
         def candidates():
@@ -436,6 +475,19 @@ def _parse_utc_candidate(text: str) -> Optional[Tuple[int, int, int, int, int]]:
     return parse_utc_text(text.translate(_DIGIT_CONFUSIONS))
 
 
+def _parse_utc_and_log(text, suffix=""):
+    """Parse the UTC clock and log a successful read with the given suffix."""
+    parsed = _parse_utc_candidate(text)
+    if parsed is None:
+        return None
+    month, day, hour, minute, second = parsed
+    log_message(
+        f"Detected UTC clock on screen{suffix}: {month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}",
+        level="info",
+    )
+    return parsed
+
+
 def read_screen_utc_time(
     instance_index: int,
     roi: Optional[Tuple[int, int, int, int]] = None,
@@ -459,62 +511,37 @@ def read_screen_utc_time(
     Returns:
         tuple or None: (month, day, hour, minute, second) if detected, None otherwise.
     """
-    from wosutil.emulator.emulator_manager import delete_temp_screenshot, take_screenshot
-
     original_img: Optional[Image.Image] = None
     processed_img: Optional[Image.Image] = None
 
     try:
-        screenshot_path = take_screenshot(instance_index)
-        if not screenshot_path:
+        img = _load_roi_image(instance_index, roi)
+        if img is None:
             log_message("Could not take screenshot for UTC clock OCR.", level="error")
             return None
-        try:
-            with Image.open(screenshot_path) as opened_img:
-                img = opened_img.copy()
-        finally:
-            delete_temp_screenshot(screenshot_path)
-        if roi:
-            x, y, w, h = roi
-            img = img.crop((x, y, x + w, y + h))
         original_img = img.copy()
 
         last_text = ""
         text, score = ocr.read_line(_pil_to_bgr(original_img))
         if score >= ocr.MIN_SCORE:
             last_text = text
-            parsed = _parse_utc_candidate(text)
+            parsed = _parse_utc_and_log(text)
             if parsed is not None:
-                month, day, hour, minute, second = parsed
-                log_message(
-                    f"Detected UTC clock on screen: {month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}",
-                    level="info",
-                )
                 return parsed
 
         lines = ocr.read_lines(_pil_to_bgr(original_img))
         if lines:
             last_text = " ".join(line_text for line_text, _box in lines)
-            parsed = _parse_utc_candidate(last_text)
+            parsed = _parse_utc_and_log(last_text)
             if parsed is not None:
-                month, day, hour, minute, second = parsed
-                log_message(
-                    f"Detected UTC clock on screen: {month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}",
-                    level="info",
-                )
                 return parsed
 
         processed_img = _preprocess_gray_text(original_img)
         text, score = ocr.read_line(_pil_to_bgr(processed_img))
         if score >= ocr.MIN_SCORE:
             last_text = text
-            parsed = _parse_utc_candidate(text)
+            parsed = _parse_utc_and_log(text, " (grayscale)")
             if parsed is not None:
-                month, day, hour, minute, second = parsed
-                log_message(
-                    f"Detected UTC clock on screen (grayscale): {month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}",
-                    level="info",
-                )
                 return parsed
 
         log_message(
@@ -572,21 +599,11 @@ def find_first_non_zero_digit_position(instance_index: int, roi: Optional[Tuple[
     Returns:
         tuple or None: (x, y) absolute screen center of the first non-zero digit, or None.
     """
-    from wosutil.emulator.emulator_manager import delete_temp_screenshot, take_screenshot
-
-    screenshot_path = take_screenshot(instance_index)
-    if not screenshot_path:
+    img = _load_roi_image(instance_index, roi)
+    if img is None:
         log_message("Could not take screenshot to detect a non-zero digit.", "error")
         return None
     try:
-        try:
-            with Image.open(screenshot_path) as opened_img:
-                img = opened_img.copy()
-        finally:
-            delete_temp_screenshot(screenshot_path)
-        if roi:
-            x, y, w, h = roi
-            img = img.crop((x, y, x + w, y + h))
         position = _find_first_non_zero_digit_on_image(img)
         if position is None:
             return None
@@ -771,16 +788,12 @@ def read_text_lines_on_screen(
         list: (line text, (x, y, w, h)) pairs for every recognized text line,
             in full-screen coordinates.
     """
-    img_bgr = cv2.imread(screenshot_path)
-    if img_bgr is None:
+    loaded = _load_screenshot_bgr(screenshot_path, roi)
+    if loaded is None:
         return []
-    if roi:
-        x, y, w, h = roi
-        img_bgr = img_bgr[y : y + h, x : x + w]
+    img_bgr, offset_x, offset_y = loaded
     lines = ocr.read_lines(img_bgr)
-    if roi:
-        lines = [(text, (box[0] + x, box[1] + y, box[2], box[3])) for text, box in lines]
-    return lines
+    return [(text, (box[0] + offset_x, box[1] + offset_y, box[2], box[3])) for text, box in lines]
 
 
 def find_all_text_on_image(img: Image.Image, target: str) -> List[Tuple[int, int, int, int]]:
@@ -864,14 +877,12 @@ def find_text_on_screen(
             (False, None) otherwise.
     """
     try:
-        img_bgr = cv2.imread(screenshot_path)
-        if img_bgr is None:
+        loaded = _load_screenshot_bgr(screenshot_path, roi)
+        if loaded is None:
             msg = f"Error loading screenshot: {screenshot_path}"
             log_message(msg, level="error")
             return False, None
-        if roi:
-            x, y, w, h = roi
-            img_bgr = img_bgr[y : y + h, x : x + w]
+        img_bgr, offset_x, offset_y = loaded
         img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
         found, box = find_text_on_image(img, target, last=last)
         if not found and debug_label is not None and instance_index is not None:
@@ -879,8 +890,8 @@ def find_text_on_screen(
             log_message(f"OCR lines while looking for '{target}': {lines_text}", level="debug")
             processed = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
             _save_ocr_debug_images(debug_label, instance_index, img, processed)
-        if found and box is not None and roi:
-            box = (box[0] + roi[0], box[1] + roi[1], box[2], box[3])
+        if found and box is not None:
+            box = (box[0] + offset_x, box[1] + offset_y, box[2], box[3])
         return found, box
     except Exception as e:
         msg = f"Error in text search: {e}"
@@ -905,16 +916,12 @@ def find_all_text_on_screen(
         list: Every matched (x, y, w, h) box in full-screen coordinates.
     """
     try:
-        img_bgr = cv2.imread(screenshot_path)
-        if img_bgr is None:
+        loaded = _load_screenshot_bgr(screenshot_path, roi)
+        if loaded is None:
             msg = f"Error loading screenshot: {screenshot_path}"
             log_message(msg, level="error")
             return []
-        offset_x = offset_y = 0
-        if roi:
-            x, y, w, h = roi
-            img_bgr = img_bgr[y : y + h, x : x + w]
-            offset_x, offset_y = x, y
+        img_bgr, offset_x, offset_y = loaded
         img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
         boxes = find_all_text_on_image(img, target)
         return [(box[0] + offset_x, box[1] + offset_y, box[2], box[3]) for box in boxes]
