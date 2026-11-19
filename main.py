@@ -1,13 +1,9 @@
-"""Main entry point for WoS Util application.
+"""Main entry point for WoS Util.
 
-Launches the GUI for Whiteout Survival automation tool.
+Launches the native desktop shell (pywebview/WebView2).
 """
 
-from wosutil.gui.gui_main import run_gui
-from wosutil.utils import setup_logging
-
-# Configure console and file logging once, before anything emits records.
-setup_logging()
+from wosutil.ui.main import run
 
 if __name__ == "__main__":
-    run_gui()
+    raise SystemExit(run())

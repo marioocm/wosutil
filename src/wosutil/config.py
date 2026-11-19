@@ -46,6 +46,17 @@ def _templates_dir() -> str:
     return os.path.join(_app_dir(), "templates")
 
 
+def _templates_write_dir() -> str:
+    """Return the writable templates directory.
+
+    The bundled templates folder is read-only, so templates created from the
+    desktop tool go next to the user data in that case.
+    """
+    if _is_frozen():
+        return os.path.join(_app_dir(), "templates")
+    return _templates_dir()
+
+
 # --- Paths Configuration ---
 MUMU_BASE_PATH = os.path.join("C:", os.sep, "Program Files", "Netease", "MuMuPlayer", "nx_main")
 MUMU_ADB_PATH = os.path.join(MUMU_BASE_PATH, "adb.exe")
@@ -73,6 +84,7 @@ LDPLAYER_INSTANCE_CONFIG_DIR = os.path.join(LDPLAYER_BASE_PATH, "vms", "config")
 PROJECT_ROOT = _app_dir()
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 TEMPLATES_DIR = _templates_dir()
+TEMPLATES_WRITE_DIR = _templates_write_dir()
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 LOG_FILE = os.path.join(LOG_DIR, time.strftime("wosutil_%Y%m%d_%H%M%S.log"))
 DEBUG_DIR = os.path.join(PROJECT_ROOT, "debug")

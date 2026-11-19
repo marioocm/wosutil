@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 r"""PyInstaller spec: single-file, windowed WosUtil.exe.
 
-RapidOCR models, ONNX Runtime binaries and the templates folder are bundled.
-data/, logs/ and debug/ are written to %LOCALAPPDATA%\WosUtil at runtime (see
-config._app_dir).
+The native pywebview/WebView2 shell, the UI bundle, RapidOCR models, ONNX
+Runtime binaries and the templates folder are bundled. data/, logs/ and debug/
+are written to %LOCALAPPDATA%\WosUtil at runtime (see config._app_dir).
 """
 
 import os
@@ -26,11 +26,19 @@ a = Analysis(
         *rapidocr_datas,
         *webui_datas,
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        "webview",
+        "webview.platforms.winforms",
+        "webview.platforms.edgechromium",
+        "clr",
+        "clr_loader",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        "tkinter",
+        "_tkinter",
         "rapidocr.inference_engine.mnn",
         "rapidocr.inference_engine.openvino",
         "rapidocr.inference_engine.paddle",

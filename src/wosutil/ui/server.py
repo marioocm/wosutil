@@ -19,6 +19,7 @@ from wosutil.app.preferences import (
     INTEL_MODE_LABELS,
     MYSTERY_SHOP_LEVEL_LABELS,
 )
+from wosutil.app.templates import TemplateError, TemplateService
 from wosutil.preferences import (
     BEAR_RALLY_CALL_MARCH_MAX,
     BEAR_RALLY_CALL_MARCH_MIN,
@@ -175,6 +176,7 @@ class AppServer:
         self.service = service
         self.bundle = bundle
         self.startup = dict(startup or {})
+        self.templates = TemplateService()
         self.token = token or secrets.token_urlsafe(32)
         self.host = host
         self._requested_port = port
@@ -403,6 +405,25 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
             self._json(self.app.preferences_payload())
             return
 
+        if path == "/api/template/state":
+            if not self._authorized(query):
+                return
+            self.app.touch()
+            self._json({"ok": True, "image": self.app.templates.info()})
+            return
+
+        if path == "/api/template/image":
+            if not self._authorized(query):
+                return
+            self.app.touch()
+            try:
+                data = self.app.templates.png()
+            except TemplateError as exc:
+                self._json({"ok": False, "error": str(exc)}, status=404)
+                return
+            self._send_bytes(data, "image/png", "no-store")
+            return
+
         if path == "/api/events":
             if not self._authorized(query):
                 return
@@ -452,6 +473,66 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": str(exc)})
                 return
             self._json({"ok": True, "path": selected})
+            return
+
+        if path == "/api/template/capture":
+            payload = self._read_json()
+            if payload is None:
+                return
+            try:
+                info = self.app.templates.capture(_require_int(payload, "index"))
+            except (TemplateError, ValueError) as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True, "image": info})
+            return
+
+        if path == "/api/template/load":
+            payload = self._read_json()
+            if payload is None:
+                return
+            try:
+                info = self.app.templates.load(str(payload.get("path") or ""))
+            except TemplateError as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True, "image": info})
+            return
+
+        if path == "/api/template/save":
+            payload = self._read_json()
+            if payload is None:
+                return
+            try:
+                saved = self.app.templates.save_crop(payload.get("roi"), str(payload.get("path") or ""))
+            except TemplateError as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True, "path": saved})
+            return
+
+        if path == "/api/template/save-full":
+            payload = self._read_json()
+            if payload is None:
+                return
+            try:
+                saved = self.app.templates.save_full(str(payload.get("path") or ""))
+            except TemplateError as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True, "path": saved})
+            return
+
+        if path == "/api/template/copy":
+            payload = self._read_json()
+            if payload is None:
+                return
+            try:
+                self.app.templates.copy(str(payload.get("text") or ""))
+            except TemplateError as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True})
             return
 
         self._discard_body()

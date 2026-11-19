@@ -107,13 +107,13 @@ class RecoverableRotatingFileHandler(RotatingFileHandler):
 def setup_logging(log_to_file: bool = True) -> None:
     """Configure console and optional file logging.
 
-    Called once by the application entry points (``main.py``,
-    ``wosutil.gui.gui_main.run_gui`` and the template creator); module code
-    only emits log records through :func:`log_message` and never configures
-    handlers, so importing the package has no side effects.
+    Called once by the application entry points (``main.py`` and
+    ``wosutil.ui.main``); module code only emits log records through
+    :func:`log_message` and never configures handlers, so importing the
+    package has no side effects.
 
     Writes to ``logs/wosutil_<timestamp>.log`` so agents and users can tail the
-    same file without relying on the GUI or a specific terminal session.
+    same file without relying on a window or a specific terminal session.
 
     Args:
         log_to_file: If True, also write logs to the rotating file handler.

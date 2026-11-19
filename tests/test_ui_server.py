@@ -9,6 +9,8 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from wosutil.app.actions import ActionResult
 from wosutil.app.events import Subscription
 from wosutil.ui.bundle import load_ui_bundle
@@ -122,6 +124,11 @@ class ServerTestCase(unittest.TestCase):
         (bundle_dir / "index.html").write_text('<html><template id="instance-template"></template></html>', encoding="utf-8")
         (bundle_dir / "_astro" / "app.css").write_text("body{}", encoding="utf-8")
         (self.base / "secret.txt").write_text("secret", encoding="utf-8")
+        self.templates_dir = self.base / "templates"
+        self.templates_dir.mkdir()
+        self._template_patch = patch("wosutil.app.templates.TEMPLATES_WRITE_DIR", str(self.templates_dir))
+        self._template_patch.start()
+        self.addCleanup(self._template_patch.stop)
 
         self.service = FakeService()
         self.server = AppServer(
@@ -241,6 +248,30 @@ class ServerTestCase(unittest.TestCase):
         status, body, _headers = self._post("/api/pick-path", {"kind": "whatever"})
         self.assertEqual(status, 200)
         self.assertFalse(json.loads(body)["ok"])
+
+    def test_template_loads_serves_and_saves_an_image(self):
+        """The template endpoints load, stream and crop the current image."""
+        source = self.base / "source.png"
+        Image.new("RGB", (40, 30), (10, 20, 30)).save(source)
+
+        status, body, _headers = self._post("/api/template/load", {"path": str(source)})
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        self.assertEqual((payload["image"]["width"], payload["image"]["height"]), (40, 30))
+
+        status, body, headers = self._get(f"/api/template/image?rev=1&t={self.TOKEN}", token=False)
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"\x89PNG"))
+
+        status, body, _headers = self._post("/api/template/save", {"path": "crop", "roi": [0, 0, 10, 10]})
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"])
+        saved = Path(payload["path"])
+        self.assertTrue(saved.is_file())
+        with Image.open(saved) as image:
+            self.assertEqual(image.size, (10, 10))
 
     def test_non_ascii_tokens_are_rejected(self):
         """A malformed non-ASCII token is refused instead of raising."""

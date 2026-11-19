@@ -4,32 +4,34 @@
 Python automation tool for Whiteout Survival mobile game using Android emulators (MuMu, BlueStacks, LDPlayer). Windows-only.
 
 ## Structure
-- `main.py` → entry point, launches Tkinter GUI
-- `src/wosutil/` → pip-installable package (gui/, emulator/, tool/, template_creator.py)
-- `src/wosutil/ui/` → local HTTP server, browser launcher and UI bundle resolution/installation for the desktop shell
+- `main.py` → entry point, launches the native desktop shell
+- `src/wosutil/` → pip-installable package (app/, emulator/, tool/, ui/)
+- `src/wosutil/ui/` → local HTTP server, pywebview window, browser fallback and UI bundle resolution/installation
+- `src/wosutil/app/templates.py` → template capture/crop/save use cases for the Templates screen
 - `ui.lock.json` → pinned UI manifest URL and SHA-256 consumed by `scripts/fetch_ui.py`
 - `templates/` → PNG images for OpenCV template matching
 - `data/` → JSON config (instance_cache.json, profiles.json, etc.), auto-created at runtime
 - `tests/` → pytest-based tests
-- `wosutil.spec` + `scripts/build.ps1` → single-file exe build (bundles RapidOCR + ONNX Runtime)
+- `wosutil.spec` + `scripts/build.ps1` → single-file exe build (bundles pywebview/WebView2, RapidOCR + ONNX Runtime and the UI)
 
 ## Key quirks
 - Pip-installable: `pip install -e .` (see `pyproject.toml`). Requires Python >= 3.11 (ONNX Runtime).
-- `wosutil-web` opens a **native pywebview window** (WebView2 on Windows, WebKitGTK/PyGObject on Linux, WKWebView on macOS). It is not a browser tab: no browser chrome, no browser context menu and no find/save/print shortcuts. The old Edge/Chrome `--app` launcher is only a fallback when pywebview is unavailable or cannot start. `WOSUTIL_UI_DEBUG=1` opens the webview devtools.
+- `wosutil` and the exe launch the **native pywebview window** (WebView2 on Windows, WebKitGTK/PyGObject on Linux, WKWebView on macOS). It is not a browser tab: no browser chrome, no browser context menu and no find/save/print shortcuts. The old Edge/Chrome `--app` launcher is only a fallback when pywebview is unavailable or cannot start. `WOSUTIL_UI_DEBUG=1` opens the webview devtools.
+- `template-creator` opens the same shell directly on the Templates section (`WOSUTIL_UI_SECTION=templates`); there is no separate Tkinter window.
 - Linux needs the WebKitGTK/PyGObject stack for the native window; otherwise the shell falls back to the default browser. Python 3.15 is expected to work because pythonnet publishes cp315 wheels, but validate it with the release interpreter before switching.
 - The UI bundle is built and published by `wosutil-site`; `scripts/fetch_ui.py` downloads the manifest pinned in `ui.lock.json` into `src/wosutil/webui/static/` (gitignored). `WOSUTIL_UI_DIR` overrides the bundle directory for development. The manifest's `apiVersion` must match `wosutil.ui.contract.API_VERSION`; incompatible bundles fall back to a built-in page.
-- On Windows the shell watches the app window (`wosutil/ui/windows.py`): it focuses it on launch and exits when it closes. The page heartbeat is the fallback on other platforms or if the watcher is unavailable.
+- The Templates screen loads/captures an image, selects an ROI and saves PNG crops under `TEMPLATES_WRITE_DIR` (repo `templates/` in source mode, `%LOCALAPPDATA%\WosUtil\templates` in the frozen exe). It uses the same active backend as the automation tool.
 - The preferences screen reads `GET /api/preferences` (values, task catalog, labels and bounds come from the Python constants) and asks `POST /api/pick-path` for native folder/file dialogs. Clients that edit one emulator's paths keep the others untouched.
-- `wosutil` still launches the Tkinter shell. The web shell is portable (Windows/macOS/Linux), but the emulator backends and `adb.exe` are Windows-only; Linux would open the UI without being able to automate anything until a backend is ported.
-- PyInstaller bundles the fetched UI as `webui` (`wosutil.spec`), and `scripts/build.ps1` runs the fetch step first.
+- The shell is portable (Windows/macOS/Linux), but the emulator backends and `adb.exe` are Windows-only; Linux would open the UI without being able to automate anything until a backend is ported.
+- PyInstaller bundles the fetched UI as `webui`, pywebview/WebView2 through the hooks-contrib hooks, and excludes Tkinter (`wosutil.spec`); `scripts/build.ps1` runs the fetch step first.
 - `data/*` is gitignored; the `data/` directory and its JSON files are auto-created at runtime (`save_json_file` in `src/wosutil/utils.py`).
 - Linting/formatter: ruff, typechecking: mypy (see `pyproject.toml`).
 - Agents **must run** full check after code changes.
 - `src/wosutil/adb.py` is the pure ADB transport (`AdbClient`); it knows nothing about emulators. Each emulator backend owns one client and only supplies the ADB serial per instance.
 - All emulator-specific code (instance discovery, start/stop, ADB serial and command shape) lives in `src/wosutil/emulator/backends.py`; add a new emulator by implementing `EmulatorBackend` and registering it in `create_backend`. `src/wosutil/emulator/emulator_manager.py` only exposes game/ADB actions on the active backend.
-- `src/wosutil/tool/tool_instances_controller.py` schedules due instances: an instance is opened when its next task is within `TASK_STARTUP_WINDOW_SECONDS` and closed when the next one is farther than `INSTANCE_KEEPALIVE_WINDOW_SECONDS`. There is no shared queue to maintain; add scheduling behavior there. The controller receives a plain `(instance_index, profile_name)` selection and does not depend on Tkinter.
+- `src/wosutil/tool/tool_instances_controller.py` schedules due instances: an instance is opened when its next task is within `TASK_STARTUP_WINDOW_SECONDS` and closed when the next one is farther than `INSTANCE_KEEPALIVE_WINDOW_SECONDS`. There is no shared queue to maintain; add scheduling behavior there. The controller receives a plain `(instance_index, profile_name)` selection and does not depend on a UI toolkit.
 - `ProfileManager` only owns persisted profiles; per-instance runtime state is `InstanceState` wrapped by `InstanceRuntime` in the controller.
-- Instance status and tooltip formatting lives in `src/wosutil/gui/gui_instance_status.py` (no Tkinter), so it can be tested without a GUI.
+- Instance status and tooltip formatting lives in `src/wosutil/app/presentation.py` (no GUI toolkit), so it can be tested without a window.
 - Emulator paths hardcoded to default installs (MuMu at `C:\Program Files\Netease\MuMuPlayer\`, BlueStacks at `C:\Program Files\BlueStacks_nxt\`, LDPlayer at `C:\LDPlayer\LDPlayer14\`).
 - OCR runs in-process through RapidOCR (`src/wosutil/emulator/ocr.py`) and ONNX Runtime; no system OCR installation is required. The models and YAML routing tables are package data bundled by `wosutil.spec`.
 - In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil`.
@@ -40,7 +42,8 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 ## Commands
 - Install: `.venv/Scripts/pip install -e ".[dev]"`
 - Run app: `python main.py` (or `wosutil` after install)
-- Run desktop shell: `wosutil-web` (or `python -m wosutil.ui.main`)
+- Run Templates directly: `template-creator` (opens the shell on the Templates section)
+- Run desktop shell: `wosutil-web` (same as `wosutil`; kept as an explicit alias)
 - UI dev overrides: `WOSUTIL_UI_PORT`, `WOSUTIL_UI_TOKEN`, `WOSUTIL_UI_URL` and `WOSUTIL_UI_NO_WINDOW` let the shell work against the Astro dev server (see `wosutil-site/AGENTS.md`).
 - Fetch the pinned UI: `python scripts/fetch_ui.py` (`--from-dir ..\wosutil-site\dist\ui` for a local build)
 - Lint: `.venv/Scripts/ruff check .`

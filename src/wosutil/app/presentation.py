@@ -1,7 +1,7 @@
 """Pure formatting helpers for the instance list.
 
-These functions do not touch Tkinter so they can be tested without a GUI and
-reused by any front-end.
+These functions do not touch a GUI toolkit so they can be tested without a
+window and reused by any front-end.
 """
 
 from wosutil.tool.tool_instances_controller import TASK_GROUPING_WINDOW_SECONDS, pick_scheduled_task
