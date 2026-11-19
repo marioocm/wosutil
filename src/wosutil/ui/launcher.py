@@ -21,15 +21,18 @@ def _candidate_browsers() -> list[str]:
     candidates: list[str] = []
     if sys.platform.startswith("win"):
         roots = [os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")]
+        edge_paths: list[str] = []
+        chrome_paths: list[str] = []
         for root in roots:
             if not root:
                 continue
-            candidates.extend(
-                [
-                    os.path.join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
-                    os.path.join(root, "Google", "Chrome", "Application", "chrome.exe"),
-                ]
-            )
+            edge_paths.append(os.path.join(root, "Microsoft", "Edge", "Application", "msedge.exe"))
+            chrome_paths.append(os.path.join(root, "Google", "Chrome", "Application", "chrome.exe"))
+            chrome_paths.append(os.path.join(root, "Chromium", "Application", "chrome.exe"))
+        # Try every Edge location before falling back to another Chromium
+        # browser; the per-root interleave used to pick Chrome over Edge x86.
+        candidates.extend(edge_paths)
+        candidates.extend(chrome_paths)
     elif sys.platform == "darwin":
         candidates.extend(
             [
