@@ -17,10 +17,10 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 ## Key quirks
 - Pip-installable: `pip install -e .` (see `pyproject.toml`). Requires Python >= 3.11 (ONNX Runtime).
 - `wosutil` and the exe launch the **native pywebview window** (WebView2 on Windows, WebKitGTK/PyGObject on Linux, WKWebView on macOS). It is not a browser tab: no browser chrome, no browser context menu and no find/save/print shortcuts. The old Edge/Chrome `--app` launcher is only a fallback when pywebview is unavailable or cannot start. `WOSUTIL_UI_DEBUG=1` opens the webview devtools.
-- `template-creator` opens the same shell directly on the Templates section (`WOSUTIL_UI_SECTION=templates`); there is no separate Tkinter window.
+- `template-creator` (or `WosUtil.exe --template`) opens the **standalone Template Creator window**. It is a development tool, not part of the user-facing shell: its own page (`templates/index.html`) and window, no navigation in the main app.
 - Linux needs the WebKitGTK/PyGObject stack for the native window; otherwise the shell falls back to the default browser. Python 3.15 is expected to work because pythonnet publishes cp315 wheels, but validate it with the release interpreter before switching.
 - The UI bundle is built and published by `wosutil-site`; `scripts/fetch_ui.py` downloads the manifest pinned in `ui.lock.json` into `src/wosutil/webui/static/` (gitignored). `WOSUTIL_UI_DIR` overrides the bundle directory for development. The manifest's `apiVersion` must match `wosutil.ui.contract.API_VERSION`; incompatible bundles fall back to a built-in page.
-- The Templates screen loads/captures an image, selects an ROI and saves PNG crops under `TEMPLATES_WRITE_DIR` (repo `templates/` in source mode, `%LOCALAPPDATA%\WosUtil\templates` in the frozen exe). It uses the same active backend as the automation tool.
+- The Templates screen (standalone window) loads/captures an image, selects an ROI and saves PNG crops under `TEMPLATES_WRITE_DIR` (repo `templates/` in source mode, `%LOCALAPPDATA%\WosUtil\templates` in the frozen exe). It uses the same active backend as the automation tool.
 - The preferences screen reads `GET /api/preferences` (values, task catalog, labels and bounds come from the Python constants) and asks `POST /api/pick-path` for native folder/file dialogs. Clients that edit one emulator's paths keep the others untouched.
 - The shell is portable (Windows/macOS/Linux), but the emulator backends and `adb.exe` are Windows-only; Linux would open the UI without being able to automate anything until a backend is ported.
 - PyInstaller bundles the fetched UI as `webui`, pywebview/WebView2 through the hooks-contrib hooks, and excludes Tkinter (`wosutil.spec`); `scripts/build.ps1` runs the fetch step first.
@@ -42,7 +42,7 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 ## Commands
 - Install: `.venv/Scripts/pip install -e ".[dev]"`
 - Run app: `python main.py` (or `wosutil` after install)
-- Run Templates directly: `template-creator` (opens the shell on the Templates section)
+- Run Template Creator: `template-creator` (or `WosUtil.exe --template`)
 - Run desktop shell: `wosutil-web` (same as `wosutil`; kept as an explicit alias)
 - UI dev overrides: `WOSUTIL_UI_PORT`, `WOSUTIL_UI_TOKEN`, `WOSUTIL_UI_URL` and `WOSUTIL_UI_NO_WINDOW` let the shell work against the Astro dev server (see `wosutil-site/AGENTS.md`).
 - Fetch the pinned UI: `python scripts/fetch_ui.py` (`--from-dir ..\wosutil-site\dist\ui` for a local build)

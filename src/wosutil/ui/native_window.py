@@ -1,6 +1,7 @@
 """Native desktop window backed by pywebview (WebView2 on Windows)."""
 
 import contextlib
+import os
 import threading
 from typing import Callable
 
@@ -59,7 +60,28 @@ def run_native_window(url: str, wait_for_stop: Callable[[], object], title: str 
                 window.destroy()
 
         threading.Thread(target=close_when_server_stops, name="WebviewWatch", daemon=True).start()
+
+        # If the WebView2 message loop does not return after the window is
+        # closed (observed while the automation tool keeps worker threads
+        # alive), force the process out after a short grace period.
+        exited = threading.Event()
+        closed = threading.Event()
+
+        def mark_closed(*_args):
+            closed.set()
+
+        with contextlib.suppress(Exception):
+            window.events.closed += mark_closed
+
+        def force_exit():
+            closed.wait()
+            if not exited.wait(5.0):
+                os._exit(0)
+
+        threading.Thread(target=force_exit, name="WebviewExit", daemon=True).start()
+
         webview.start(debug=debug, private_mode=False, storage_path=str(storage))
+        exited.set()
         return True
     except Exception:
         return False

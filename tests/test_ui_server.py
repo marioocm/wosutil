@@ -218,6 +218,11 @@ class ServerTestCase(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("Unknown command", payload["error"])
 
+    def test_url_for_builds_bundle_page_urls(self):
+        """The template window can address a page inside the bundle."""
+        self.assertEqual(self.server.url_for("/"), self.server.url)
+        self.assertTrue(self.server.url_for("templates/index.html").endswith(f"/templates/index.html?t={self.TOKEN}"))
+
     def test_health_is_public(self):
         """Health probes do not need a token."""
         status, body, _headers = self._get("/api/health", token=False)
