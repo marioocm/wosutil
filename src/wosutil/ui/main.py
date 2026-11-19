@@ -57,6 +57,9 @@ def run() -> int:
         server.start()
         service.start()
         window_url = os.environ.get("WOSUTIL_UI_URL") or server.url
+        section = os.environ.get("WOSUTIL_UI_SECTION")
+        if section:
+            window_url = f"{window_url.split('#', 1)[0]}#{section}"
         log_message(f"Desktop UI listening on {server.host}:{server.port}", "info")
 
         if os.environ.get("WOSUTIL_UI_NO_WINDOW") == "1":
@@ -82,6 +85,12 @@ def run() -> int:
         server.stop()
         service.close()
     return 0
+
+
+def run_template() -> int:
+    """Open the desktop shell directly on the Templates section."""
+    os.environ["WOSUTIL_UI_SECTION"] = "templates"
+    return run()
 
 
 if __name__ == "__main__":

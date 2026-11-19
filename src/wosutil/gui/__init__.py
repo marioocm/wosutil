@@ -1,1 +1,0 @@
-"""GUI modules for wosutil."""

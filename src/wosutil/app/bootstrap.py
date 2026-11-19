@@ -1,7 +1,7 @@
 """Composition root for the desktop application.
 
 Builds the profile manager, the task catalog, the emulator backend and the
-headless service. Both the Tkinter shell and the future web shell start here.
+headless service. Both the desktop shell and any future front-end start here.
 """
 
 from dataclasses import dataclass

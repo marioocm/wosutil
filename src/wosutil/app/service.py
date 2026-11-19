@@ -105,7 +105,7 @@ class WosUtilService:
         """Return the full view state.
 
         The result only contains JSON-serializable values so the same snapshot
-        can feed the Tkinter shell and the future web front-end.
+        can feed the desktop shell and any future front-end.
         """
         now = time.time()
         with self._lock:
