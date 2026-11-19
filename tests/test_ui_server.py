@@ -249,6 +249,43 @@ class ServerTestCase(unittest.TestCase):
             urllib.request.urlopen(request, timeout=5)
         self.assertEqual(caught.exception.code, 403)
 
+    def test_post_bodies_do_not_desync_keep_alive(self):
+        """A POST body the endpoint ignores must be consumed before the next request."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.port, timeout=5)
+        try:
+            connection.request(
+                "POST",
+                f"/api/heartbeat?t={self.TOKEN}",
+                body="{}",
+                headers={"Content-Type": "application/json", "X-WosUtil-Token": self.TOKEN},
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+
+            connection.request("GET", "/api/preferences", headers={"X-WosUtil-Token": self.TOKEN})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+        finally:
+            connection.close()
+
+    def test_unauthorized_post_bodies_are_drained(self):
+        """An unauthorized body must not poison the next request either."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.port, timeout=5)
+        try:
+            connection.request("POST", "/api/heartbeat", body="{}", headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+
+            connection.request("GET", "/api/health")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+        finally:
+            connection.close()
+
     def test_events_stream_starts_with_state_and_history(self):
         """The SSE connection receives the current state before the log tail."""
         connection = http.client.HTTPConnection("127.0.0.1", self.server.port, timeout=5)

@@ -425,6 +425,9 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         query = parse_qs(parts.query)
         path = parts.path
         if not self._authorized(query):
+            # Drain the body even on auth failures, otherwise the leftover
+            # bytes desynchronize the next request on this keep-alive socket.
+            self._discard_body()
             return
         self.app.touch()
 
@@ -450,6 +453,8 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
                 return
             self._json({"ok": True, "path": selected})
             return
+
+        self._discard_body()
 
         if path == "/api/heartbeat":
             self.app.resume()
@@ -571,6 +576,17 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": "Expected a JSON object."}, status=400)
             return None
         return payload
+
+    def _discard_body(self) -> None:
+        """Consume an unread request body so keep-alive stays in sync."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if length <= 0 or length > MAX_BODY_BYTES:
+            return
+        with contextlib.suppress(OSError):
+            self.rfile.read(length)
 
     def _json(self, payload: dict, status: int = 200) -> None:
         """Send a JSON response."""
