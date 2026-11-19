@@ -109,6 +109,13 @@ class ServiceTestCase(unittest.TestCase):
         self.assertEqual(saved["max_emulators"], 3)
         self.assertEqual(saved["0"], {"checked": False, "profile": "All"})
 
+    def test_deleted_profiles_fall_back_to_the_first_one(self):
+        """A removed profile must not leave a dangling name in the rows or the run."""
+        service = self._make_service()
+        service._selection["0"]["profile"] = "Missing"
+        self.assertEqual(service.snapshot()["instances"][0]["profile"], "All")
+        self.assertEqual(service.selected_instances(), [(0, "All")])
+
     def test_emulator_change_is_refused_while_running(self):
         """Swapping the backend during a run would break the old workers."""
         service = self._make_service()

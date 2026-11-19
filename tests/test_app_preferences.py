@@ -63,6 +63,16 @@ class ApplyPreferencesTests(unittest.TestCase):
         self.assertEqual(tasks["a"]["priority"], 2)
         self.assertEqual(captured["task_priorities"], {"b": 1, "a": 2})
 
+    def test_emulator_paths_omitted_from_the_payload_are_preserved(self):
+        """Editing one emulator must not reset the others to their defaults."""
+        result, saved, _logs = self._apply(
+            {"emulator": "mumu", "emulator_paths": {"mumu": {"base_path": r"D:\MuMu"}}},
+            saved={"emulator_paths": {"bluestacks": {"base_path": r"D:\BlueStacks", "config_path": r"D:\BlueStacks\bluestacks.conf"}}},
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(saved["emulator_paths"]["bluestacks"]["base_path"], r"D:\BlueStacks")
+        self.assertEqual(saved["emulator_paths"]["bluestacks"]["config_path"], r"D:\BlueStacks\bluestacks.conf")
+
     def test_emulator_change_is_reported(self):
         """A different emulator marks the backend for replacement."""
         result, saved, _logs = self._apply({"emulator": "ldplayer"}, saved={"emulator": "mumu"})

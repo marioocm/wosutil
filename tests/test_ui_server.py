@@ -7,6 +7,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 from wosutil.app.actions import ActionResult
 from wosutil.app.events import Subscription
@@ -23,7 +24,22 @@ class FakeService:
 
     def snapshot(self):
         """Return a state payload."""
-        return {"instances": [], "profiles": {}, "tool_running": False, "max_instances": 2}
+        return {
+            "instances": [],
+            "profiles": {},
+            "tool_running": False,
+            "max_instances": 2,
+            "emulator": "mumu",
+            "emulator_options": [{"code": "mumu", "label": "MuMu Player", "installed": True}],
+        }
+
+    def preferences(self):
+        """Return a preferences view."""
+        return {"emulator": "mumu", "emulator_paths": {"mumu": {"base_path": "C:/MuMu"}}}
+
+    def task_catalog(self):
+        """Return one task."""
+        return [{"id": "a", "name": "Task A", "description": "", "priority": 1}]
 
     def logs(self, limit=300):
         """Return no log history."""
@@ -200,6 +216,31 @@ class ServerTestCase(unittest.TestCase):
         status, body, _headers = self._get("/api/health", token=False)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["apiVersion"], 1)
+
+    def test_preferences_expose_labels_bounds_and_tasks(self):
+        """The form gets every label and bound from the Python side."""
+        status, body, _headers = self._get("/api/preferences")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["options"]["gather"][0], "meat")
+        self.assertEqual(payload["bounds"]["bearTrapCount"], 6)
+        self.assertIn("mumu", payload["labels"]["pathFields"])
+        self.assertEqual(payload["tasks"][0]["id"], "a")
+        self.assertEqual(payload["activeEmulator"], "mumu")
+
+    def test_pick_path_returns_the_native_selection(self):
+        """The native picker result is forwarded to the UI."""
+        with patch("wosutil.ui.server.pick_path", return_value=r"C:\Games") as picker:
+            status, body, _headers = self._post("/api/pick-path", {"kind": "directory", "title": "Folder"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "path": r"C:\Games"})
+        picker.assert_called_once_with("directory", "Folder", "")
+
+    def test_pick_path_rejects_unknown_kinds(self):
+        """Only directory and file pickers are available."""
+        status, body, _headers = self._post("/api/pick-path", {"kind": "whatever"})
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(body)["ok"])
 
     def test_non_ascii_tokens_are_rejected(self):
         """A malformed non-ASCII token is refused instead of raising."""

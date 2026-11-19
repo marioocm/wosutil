@@ -140,15 +140,21 @@ def apply_preferences(values: dict, task_definitions: dict, log_message) -> Pref
     raw_paths = values.get("emulator_paths")
     if not isinstance(raw_paths, dict):
         raw_paths = {}
+    existing_paths = get_emulator_paths(preferences)
     configured_paths: dict = {}
     for code, fields in EMULATOR_PATH_FIELDS.items():
-        source = raw_paths.get(code, {})
+        source = raw_paths.get(code)
         if not isinstance(source, dict):
             source = {}
         configured_paths[code] = {}
         for key, _label, _kind in fields:
             value = source.get(key)
-            configured_paths[code][key] = value.strip() if isinstance(value, str) else ""
+            if isinstance(value, str):
+                configured_paths[code][key] = value.strip()
+            else:
+                # A client that only edits one emulator must not wipe the
+                # custom paths of the others.
+                configured_paths[code][key] = existing_paths.get(code, {}).get(key, "")
     preferences["emulator_paths"] = configured_paths
     emulator_paths = get_emulator_paths(preferences)
     preferences["emulator_paths"] = emulator_paths
