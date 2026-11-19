@@ -202,7 +202,16 @@ class AppServer:
     @property
     def url(self) -> str:
         """Return the URL the desktop window must open."""
-        return f"http://{self.host}:{self._port}/?t={self.token}"
+        return self.url_for("/")
+
+    def url_for(self, path: str = "/") -> str:
+        """Return an absolute URL for a page inside the UI bundle.
+
+        Args:
+            path: Bundle-relative path such as ``templates/index.html``.
+        """
+        normalized = path.lstrip("/")
+        return f"http://{self.host}:{self._port}/{normalized}?t={self.token}"
 
     @property
     def ui_version(self) -> str:

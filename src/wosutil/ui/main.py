@@ -3,13 +3,14 @@
 import os
 import sys
 import threading
+from contextlib import suppress
 
 from wosutil.app.bootstrap import build_app_context
 from wosutil.ui.bundle import resolve_ui_bundle
 from wosutil.ui.launcher import open_app_window
 from wosutil.ui.native_window import run_native_window
 from wosutil.ui.server import AppServer
-from wosutil.ui.windows import APP_WINDOW_TITLE, watch_app_window
+from wosutil.ui.windows import watch_app_window
 from wosutil.utils import log_message, setup_logging
 
 
@@ -22,13 +23,26 @@ def _env_port() -> int:
 
 
 def run() -> int:
-    """Start the service, the local server and the app window.
+    """Start the main desktop shell."""
+    return _run(template_mode=False)
+
+
+def run_template() -> int:
+    """Start the standalone Template Creator window."""
+    return _run(template_mode=True)
+
+
+def _run(template_mode: bool) -> int:
+    """Start the service, the local server and the selected window.
+
+    Args:
+        template_mode: True for the standalone Template Creator page.
 
     Returns:
         int: Process exit code.
     """
     setup_logging()
-    log_message("Starting desktop shell...", "info")
+    log_message("Starting template creator..." if template_mode else "Starting desktop shell...", "info")
     context = build_app_context(log_message)
     service = context.service
     if context.needs_emulator_choice:
@@ -56,16 +70,18 @@ def run() -> int:
     try:
         server.start()
         service.start()
-        window_url = os.environ.get("WOSUTIL_UI_URL") or server.url
-        section = os.environ.get("WOSUTIL_UI_SECTION")
-        if section:
-            window_url = f"{window_url.split('#', 1)[0]}#{section}"
+        if template_mode:
+            window_url = server.url_for("templates/index.html")
+            window_title = "WoS Util · Template Creator"
+        else:
+            window_url = os.environ.get("WOSUTIL_UI_URL") or server.url
+            window_title = "WoS Util"
         log_message(f"Desktop UI listening on {server.host}:{server.port}", "info")
 
         if os.environ.get("WOSUTIL_UI_NO_WINDOW") == "1":
             log_message("Desktop UI running without a window (WOSUTIL_UI_NO_WINDOW=1).", "info")
             server.wait()
-        elif run_native_window(window_url, wait_for_stop=server.wait, debug=os.environ.get("WOSUTIL_UI_DEBUG") == "1"):
+        elif run_native_window(window_url, wait_for_stop=server.wait, title=window_title, debug=os.environ.get("WOSUTIL_UI_DEBUG") == "1"):
             log_message("Desktop UI window closed.", "info")
         else:
             log_message("Native window unavailable; falling back to the browser app window.", "warning")
@@ -77,20 +93,17 @@ def run() -> int:
                 if sys.platform.startswith("win"):
                     # The fallback window belongs to another process: watch it
                     # so the app exits when the user closes it.
-                    threading.Thread(target=watch_app_window, args=(APP_WINDOW_TITLE, server.stop), name="AppWindowWatch", daemon=True).start()
+                    threading.Thread(target=watch_app_window, args=(window_title, server.stop), name="AppWindowWatch", daemon=True).start()
                 server.wait()
     except KeyboardInterrupt:
         pass
     finally:
+        with suppress(Exception):
+            if service.snapshot().get("tool_running"):
+                service.stop_tool()
         server.stop()
         service.close()
     return 0
-
-
-def run_template() -> int:
-    """Open the desktop shell directly on the Templates section."""
-    os.environ["WOSUTIL_UI_SECTION"] = "templates"
-    return run()
 
 
 if __name__ == "__main__":
