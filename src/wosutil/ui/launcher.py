@@ -71,6 +71,9 @@ def open_app_window(url: str) -> bool:
         "--no-default-browser-check",
         "--disable-sync",
         "--disable-background-mode",
+        "--lang=en-US",
+        "--disable-translate",
+        "--disable-features=Translate,TranslateUI,msEdgeTranslate",
         f"--window-size={WINDOW_SIZE}",
     ]
 

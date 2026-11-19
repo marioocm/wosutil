@@ -13,7 +13,14 @@ def _user32():
     """Return the Win32 user32 library, or None outside Windows."""
     if not sys.platform.startswith("win"):
         return None
-    return ctypes.windll.user32
+    return ctypes.__dict__["windll"].user32
+
+
+def _kernel32():
+    """Return the Win32 kernel32 library, or None outside Windows."""
+    if not sys.platform.startswith("win"):
+        return None
+    return ctypes.__dict__["windll"].kernel32
 
 
 def find_app_window(title: str = APP_WINDOW_TITLE) -> Optional[int]:
@@ -50,16 +57,39 @@ def find_app_window(title: str = APP_WINDOW_TITLE) -> Optional[int]:
 
 
 def focus_window(hwnd: int) -> None:
-    """Bring a window to the foreground (best effort).
+    """Bring a window to the foreground.
+
+    Windows normally blocks ``SetForegroundWindow`` from a background
+    process. Attaching the caller's input to the target and foreground
+    threads lets the browser-created window take focus, so the first click on
+    a button is not spent activating the window.
 
     Args:
         hwnd: Window handle returned by :func:`find_app_window`.
     """
     user32 = _user32()
-    if user32 is None:
+    kernel32 = _kernel32()
+    if user32 is None or kernel32 is None:
         return
-    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-    user32.SetForegroundWindow(hwnd)
+
+    current_thread = kernel32.GetCurrentThreadId()
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+    foreground = user32.GetForegroundWindow()
+    foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+
+    attached = []
+    for thread in {target_thread, foreground_thread}:
+        if thread and thread != current_thread and user32.AttachThreadInput(current_thread, thread, True):
+            attached.append(thread)
+
+    try:
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetFocus(hwnd)
+    finally:
+        for thread in attached:
+            user32.AttachThreadInput(current_thread, thread, False)
 
 
 def watch_app_window(
@@ -73,6 +103,8 @@ def watch_app_window(
 
     The browser-created window is not ours, so this watcher is what makes the
     app exit when the user closes it, independently of the page unload events.
+    It focuses twice because the first attempt can happen before the window is
+    fully mapped.
 
     Args:
         title: Exact app window title.
@@ -84,6 +116,7 @@ def watch_app_window(
     finder = find_window or find_app_window
     focuser = focus or focus_window
     seen = False
+    focus_attempts = 0
     missing = 0
 
     while True:
@@ -92,6 +125,10 @@ def watch_app_window(
             if not seen:
                 seen = True
                 focuser(hwnd)
+                focus_attempts = 1
+            elif focus_attempts < 2:
+                focuser(hwnd)
+                focus_attempts += 1
             missing = 0
         elif seen:
             missing += 1

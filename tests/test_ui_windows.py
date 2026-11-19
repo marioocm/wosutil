@@ -42,5 +42,5 @@ class WatchAppWindowTests(unittest.TestCase):
             poll_seconds=0,
         )
 
-        self.assertEqual(focused, [1])
+        self.assertEqual(focused, [1, 1])
         self.assertEqual(closed, [True])
