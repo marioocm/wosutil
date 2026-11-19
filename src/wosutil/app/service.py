@@ -123,6 +123,9 @@ class WosUtilService:
             index = instance["index"]
             entry = selection.get(str(index), {})
             checked = bool(entry.get("checked", False))
+            profile = entry.get("profile") or first_profile
+            if profile not in profiles:
+                profile = first_profile
             status_text = ""
             tooltip = ""
             if running and checked:
@@ -141,7 +144,7 @@ class WosUtilService:
                     "index": index,
                     "name": instance["name"],
                     "checked": checked,
-                    "profile": entry.get("profile") or first_profile,
+                    "profile": profile,
                     "status": status_text,
                     "tooltip": tooltip,
                     "active": self._controller.is_active(index),
@@ -280,7 +283,10 @@ class WosUtilService:
         for instance in instances:
             entry = selection.get(str(instance["index"]), {})
             if entry.get("checked"):
-                selected.append((instance["index"], entry.get("profile") or first_profile))
+                profile = entry.get("profile") or first_profile
+                if profile not in self._profile_manager.profiles:
+                    profile = first_profile
+                selected.append((instance["index"], profile))
         return selected
 
     # --- Tool ---

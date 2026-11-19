@@ -12,9 +12,28 @@ from typing import Any, Callable, Optional, cast
 from urllib.parse import parse_qs, urlsplit
 
 from wosutil.app.actions import ActionResult
-from wosutil.app.preferences import EMULATOR_LABELS
+from wosutil.app.preferences import (
+    EMULATOR_LABELS,
+    EMULATOR_PATH_FIELDS,
+    GATHER_RESOURCE_LABELS,
+    INTEL_MODE_LABELS,
+    MYSTERY_SHOP_LEVEL_LABELS,
+)
+from wosutil.preferences import (
+    BEAR_RALLY_CALL_MARCH_MAX,
+    BEAR_RALLY_CALL_MARCH_MIN,
+    BEAR_TRAP_MARCH_COUNT,
+    BEAR_TRAP_MARCH_MAX,
+    BEAR_TRAP_MARCH_MIN,
+    GATHER_RESOURCES,
+    INTEL_MODES,
+    KILL_BEAST_MARCH_MAX,
+    KILL_BEAST_MARCH_MIN,
+    MYSTERY_SHOP_LEVELS,
+)
 from wosutil.ui.bundle import UiBundle, safe_join
 from wosutil.ui.contract import API_VERSION
+from wosutil.ui.picker import pick_path
 
 mimetypes.add_type("font/woff2", ".woff2")
 
@@ -257,6 +276,33 @@ class AppServer:
         payload["ui"] = {"version": self.ui_version, "apiVersion": API_VERSION}
         return payload
 
+    def preferences_payload(self) -> dict:
+        """Return the preferences form data: values, tasks, labels and bounds."""
+        snapshot = self.service.snapshot()
+        return {
+            "preferences": self.service.preferences(),
+            "tasks": self.service.task_catalog(),
+            "emulators": snapshot["emulator_options"],
+            "activeEmulator": snapshot["emulator"],
+            "labels": {
+                "gather": GATHER_RESOURCE_LABELS,
+                "intel": INTEL_MODE_LABELS,
+                "mysteryShop": MYSTERY_SHOP_LEVEL_LABELS,
+                "pathFields": {code: [{"key": key, "label": label, "kind": kind} for key, label, kind in fields] for code, fields in EMULATOR_PATH_FIELDS.items()},
+            },
+            "options": {
+                "gather": list(GATHER_RESOURCES),
+                "intel": list(INTEL_MODES),
+                "mysteryShop": list(MYSTERY_SHOP_LEVELS),
+            },
+            "bounds": {
+                "killBeastMarch": [KILL_BEAST_MARCH_MIN, KILL_BEAST_MARCH_MAX],
+                "bearTrapMarch": [BEAR_TRAP_MARCH_MIN, BEAR_TRAP_MARCH_MAX],
+                "bearTrapCount": BEAR_TRAP_MARCH_COUNT,
+                "bearRallyCallMarch": [BEAR_RALLY_CALL_MARCH_MIN, BEAR_RALLY_CALL_MARCH_MAX],
+            },
+        }
+
     def dispatch(self, payload: dict) -> dict:
         """Run one command from the UI.
 
@@ -350,6 +396,13 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
             self._json({"entries": self.app.service.logs_after(after)})
             return
 
+        if path == "/api/preferences":
+            if not self._authorized(query):
+                return
+            self.app.touch()
+            self._json(self.app.preferences_payload())
+            return
+
         if path == "/api/events":
             if not self._authorized(query):
                 return
@@ -380,6 +433,22 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
             if payload is None:
                 return
             self._json(self.app.dispatch(payload))
+            return
+
+        if path == "/api/pick-path":
+            payload = self._read_json()
+            if payload is None:
+                return
+            kind = payload.get("kind")
+            if kind not in {"directory", "file"}:
+                self._json({"ok": False, "error": "'kind' must be 'directory' or 'file'."})
+                return
+            try:
+                selected = pick_path(kind, str(payload.get("title") or ""), str(payload.get("initial") or ""))
+            except Exception as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True, "path": selected})
             return
 
         if path == "/api/heartbeat":
