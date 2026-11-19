@@ -47,7 +47,7 @@ def _run(template_mode: bool) -> int:
     service = context.service
     if context.needs_emulator_choice:
         # Persist the provisional choice made at startup; the UI can change it
-        # later through the emulator selector.
+        # later from the preferences screen.
         service.set_emulator(service.snapshot()["emulator"])
 
     bundle = resolve_ui_bundle()
