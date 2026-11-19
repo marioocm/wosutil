@@ -7,6 +7,7 @@ import threading
 from wosutil.app.bootstrap import build_app_context
 from wosutil.ui.bundle import resolve_ui_bundle
 from wosutil.ui.launcher import open_app_window
+from wosutil.ui.native_window import run_native_window
 from wosutil.ui.server import AppServer
 from wosutil.ui.windows import APP_WINDOW_TITLE, watch_app_window
 from wosutil.utils import log_message, setup_logging
@@ -57,17 +58,24 @@ def run() -> int:
         service.start()
         window_url = os.environ.get("WOSUTIL_UI_URL") or server.url
         log_message(f"Desktop UI listening on {server.host}:{server.port}", "info")
+
         if os.environ.get("WOSUTIL_UI_NO_WINDOW") == "1":
             log_message("Desktop UI running without a window (WOSUTIL_UI_NO_WINDOW=1).", "info")
-        elif not open_app_window(window_url):
-            log_message("Could not open a browser window. Open the printed URL manually.", "error")
-            print(window_url)
-        elif sys.platform.startswith("win"):
-            # The browser window belongs to another process: watch it so the
-            # app exits when the user closes it, and focus it on launch (an
-            # inactive window swallows the first click on Windows).
-            threading.Thread(target=watch_app_window, args=(APP_WINDOW_TITLE, server.stop), name="AppWindowWatch", daemon=True).start()
-        server.wait()
+            server.wait()
+        elif run_native_window(window_url, wait_for_stop=server.wait, debug=os.environ.get("WOSUTIL_UI_DEBUG") == "1"):
+            log_message("Desktop UI window closed.", "info")
+        else:
+            log_message("Native window unavailable; falling back to the browser app window.", "warning")
+            if not open_app_window(window_url):
+                log_message("Could not open a browser window. Open the printed URL manually.", "error")
+                print(window_url)
+                server.wait()
+            else:
+                if sys.platform.startswith("win"):
+                    # The fallback window belongs to another process: watch it
+                    # so the app exits when the user closes it.
+                    threading.Thread(target=watch_app_window, args=(APP_WINDOW_TITLE, server.stop), name="AppWindowWatch", daemon=True).start()
+                server.wait()
     except KeyboardInterrupt:
         pass
     finally:
