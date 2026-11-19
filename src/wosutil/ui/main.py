@@ -1,11 +1,14 @@
 """Entry point for the desktop web shell."""
 
 import os
+import sys
+import threading
 
 from wosutil.app.bootstrap import build_app_context
 from wosutil.ui.bundle import resolve_ui_bundle
 from wosutil.ui.launcher import open_app_window
 from wosutil.ui.server import AppServer
+from wosutil.ui.windows import APP_WINDOW_TITLE, watch_app_window
 from wosutil.utils import log_message, setup_logging
 
 
@@ -59,6 +62,11 @@ def run() -> int:
         elif not open_app_window(window_url):
             log_message("Could not open a browser window. Open the printed URL manually.", "error")
             print(window_url)
+        elif sys.platform.startswith("win"):
+            # The browser window belongs to another process: watch it so the
+            # app exits when the user closes it, and focus it on launch (an
+            # inactive window swallows the first click on Windows).
+            threading.Thread(target=watch_app_window, args=(APP_WINDOW_TITLE, server.stop), name="AppWindowWatch", daemon=True).start()
         server.wait()
     except KeyboardInterrupt:
         pass
