@@ -1,10 +1,20 @@
 """Entry point for the desktop web shell."""
 
+import os
+
 from wosutil.app.bootstrap import build_app_context
 from wosutil.ui.bundle import resolve_ui_bundle
 from wosutil.ui.launcher import open_app_window
 from wosutil.ui.server import AppServer
 from wosutil.utils import log_message, setup_logging
+
+
+def _env_port() -> int:
+    """Return ``WOSUTIL_UI_PORT``, or 0 when unset or invalid."""
+    try:
+        return int(os.environ.get("WOSUTIL_UI_PORT", "0"))
+    except ValueError:
+        return 0
 
 
 def run() -> int:
@@ -31,15 +41,24 @@ def run() -> int:
         "needs_emulator_choice": context.needs_emulator_choice,
         "installed_emulators": context.installed_emulators,
     }
-    server = AppServer(service, bundle=bundle, startup=startup)
+    server = AppServer(
+        service,
+        bundle=bundle,
+        startup=startup,
+        token=os.environ.get("WOSUTIL_UI_TOKEN") or None,
+        port=_env_port(),
+    )
 
     try:
         server.start()
         service.start()
+        window_url = os.environ.get("WOSUTIL_UI_URL") or server.url
         log_message(f"Desktop UI listening on {server.host}:{server.port}", "info")
-        if not open_app_window(server.url):
+        if os.environ.get("WOSUTIL_UI_NO_WINDOW") == "1":
+            log_message("Desktop UI running without a window (WOSUTIL_UI_NO_WINDOW=1).", "info")
+        elif not open_app_window(window_url):
             log_message("Could not open a browser window. Open the printed URL manually.", "error")
-            print(server.url)
+            print(window_url)
         server.wait()
     except KeyboardInterrupt:
         pass
