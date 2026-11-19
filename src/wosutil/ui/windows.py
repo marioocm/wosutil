@@ -27,7 +27,10 @@ def find_app_window(title: str = APP_WINDOW_TITLE) -> Optional[int]:
         return None
 
     found: list[int] = []
-    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    # WINFUNCTYPE only exists on Windows; the fallback keeps the module
+    # importable and type-checkable on the Linux CI runner.
+    winfunctype = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+    enum_proc = winfunctype(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
     def callback(hwnd, _lparam):
         if not user32.IsWindowVisible(hwnd):
