@@ -3,6 +3,7 @@
 import http.client
 import json
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -337,3 +338,21 @@ class ServerTestCase(unittest.TestCase):
             self.assertEqual(response.fp.readline().decode().strip(), "event: logs")
         finally:
             connection.close()
+
+    def test_watchdog_stops_the_server_when_heartbeats_stop(self):
+        """A page that never answers again is treated as gone."""
+        self.server.touch()
+        self.assertTrue(self.server.check_watchdog(now=time.monotonic() + 3600))
+        self.assertTrue(self.server.wait(1))
+
+    def test_watchdog_is_ignored_while_a_native_window_owns_the_app(self):
+        """Minimized native windows must not be closed for missing heartbeats."""
+        self.server.set_watchdog_enabled(False)
+        self.server.touch()
+        self.server.suspend()
+
+        self.assertFalse(self.server.check_watchdog(now=time.monotonic() + 3600))
+        self.assertFalse(self.server.wait(0.1))
+
+        self.server.set_watchdog_enabled(True)
+        self.assertTrue(self.server.check_watchdog(now=time.monotonic() + 3600))

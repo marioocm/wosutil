@@ -6,6 +6,7 @@ import threading
 from typing import Callable
 
 from wosutil.ui.bundle import cache_dir
+from wosutil.utils import log_message
 
 
 def run_native_window(url: str, wait_for_stop: Callable[[], object], title: str = "WoS Util", debug: bool = False) -> bool:
@@ -76,6 +77,7 @@ def run_native_window(url: str, wait_for_stop: Callable[[], object], title: str 
         def force_exit():
             closed.wait()
             if not exited.wait(5.0):
+                log_message("Desktop UI window closed but the webview did not exit; forcing shutdown.", "warning")
                 os._exit(0)
 
         threading.Thread(target=force_exit, name="WebviewExit", daemon=True).start()
