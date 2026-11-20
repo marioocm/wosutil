@@ -81,20 +81,26 @@ def _run(template_mode: bool) -> int:
         if os.environ.get("WOSUTIL_UI_NO_WINDOW") == "1":
             log_message("Desktop UI running without a window (WOSUTIL_UI_NO_WINDOW=1).", "info")
             server.wait()
-        elif run_native_window(window_url, wait_for_stop=server.wait, title=window_title, debug=os.environ.get("WOSUTIL_UI_DEBUG") == "1"):
-            log_message("Desktop UI window closed.", "info")
         else:
-            log_message("Native window unavailable; falling back to the browser app window.", "warning")
-            if not open_app_window(window_url):
-                log_message("Could not open a browser window. Open the printed URL manually.", "error")
-                print(window_url)
-                server.wait()
+            # The native window owns the process lifetime. WebView2 throttles
+            # page timers while the window is minimized or occluded, so the
+            # heartbeat must not be what closes a healthy window.
+            server.set_watchdog_enabled(False)
+            if run_native_window(window_url, wait_for_stop=server.wait, title=window_title, debug=os.environ.get("WOSUTIL_UI_DEBUG") == "1"):
+                log_message("Desktop UI window closed.", "info")
             else:
-                if sys.platform.startswith("win"):
-                    # The fallback window belongs to another process: watch it
-                    # so the app exits when the user closes it.
-                    threading.Thread(target=watch_app_window, args=(window_title, server.stop), name="AppWindowWatch", daemon=True).start()
-                server.wait()
+                server.set_watchdog_enabled(True)
+                log_message("Native window unavailable; falling back to the browser app window.", "warning")
+                if not open_app_window(window_url):
+                    log_message("Could not open a browser window. Open the printed URL manually.", "error")
+                    print(window_url)
+                    server.wait()
+                else:
+                    if sys.platform.startswith("win"):
+                        # The fallback window belongs to another process: watch it
+                        # so the app exits when the user closes it.
+                        threading.Thread(target=watch_app_window, args=(window_title, server.stop), name="AppWindowWatch", daemon=True).start()
+                    server.wait()
     except KeyboardInterrupt:
         pass
     finally:

@@ -35,11 +35,12 @@ from wosutil.preferences import (
 from wosutil.ui.bundle import UiBundle, safe_join
 from wosutil.ui.contract import API_VERSION
 from wosutil.ui.picker import pick_path
+from wosutil.utils import log_message
 
 mimetypes.add_type("font/woff2", ".woff2")
 
-HEARTBEAT_TIMEOUT_SECONDS = 15.0
-SUSPEND_GRACE_SECONDS = 4.0
+HEARTBEAT_TIMEOUT_SECONDS = 60.0
+SUSPEND_GRACE_SECONDS = 10.0
 WATCHDOG_INTERVAL_SECONDS = 2.0
 SSE_POLL_SECONDS = 0.25
 SSE_PING_SECONDS = 15.0
@@ -193,6 +194,7 @@ class AppServer:
         self._last_activity = 0.0
         self._seen_request = False
         self._suspend_deadline: Optional[float] = None
+        self._watchdog_enabled = True
 
     @property
     def port(self) -> int:
@@ -279,6 +281,22 @@ class AppServer:
             self._suspend_deadline = None
             self._last_activity = time.monotonic()
 
+    def set_watchdog_enabled(self, enabled: bool) -> None:
+        """Enable or disable closing the app when the page stops answering.
+
+        The native window owns the process lifecycle: when the user closes it,
+        ``run_native_window`` returns and the caller stops the server. The
+        heartbeat watchdog is only needed for the browser fallback, where the
+        page is the only signal that the window is still open.
+
+        Args:
+            enabled: False while a native window manages the app lifetime.
+        """
+        with self._activity_lock:
+            self._watchdog_enabled = enabled
+            self._last_activity = time.monotonic()
+            self._suspend_deadline = None
+
     def state_payload(self) -> dict:
         """Return the snapshot plus the contract and startup metadata."""
         payload = self.service.snapshot()
@@ -336,20 +354,37 @@ class AppServer:
             return {"ok": False, "error": str(exc)}
         return {"ok": bool(result.ok), "error": result.error}
 
+    def check_watchdog(self, now: Optional[float] = None) -> bool:
+        """Close the app when the page is gone, and report whether it did.
+
+        Args:
+            now: Monotonic timestamp override used by tests.
+
+        Returns:
+            bool: True when this check stopped the server.
+        """
+        current = time.monotonic() if now is None else now
+        with self._activity_lock:
+            if not self._watchdog_enabled:
+                return False
+            suspend_deadline = self._suspend_deadline
+            last_activity = self._last_activity
+            seen_request = self._seen_request
+
+        if suspend_deadline is not None and current >= suspend_deadline:
+            log_message("Desktop UI page unloaded; closing the app.", "info")
+            self.stop()
+            return True
+        if seen_request and current - last_activity > HEARTBEAT_TIMEOUT_SECONDS:
+            log_message(f"Desktop UI heartbeat lost for {current - last_activity:.0f}s; closing the app.", "warning")
+            self.stop()
+            return True
+        return False
+
     def _watchdog_loop(self) -> None:
         """Close the app when the page is gone or was closed without a close call."""
         while not self._stopping.wait(WATCHDOG_INTERVAL_SECONDS):
-            now = time.monotonic()
-            with self._activity_lock:
-                suspend_deadline = self._suspend_deadline
-                last_activity = self._last_activity
-                seen_request = self._seen_request
-            if suspend_deadline is not None and now >= suspend_deadline:
-                self.stop()
-                return
-            if seen_request and now - last_activity > HEARTBEAT_TIMEOUT_SECONDS:
-                self.stop()
-                return
+            self.check_watchdog()
 
 
 class _UiHttpServer(ThreadingHTTPServer):
@@ -378,6 +413,13 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):  # noqa: A002
         """Keep the console free of one line per static asset request."""
+
+    def handle_one_request(self) -> None:
+        """Ignore client disconnects instead of printing a server traceback."""
+        try:
+            super().handle_one_request()
+        except ConnectionError:
+            self.close_connection = True
 
     def do_GET(self):  # noqa: N802
         """Serve the index, static assets and read-only API endpoints."""
@@ -634,7 +676,7 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
                     last_ping = now
                 if not events:
                     time.sleep(SSE_POLL_SECONDS)
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+        except OSError:
             pass
         finally:
             self.app.service.unsubscribe(subscription)
@@ -687,7 +729,7 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+        with contextlib.suppress(ConnectionError):
             self.wfile.write(data)
 
     def _send_file(self, path: Path, set_cookie: bool = False) -> None:
@@ -714,5 +756,5 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         if set_cookie:
             self.send_header("Set-Cookie", f"wosutil_token={self.app.token}; HttpOnly; SameSite=Strict; Path=/")
         self.end_headers()
-        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+        with contextlib.suppress(ConnectionError):
             self.wfile.write(data)
