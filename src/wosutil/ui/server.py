@@ -611,8 +611,15 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         self._json({"ok": False, "error": "Not found."}, status=404)
 
     def _authorized(self, query: dict) -> bool:
-        """Check the header, cookie or query token."""
-        token = self.headers.get("X-WosUtil-Token") or self._cookie_token() or (query.get("t") or [""])[0]
+        """Check the header, query or cookie token.
+
+        Explicit credentials win over the cookie: two app instances (the main
+        shell and the Template Creator) share one WebView2 profile, so the
+        single ``wosutil_token`` cookie belongs to whichever server set it
+        last. Image and EventSource requests carry their own token in the URL
+        and must not be rejected because the cookie names another server.
+        """
+        token = self.headers.get("X-WosUtil-Token") or (query.get("t") or [""])[0] or self._cookie_token()
         try:
             authorized = bool(token) and secrets.compare_digest(token, self.app.token)
         except TypeError:
