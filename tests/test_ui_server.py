@@ -279,6 +279,31 @@ class ServerTestCase(unittest.TestCase):
         with Image.open(saved) as image:
             self.assertEqual(image.size, (10, 10))
 
+    def test_query_token_wins_over_a_stale_cookie(self):
+        """Another server's cookie must not reject an image with its own token.
+
+        The main shell and the Template Creator share the WebView2 profile, so
+        the ``wosutil_token`` cookie can name a different server. The image
+        request carries the correct token in the URL and must be served.
+        """
+        source = self.base / "source.png"
+        Image.new("RGB", (40, 30), (10, 20, 30)).save(source)
+        self._post("/api/template/load", {"path": str(source)})
+
+        request = urllib.request.Request(
+            self._url(f"/api/template/image?rev=1&t={self.TOKEN}"),
+            headers={"Cookie": "wosutil_token=stale-token-from-the-main-shell"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.read().startswith(b"\x89PNG"))
+
+    def test_cookie_token_authenticates_when_the_url_has_none(self):
+        """The cookie remains the fallback for requests without an explicit token."""
+        request = urllib.request.Request(self._url("/api/state"), headers={"Cookie": f"wosutil_token={self.TOKEN}"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+
     def test_non_ascii_tokens_are_rejected(self):
         """A malformed non-ASCII token is refused instead of raising."""
         request = urllib.request.Request(self._url("/api/state"), headers={"X-WosUtil-Token": "tökén"})
