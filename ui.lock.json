@@ -1,6 +1,6 @@
 {
   "apiVersion": 1,
   "uiVersion": "c942914",
-  "manifestUrl": "https://wosutil.tech/ui/manifest.json",
+  "manifestUrl": "https://wosutil-site.pages.dev/ui/manifest.json",
   "manifestSha256": "516f23c758c6320ea94bc95a37b571245cfa4b9a2ff28cf1cf896104d53050dc"
 }
