@@ -26,6 +26,7 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - Waydroid instances are discovered from `/var/lib/waydroid` (default) and `/var/lib/waydroid.<id>`; a real instance must contain `waydroid.cfg`. Visible names come from `~/.config/waydroid-instances.json`, and additional instances need the local `waydroid-multi` wrapper on `PATH`.
 - `src/wosutil/emulator/backends.py` holds `WaydroidBackend` too; it starts sessions inside gamescope, waits for `sys.boot_completed`, shows the Android UI and places/minimizes windows with `kdotool` when available. Secondary container services (`waydroid-container@<id>.service`) must already be running; the tool never asks for root.
 - Waydroid window positions are persisted per instance in `WAYDROID_WINDOW_FILE` (`data/waydroid_windows.json`) when the session is stopped; `_place_window` restores them and falls back to the `WAYDROID_WINDOW_STEP` side-by-side slots when there is no saved position. `kdotool search --pid` is unreliable in the installed version, so windows are matched by the `gamescope` class and then filtered by owner PID.
+- The Waydroid watcher saves the window position every `POSITION_SAVE_SECONDS` and stops Android when the gamescope window is closed (titlebar X/Alt+F4). `wosutil-paste` (`WosUtil --paste`) reads Klipper/GTK/pyperclip and types the text via ADB (gamescope does not bridge the host clipboard, and Android's `cmd clipboard` has no shell implementation).
 - PyInstaller bundles the fetched UI as `webui`, the native webview backend (WebView2 on Windows, WebKitGTK on Linux through PyGObject) and RapidOCR/ONNX Runtime, and excludes Tkinter (`wosutil.spec` is cross-platform). `scripts/build.ps1` builds the Windows exe; `scripts/build.sh` builds the Linux binary `dist/WosUtil` (it still needs the system GTK/WebKitGTK libraries at runtime).
 - `data/*` is gitignored; the `data/` directory and its JSON files are auto-created at runtime (`save_json_file` in `src/wosutil/utils.py`).
 - Linting/formatter: ruff, typechecking: mypy (see `pyproject.toml`).
@@ -47,6 +48,7 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - Install: `.venv/bin/pip install -e ".[dev]"` (Windows: `.venv/Scripts/pip install -e ".[dev]"`)
 - Run app: `python main.py` (or `wosutil` after install)
 - Run Template Creator: `template-creator` (or `WosUtil.exe --template`)
+- Paste clipboard into the focused Waydroid instance: `.venv/bin/wosutil-paste` (or `dist/WosUtil --paste`)
 - Run desktop shell: `wosutil-web` (same as `wosutil`; kept as an explicit alias)
 - UI dev overrides: `WOSUTIL_UI_PORT`, `WOSUTIL_UI_TOKEN`, `WOSUTIL_UI_URL` and `WOSUTIL_UI_NO_WINDOW` let the shell work against the Astro dev server (see `wosutil-site/AGENTS.md`).
 - Fetch the pinned UI: `python scripts/fetch_ui.py` (`--from-dir ..\wosutil-site\dist\ui` for a local build)
