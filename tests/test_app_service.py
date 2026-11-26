@@ -93,6 +93,14 @@ class ServiceTestCase(unittest.TestCase):
         self.assertTrue(snapshot["instances"][0]["checked"])
         self.assertFalse(snapshot["tool_running"])
 
+    def test_snapshot_hides_emulators_from_other_platforms(self):
+        """Windows must not offer Waydroid, and Linux must not offer Windows emulators."""
+        service = self._make_service()
+        with patch("wosutil.app.service.platform_emulator_codes", return_value=("waydroid",)):
+            options = service.snapshot()["emulator_options"]
+        self.assertEqual([option["code"] for option in options], ["waydroid"])
+        self.assertFalse(options[0]["installed"])
+
     def test_start_discovers_instances_when_the_cache_is_empty(self):
         """A fresh install gets the instance list without pressing Refresh."""
         service = self._make_service(cached_instances=[])
