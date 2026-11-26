@@ -18,7 +18,7 @@ from wosutil.app.presentation import format_instance_status, format_task_tooltip
 from wosutil.app.profiles import delete_profile as delete_profile_action
 from wosutil.app.profiles import save_profile as save_profile_action
 from wosutil.app.selection import load_instance_selection, save_instance_selection
-from wosutil.emulator.backends import create_backend, detect_installed_emulators
+from wosutil.emulator.backends import create_backend, detect_installed_emulators, platform_emulator_codes
 from wosutil.emulator.instance_cache import load_instance_cache, save_instance_cache
 from wosutil.preferences import get_emulator_paths, mark_requirements_reminder_seen, save_emulator
 from wosutil.tool.tool_instances_controller import DEFAULT_MAX_INSTANCES, MultiInstanceToolController
@@ -151,7 +151,9 @@ class WosUtilService:
                 }
             )
 
-        option_codes = installed + [code for code in preferences_module.EMULATOR_LABELS if code not in installed]
+        supported = set(platform_emulator_codes())
+        option_codes = [code for code in installed if code in supported]
+        option_codes += [code for code in preferences_module.EMULATOR_LABELS if code in supported and code not in option_codes]
         return {
             "emulator": emulator,
             "emulator_label": preferences_module.EMULATOR_LABELS.get(emulator, emulator),
@@ -179,6 +181,10 @@ class WosUtilService:
         """Start the scheduling loop and publish the initial state."""
         if self._scheduler_thread is not None:
             return
+        # First run (or a new emulator) has no cached instances yet: discover
+        # them now so the Instances screen is useful without pressing Refresh.
+        if not self._instances:
+            self.refresh_instances(force=True)
         self._scheduler_stop.clear()
         self._scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True, name="AppScheduler")
         self._scheduler_thread.start()

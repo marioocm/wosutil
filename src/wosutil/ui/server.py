@@ -4,6 +4,7 @@ import contextlib
 import json
 import mimetypes
 import secrets
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -84,6 +85,49 @@ FALLBACK_HTML = """<!doctype html>
 """
 
 CommandHandler = Callable[[Any, dict], ActionResult]
+
+# WebKitGTK renders native checkboxes with the GTK theme, which can differ a
+# lot from Chromium/WebView2 (and from the app's dark palette). Linux gets a
+# small custom checkbox so every instance looks the same.
+_CHECK_SVG_LIGHT = (
+    "data:image/svg+xml,"
+    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E"
+    "%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%233c3a39' "
+    "stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+)
+_CHECK_SVG_DARK = (
+    "data:image/svg+xml,"
+    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E"
+    "%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23f4f0e6' "
+    "stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+)
+LINUX_CONTROL_CSS = f"""
+.app-check {{
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+}}
+.app-check:checked {{
+  background-image: url("{_CHECK_SVG_LIGHT}");
+  background-size: 12px 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+}}
+.dark .app-check:checked {{
+  background-image: url("{_CHECK_SVG_DARK}");
+}}
+.app-check:disabled {{
+  cursor: default;
+  opacity: .4;
+}}
+"""
 
 
 def _require_int(args: dict, key: str) -> int:
@@ -644,7 +688,18 @@ class _UiRequestHandler(BaseHTTPRequestHandler):
         if self.app.bundle is None:
             self._send_bytes(FALLBACK_HTML.encode("utf-8"), "text/html; charset=utf-8", "no-store", set_cookie=True)
             return
-        self._send_file(self.app.bundle.path / "index.html", set_cookie=True)
+        index_path = self.app.bundle.path / "index.html"
+        if sys.platform.startswith("linux"):
+            try:
+                html = index_path.read_text(encoding="utf-8")
+            except OSError:
+                self._send_file(index_path, set_cookie=True)
+                return
+            style = f"<style>{LINUX_CONTROL_CSS}</style>"
+            html = html.replace("</head>", style + "</head>", 1) if "</head>" in html else style + html
+            self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8", "no-store", set_cookie=True)
+            return
+        self._send_file(index_path, set_cookie=True)
 
     def _serve_static(self, path: str) -> None:
         """Serve a file inside the bundle directory."""

@@ -65,11 +65,12 @@ class ServiceTestCase(unittest.TestCase):
             self.service.close()
         set_active_backend(None)
 
-    def _make_service(self, backend=None):
+    def _make_service(self, backend=None, cached_instances=None):
         """Build a service with persisted selection and one cached instance."""
+        instances = [{"index": 0, "name": "MuMu-0"}] if cached_instances is None else cached_instances
         for target, value in (
             ("wosutil.app.service.load_instance_selection", {"0": {"checked": True, "profile": "All"}, "max_emulators": 3}),
-            ("wosutil.app.service.load_instance_cache", [{"index": 0, "name": "MuMu-0"}]),
+            ("wosutil.app.service.load_instance_cache", instances),
             ("wosutil.app.service.detect_installed_emulators", ["mumu"]),
         ):
             patcher = patch(target, return_value=value)
@@ -91,6 +92,23 @@ class ServiceTestCase(unittest.TestCase):
         self.assertEqual(snapshot["instances"][0]["profile"], "All")
         self.assertTrue(snapshot["instances"][0]["checked"])
         self.assertFalse(snapshot["tool_running"])
+
+    def test_snapshot_hides_emulators_from_other_platforms(self):
+        """Windows must not offer Waydroid, and Linux must not offer Windows emulators."""
+        service = self._make_service()
+        with patch("wosutil.app.service.platform_emulator_codes", return_value=("waydroid",)):
+            options = service.snapshot()["emulator_options"]
+        self.assertEqual([option["code"] for option in options], ["waydroid"])
+        self.assertFalse(options[0]["installed"])
+
+    def test_start_discovers_instances_when_the_cache_is_empty(self):
+        """A fresh install gets the instance list without pressing Refresh."""
+        service = self._make_service(cached_instances=[])
+        with patch("wosutil.app.service.save_instance_cache") as save:
+            service.start()
+            service.close()
+        self.assertEqual([instance["name"] for instance in service.snapshot()["instances"]], ["MuMu-0"])
+        save.assert_called_once()
 
     def test_start_tool_returns_the_adb_error_without_starting(self):
         """A blocked ADB connection is reported to the view."""

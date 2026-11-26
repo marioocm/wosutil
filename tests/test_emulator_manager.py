@@ -207,14 +207,14 @@ class TestScrollScreen(unittest.TestCase):
         self.execute_adb_command.return_value = _ok()
         _scroll_with_hold(13, 500, 13, 0, 400, 150, 0, steps=4)
         commands = [c.args[0] for c in self.execute_adb_command.call_args_list]
-        self.assertEqual(commands[0], [SHELL, INPUT, "motionevent", "DOWN", "13", "500"])
-        self.assertEqual(commands[-1], [SHELL, INPUT, "motionevent", "UP", "13", "0"])
-        moves = [c for c in commands if c[1] == INPUT and c[2] == "motionevent" and c[3] == "MOVE"]
+        self.assertEqual(commands[0], [SHELL, INPUT, "touchscreen", "motionevent", "DOWN", "13", "500"])
+        self.assertEqual(commands[-1], [SHELL, INPUT, "touchscreen", "motionevent", "UP", "13", "0"])
+        moves = [c for c in commands if c[1] == INPUT and c[2] == "touchscreen" and c[3] == "motionevent" and c[4] == "MOVE"]
         self.assertEqual(len(moves), 6)
-        self.assertEqual(moves[0][4:], ["13", "375"])
-        self.assertEqual(moves[-3][4:], ["13", "0"])
-        self.assertEqual(moves[-2][4:], ["1", "0"])
-        self.assertEqual(moves[-1][4:], ["13", "0"])
+        self.assertEqual(moves[0][5:], ["13", "375"])
+        self.assertEqual(moves[-3][5:], ["13", "0"])
+        self.assertEqual(moves[-2][5:], ["1", "0"])
+        self.assertEqual(moves[-1][5:], ["13", "0"])
         self.time_sleep.assert_called()
 
     def test_hold_wiggle_runs_perpendicular_on_horizontal_swipes(self):
@@ -222,11 +222,11 @@ class TestScrollScreen(unittest.TestCase):
         self.execute_adb_command.return_value = _ok()
         _scroll_with_hold(0, 500, 400, 500, 400, 150, 0, steps=2)
         commands = [c.args[0] for c in self.execute_adb_command.call_args_list]
-        self.assertEqual(commands[-1], [SHELL, INPUT, "motionevent", "UP", "400", "500"])
-        moves = [c for c in commands if c[1] == INPUT and c[2] == "motionevent" and c[3] == "MOVE"]
+        self.assertEqual(commands[-1], [SHELL, INPUT, "touchscreen", "motionevent", "UP", "400", "500"])
+        moves = [c for c in commands if c[1] == INPUT and c[2] == "touchscreen" and c[3] == "motionevent" and c[4] == "MOVE"]
         self.assertEqual(len(moves), 4)
-        self.assertEqual(moves[-2][4:], ["400", "488"])
-        self.assertEqual(moves[-1][4:], ["400", "500"])
+        self.assertEqual(moves[-2][5:], ["400", "488"])
+        self.assertEqual(moves[-1][5:], ["400", "500"])
 
     def test_hold_falls_back_when_motionevent_unsupported(self):
         """When motionevent fails a slow swipe plus a press at the end is used."""

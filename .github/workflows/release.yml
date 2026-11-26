@@ -46,3 +46,28 @@ jobs:
         with:
           generate_release_notes: true
           files: dist/WosUtil.exe
+
+  linux:
+    needs: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install GTK/WebKitGTK dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
+
+      - name: Install package in a system-site-packages venv
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev]"
+
+      - name: Build the Linux binary
+        run: ./scripts/build.sh
+
+      - name: Attach the Linux binary to the release
+        run: gh release upload "${{ github.ref_name }}" dist/WosUtil --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

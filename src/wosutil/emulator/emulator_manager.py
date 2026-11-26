@@ -463,9 +463,11 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
 
     ``adb input swipe`` always lifts the finger at the end, so the list keeps
     gliding (fling) after release. This helper sends a continuous gesture with
-    ``input motionevent`` (DOWN -> several MOVEs -> hold -> UP): the finger
-    reaches the end, stays still for ``hold_end_ms`` and only then lifts, which
-    makes the release velocity zero and stops the scroll exactly where expected.
+    ``input touchscreen motionevent`` (DOWN -> several MOVEs -> hold -> UP):
+    the finger reaches the end, stays still for ``hold_end_ms`` and only then
+    lifts, which makes the release velocity zero and stops the scroll exactly
+    where expected. The explicit ``touchscreen`` source is required: with the
+    bare ``input motionevent`` form Waydroid's Android rejects the command.
     Before the hold, the finger wiggles a few pixels sideways and back
     (perpendicular to the swipe): the direction reversal kills any residual
     fling momentum, mirroring the mouse-drag trick of wiggling before release.
@@ -483,10 +485,10 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
         instance_index (int): Emulator instance index.
         steps (int): Number of intermediate movement events.
     """
-    down = ["shell", "input", "motionevent", "DOWN", str(start_x), str(start_y)]
+    down = ["shell", "input", "touchscreen", "motionevent", "DOWN", str(start_x), str(start_y)]
     result = execute_adb_command(down, instance_index)
     if result is None or result.returncode != 0:
-        log_message(f"input motionevent not supported on instance {instance_index}, falling back to swipe + press at the end point.", level="warning")
+        log_message(f"input touchscreen motionevent not supported on instance {instance_index}, falling back to swipe + press at the end point.", level="warning")
         fallback_swipe = execute_adb_command(
             ["shell", "input", "swipe", str(start_x), str(start_y), str(end_x), str(end_y), str(duration_ms + hold_end_ms)],
             instance_index,
@@ -502,20 +504,20 @@ def _scroll_with_hold(start_x, start_y, end_x, end_y, duration_ms, hold_end_ms, 
         for i in range(1, steps + 1):
             mx = start_x + (end_x - start_x) * i // steps
             my = start_y + (end_y - start_y) * i // steps
-            move = execute_adb_command(["shell", "input", "motionevent", "MOVE", str(mx), str(my)], instance_index)
+            move = execute_adb_command(["shell", "input", "touchscreen", "motionevent", "MOVE", str(mx), str(my)], instance_index)
             _require_adb_success(move, f"scroll move {i}/{steps}")
             time.sleep(duration_ms / steps / 1000.0)
         for wx, wy in _anti_fling_wiggle_points(start_x, start_y, end_x, end_y):
-            wiggle = execute_adb_command(["shell", "input", "motionevent", "MOVE", str(wx), str(wy)], instance_index)
+            wiggle = execute_adb_command(["shell", "input", "touchscreen", "motionevent", "MOVE", str(wx), str(wy)], instance_index)
             _require_adb_success(wiggle, "scroll anti-fling wiggle")
         time.sleep(hold_end_ms / 1000.0)
-        up = execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
+        up = execute_adb_command(["shell", "input", "touchscreen", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
         _require_adb_success(up, "scroll release")
     except Exception:
         # Best effort release when a move or the first release fails. Preserve
         # the original exception so the task cannot report a false success.
         with contextlib.suppress(Exception):
-            execute_adb_command(["shell", "input", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
+            execute_adb_command(["shell", "input", "touchscreen", "motionevent", "UP", str(end_x), str(end_y)], instance_index)
         raise
 
 

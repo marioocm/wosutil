@@ -182,6 +182,14 @@ class ServerTestCase(unittest.TestCase):
         self.assertIn(b"instance-template", body)
         self.assertIn("wosutil_token=", headers.get("Set-Cookie", ""))
 
+    def test_linux_index_injects_custom_checkbox_styles(self):
+        """WebKitGTK gets a stable checkbox instead of the native GTK control."""
+        with patch("wosutil.ui.server.sys.platform", "linux"):
+            status, body, _headers = self._get(f"/?t={self.TOKEN}", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn(b"appearance: none", body)
+        self.assertIn(b".app-check:checked", body)
+
     def test_static_assets_are_served(self):
         """Assets are served from the bundle without the API token."""
         status, body, _headers = self._get("/_astro/app.css", token=False)

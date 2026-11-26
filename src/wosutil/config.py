@@ -22,17 +22,25 @@ def _bundle_dir() -> str:
 def _app_dir() -> str:
     r"""Return the writable base directory.
 
-    In a bundle this is ``%LOCALAPPDATA%\WosUtil`` (data, logs and debug
-    captures must persist per-user and never depend on the executable's
-    location, which may be read-only); in a source checkout it is the
-    project root.
+    In a bundle this is ``%LOCALAPPDATA%\WosUtil`` on Windows and
+    ``$XDG_DATA_HOME/WosUtil`` elsewhere (data, logs and debug captures must
+    persist per-user and never depend on the executable's location, which may
+    be read-only); in a source checkout it is the project root.
     """
     if _is_frozen():
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            return os.path.join(local_app_data, "WosUtil")
-        return os.path.dirname(sys.executable)
+        if os.name == "nt":
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if local_app_data:
+                return os.path.join(local_app_data, "WosUtil")
+            return os.path.dirname(sys.executable)
+        data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+        return os.path.join(data_home, "WosUtil")
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _config_home() -> str:
+    """Return the per-user configuration directory (XDG on Linux)."""
+    return os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
 
 
 def _templates_dir() -> str:
@@ -80,6 +88,24 @@ LDPLAYER_ADB_PATH = os.path.join(LDPLAYER_BASE_PATH, "adb.exe")
 LDPLAYER_PLAYER_PATH = os.path.join(LDPLAYER_BASE_PATH, "dnplayer.exe")
 LDPLAYER_INSTANCE_CONFIG_DIR = os.path.join(LDPLAYER_BASE_PATH, "vms", "config")
 
+# --- Waydroid (Linux) Configuration ---
+# Waydroid stores one data directory per instance: /var/lib/waydroid for the
+# default instance and /var/lib/waydroid.<id> for the additional ones.
+WAYDROID_BASE_DIR = "/var/lib"
+WAYDROID_ADB_PATH = "adb"  # Resolved through PATH unless overridden in Preferences
+WAYDROID_LEASE_DIR = "/var/lib/misc"
+WAYDROID_NAMES_FILE = os.path.join(_config_home(), "waydroid-instances.json")
+WAYDROID_ADB_PORT = 5555
+# Android runs at the 720x1280 resolution the templates expect; gamescope
+# scales it into a 576x1024 window that fits a 1080p monitor.
+WAYDROID_ANDROID_WIDTH = 720
+WAYDROID_ANDROID_HEIGHT = 1280
+WAYDROID_WINDOW_WIDTH = 576
+WAYDROID_WINDOW_HEIGHT = 1024
+WAYDROID_WINDOW_STEP = 672  # Horizontal offset between instance windows
+WAYDROID_WINDOW_TOP = 18
+WAYDROID_BOOT_TIMEOUT_SECONDS = 120
+
 # --- Application Data Paths ---
 PROJECT_ROOT = _app_dir()
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -95,6 +121,7 @@ INSTANCE_SELECTION_FILE = os.path.join(DATA_DIR, "instance_selection.json")
 PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
 PREFERENCES_FILE = os.path.join(DATA_DIR, "preferences.json")
 TASK_SCHEDULE_FILE = os.path.join(DATA_DIR, "task_schedule.json")
+WAYDROID_WINDOW_FILE = os.path.join(DATA_DIR, "waydroid_windows.json")
 
 # Default profile created for new users, containing every available task
 DEFAULT_PROFILE_NAME = "All"

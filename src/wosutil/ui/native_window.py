@@ -2,11 +2,31 @@
 
 import contextlib
 import os
+import sys
 import threading
 from typing import Callable
 
 from wosutil.ui.bundle import cache_dir
 from wosutil.utils import log_message
+
+
+def _preferred_gui():
+    """Return the pywebview backend to force on this platform (None = auto).
+
+    On KDE pywebview forces Qt, which logs a noisy error when only GTK is
+    installed. When WebKitGTK/PyGObject is available it is selected directly;
+    otherwise pywebview keeps its automatic choice.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.1")
+    except (ImportError, ValueError):
+        return None
+    return "gtk"
 
 
 def run_native_window(url: str, wait_for_stop: Callable[[], object], title: str = "WoS Util", debug: bool = False) -> bool:
@@ -82,7 +102,7 @@ def run_native_window(url: str, wait_for_stop: Callable[[], object], title: str 
 
         threading.Thread(target=force_exit, name="WebviewExit", daemon=True).start()
 
-        webview.start(debug=debug, private_mode=False, storage_path=str(storage))
+        webview.start(debug=debug, private_mode=False, storage_path=str(storage), gui=_preferred_gui())
         exited.set()
         return True
     except Exception:

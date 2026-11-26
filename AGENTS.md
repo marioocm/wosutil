@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project
-Python automation tool for Whiteout Survival mobile game using Android emulators (MuMu, BlueStacks, LDPlayer). Windows-only.
+Python automation tool for Whiteout Survival mobile game using Android emulators (MuMu, BlueStacks, LDPlayer on Windows; Waydroid on Linux).
 
 ## Structure
 - `main.py` → entry point, launches the native desktop shell
@@ -22,36 +22,43 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - The UI bundle is built and published by `wosutil-site` on Cloudflare Pages at `https://wosutil.tech/ui/`; `ui.lock.json` pins the `wosutil-site.pages.dev` alias because the zone's bot protection challenges HTML downloads from CI. `scripts/fetch_ui.py` downloads the pinned manifest into `src/wosutil/webui/static/` (gitignored). `WOSUTIL_UI_DIR` overrides the bundle directory for development. The manifest's `apiVersion` must match `wosutil.ui.contract.API_VERSION`; incompatible bundles fall back to a built-in page.
 - The Templates screen (standalone window) loads/captures an image, selects an ROI and saves PNG crops under `TEMPLATES_WRITE_DIR` (repo `templates/` in source mode, `%LOCALAPPDATA%\WosUtil\templates` in the frozen exe). It uses the same active backend as the automation tool.
 - The preferences screen reads `GET /api/preferences` (values, task catalog, labels and bounds come from the Python constants) and asks `POST /api/pick-path` for native folder/file dialogs. Clients that edit one emulator's paths keep the others untouched.
-- The shell is portable (Windows/macOS/Linux), but the emulator backends and `adb.exe` are Windows-only; Linux would open the UI without being able to automate anything until a backend is ported.
-- PyInstaller bundles the fetched UI as `webui`, pywebview/WebView2 through the hooks-contrib hooks, and excludes Tkinter (`wosutil.spec`); `scripts/build.ps1` runs the fetch step first.
+- The shell is portable (Windows/macOS/Linux). On Windows the active backends are MuMu, BlueStacks and LDPlayer; on Linux the active backend is Waydroid (Android 13+, 720x1280, ADB over the instance's dnsmasq lease, optional gamescope 576x1024 window). macOS has no backend yet.
+- Waydroid instances are discovered from `/var/lib/waydroid` (default) and `/var/lib/waydroid.<id>`; a real instance must contain `waydroid.cfg`. Visible names come from `~/.config/waydroid-instances.json`, and additional instances need the local `waydroid-multi` wrapper on `PATH`.
+- `src/wosutil/emulator/backends.py` holds `WaydroidBackend` too; it starts sessions inside gamescope, waits for `sys.boot_completed`, shows the Android UI and places/minimizes windows with `kdotool` when available. Secondary container services (`waydroid-container@<id>.service`) must already be running; the tool never asks for root.
+- Waydroid window positions are persisted per instance in `WAYDROID_WINDOW_FILE` (`data/waydroid_windows.json`) when the session is stopped; `_place_window` restores them and falls back to the `WAYDROID_WINDOW_STEP` side-by-side slots when there is no saved position. `kdotool search --pid` is unreliable in the installed version, so windows are matched by the `gamescope` class and then filtered by owner PID.
+- The Waydroid watcher saves the window position every `POSITION_SAVE_SECONDS` and stops Android when the gamescope window is closed (titlebar X/Alt+F4).
+- PyInstaller bundles the fetched UI as `webui`, the native webview backend (WebView2 on Windows, WebKitGTK on Linux through PyGObject) and RapidOCR/ONNX Runtime, and excludes Tkinter (`wosutil.spec` is cross-platform). `scripts/build.ps1` builds the Windows exe; `scripts/build.sh` builds the Linux binary `dist/WosUtil` (it still needs the system GTK/WebKitGTK libraries at runtime).
 - `data/*` is gitignored; the `data/` directory and its JSON files are auto-created at runtime (`save_json_file` in `src/wosutil/utils.py`).
 - Linting/formatter: ruff, typechecking: mypy (see `pyproject.toml`).
 - Agents **must run** full check after code changes.
 - `src/wosutil/adb.py` is the pure ADB transport (`AdbClient`); it knows nothing about emulators. Each emulator backend owns one client and only supplies the ADB serial per instance.
 - All emulator-specific code (instance discovery, start/stop, ADB serial and command shape) lives in `src/wosutil/emulator/backends.py`; add a new emulator by implementing `EmulatorBackend` and registering it in `create_backend`. `src/wosutil/emulator/emulator_manager.py` only exposes game/ADB actions on the active backend.
+- Scrolling with a held finger uses `input touchscreen motionevent` on every backend; the explicit `touchscreen` source is required on Waydroid (the bare `input motionevent` form raises). The swipe+hold fallback stays for Android builds without `motionevent`.
 - `src/wosutil/tool/tool_instances_controller.py` schedules due instances: an instance is opened when its next task is within `TASK_STARTUP_WINDOW_SECONDS` and closed when the next one is farther than `INSTANCE_KEEPALIVE_WINDOW_SECONDS`. There is no shared queue to maintain; add scheduling behavior there. The controller receives a plain `(instance_index, profile_name)` selection and does not depend on a UI toolkit.
 - `ProfileManager` only owns persisted profiles; per-instance runtime state is `InstanceState` wrapped by `InstanceRuntime` in the controller.
 - Instance status and tooltip formatting lives in `src/wosutil/app/presentation.py` (no GUI toolkit), so it can be tested without a window.
 - Emulator paths hardcoded to default installs (MuMu at `C:\Program Files\Netease\MuMuPlayer\`, BlueStacks at `C:\Program Files\BlueStacks_nxt\`, LDPlayer at `C:\LDPlayer\LDPlayer14\`).
 - OCR runs in-process through RapidOCR (`src/wosutil/emulator/ocr.py`) and ONNX Runtime; no system OCR installation is required. The models and YAML routing tables are package data bundled by `wosutil.spec`.
-- In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil`.
+- In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil` on Windows and `$XDG_DATA_HOME/WosUtil` on Linux.
 - Virtual env at `.venv/`.
-- Every change PR bumps `version` in `pyproject.toml` (in the same branch). The exe is built automatically by the Release workflow when a `v*` tag is pushed (see `.github/workflows/release.yml`).
+- Every change PR bumps `version` in `pyproject.toml` (in the same branch). The Windows exe is built automatically by the Release workflow when a `v*` tag is pushed (see `.github/workflows/release.yml`); the Linux binary is built with `scripts/build.sh` until a Linux release job is added.
 - Templates and ROIs are defined in `src/wosutil/config.py` (TEMPLATE_PATHS, COORDINATES, ROI).
 
 ## Commands
-- Install: `.venv/Scripts/pip install -e ".[dev]"`
+- Install: `.venv/bin/pip install -e ".[dev]"` (Windows: `.venv/Scripts/pip install -e ".[dev]"`)
 - Run app: `python main.py` (or `wosutil` after install)
 - Run Template Creator: `template-creator` (or `WosUtil.exe --template`)
 - Run desktop shell: `wosutil-web` (same as `wosutil`; kept as an explicit alias)
 - UI dev overrides: `WOSUTIL_UI_PORT`, `WOSUTIL_UI_TOKEN`, `WOSUTIL_UI_URL` and `WOSUTIL_UI_NO_WINDOW` let the shell work against the Astro dev server (see `wosutil-site/AGENTS.md`).
 - Fetch the pinned UI: `python scripts/fetch_ui.py` (`--from-dir ..\wosutil-site\dist\ui` for a local build)
-- Lint: `.venv/Scripts/ruff check .`
-- Format: `.venv/Scripts/ruff format .`
-- Typecheck: `.venv/Scripts/mypy src/wosutil/`
-- Tests: `.venv/Scripts/python -m pytest` (all) or `.venv/Scripts/python -m pytest tests/test_utils.py` (specific)
+- Lint: `.venv/bin/ruff check .`
+- Format: `.venv/bin/ruff format .`
+- Typecheck: `.venv/bin/mypy src/wosutil/`
+- Tests: `.venv/bin/python -m pytest` (all) or `.venv/bin/python -m pytest tests/test_utils.py` (specific)
 - Full check (required after changes): run all three above
-- Build: `python -m build`
+- Build wheel: `python -m build`
+- Build Windows exe: `.\scripts\build.ps1`
+- Build Linux binary: `./scripts/build.sh` (`dist/WosUtil`)
 
 ## Testing policy
 - Add a test for observable behavior or for a regression that actually happened, not for every getter, default or private branch.
