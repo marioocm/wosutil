@@ -1116,15 +1116,32 @@ class WaydroidBackend(_ConfigBackend):
                 "warning",
             )
 
+    def _instance_window_ids(self, pid):
+        """Return the gamescope window IDs owned by ``pid``.
+
+        ``kdotool search --pid`` is not reliable (this kdotool version ignores
+        the filter and returns every window), so the class is matched first and
+        the owner PID is checked window by window.
+        """
+        kdotool = shutil.which("kdotool")
+        if kdotool is None:
+            return []
+        result = run_process_robust([kdotool, "search", "--class", "gamescope"], timeout=10)
+        if result is None or result.returncode != 0:
+            return []
+        windows = []
+        for window_id in result.stdout.split():
+            pid_result = run_process_robust([kdotool, "getwindowpid", window_id], timeout=10)
+            if pid_result is not None and pid_result.returncode == 0 and pid_result.stdout.strip() == str(pid):
+                windows.append(window_id)
+        return windows
+
     def _minimize_window(self, pid):
         """Minimize the gamescope window owned by ``pid`` (KDE, best effort)."""
         kdotool = shutil.which("kdotool")
         if kdotool is None:
             return False
-        result = run_process_robust([kdotool, "search", "--pid", str(pid)], timeout=10)
-        if result is None or result.returncode != 0:
-            return False
-        windows = result.stdout.split()
+        windows = self._instance_window_ids(pid)
         for window_id in windows:
             run_process_robust([kdotool, "windowminimize", window_id], timeout=10)
         return bool(windows)
@@ -1140,15 +1157,11 @@ class WaydroidBackend(_ConfigBackend):
         if kdotool is None:
             return False
         for _attempt in range(5):
-            result = run_process_robust([kdotool, "search", "--class", "gamescope"], timeout=10)
-            if result is not None and result.returncode == 0:
-                for window_id in result.stdout.split():
-                    pid_result = run_process_robust([kdotool, "getwindowpid", window_id], timeout=10)
-                    if pid_result is None or pid_result.returncode != 0 or pid_result.stdout.strip() != str(pid):
-                        continue
-                    x = int(instance_index) * WAYDROID_WINDOW_STEP
-                    run_process_robust([kdotool, "windowmove", window_id, str(x), str(WAYDROID_WINDOW_TOP)], timeout=10)
-                    return True
+            windows = self._instance_window_ids(pid)
+            if windows:
+                x = int(instance_index) * WAYDROID_WINDOW_STEP
+                run_process_robust([kdotool, "windowmove", windows[0], str(x), str(WAYDROID_WINDOW_TOP)], timeout=10)
+                return True
             time.sleep(1)
         return False
 

@@ -902,11 +902,28 @@ class TestWaydroidCommands(unittest.TestCase):
     def test_minimize_window_uses_kdotool_with_the_process_id(self):
         """The gamescope window is minimized through kdotool on KDE."""
         backend = waydroid_backend_helper(("default",))
-        replies = [Mock(returncode=0, stdout="{window}\n"), Mock(returncode=0)]
+        replies = [Mock(returncode=0, stdout="{window}\n"), Mock(returncode=0, stdout="4242\n"), Mock(returncode=0)]
         with patch.object(backends.shutil, "which", return_value="/usr/bin/kdotool"), patch.object(backends, "run_process_robust", side_effect=replies) as run:
             self.assertTrue(backend._minimize_window(4242))
-        self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/kdotool", "search", "--pid", "4242"])
-        self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/kdotool", "windowminimize", "{window}"])
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(calls[0], ["/usr/bin/kdotool", "search", "--class", "gamescope"])
+        self.assertEqual(calls[1], ["/usr/bin/kdotool", "getwindowpid", "{window}"])
+        self.assertEqual(calls[2], ["/usr/bin/kdotool", "windowminimize", "{window}"])
+
+    def test_minimize_window_never_touches_other_application_windows(self):
+        """Only the gamescope window of the instance is minimized (regression)."""
+        backend = waydroid_backend_helper(("default",))
+        replies = [
+            Mock(returncode=0, stdout="{other}\n{ours}\n"),
+            Mock(returncode=0, stdout="1111\n"),
+            Mock(returncode=0, stdout="4242\n"),
+            Mock(returncode=0),
+        ]
+        with patch.object(backends.shutil, "which", return_value="/usr/bin/kdotool"), patch.object(backends, "run_process_robust", side_effect=replies) as run:
+            self.assertTrue(backend._minimize_window(4242))
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertNotIn(["/usr/bin/kdotool", "windowminimize", "{other}"], calls)
+        self.assertIn(["/usr/bin/kdotool", "windowminimize", "{ours}"], calls)
 
     def test_already_running_instance_is_minimized_when_enabled(self):
         """The start-minimized preference also applies to a running Waydroid window."""
