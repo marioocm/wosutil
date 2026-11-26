@@ -179,6 +179,10 @@ class WosUtilService:
         """Start the scheduling loop and publish the initial state."""
         if self._scheduler_thread is not None:
             return
+        # First run (or a new emulator) has no cached instances yet: discover
+        # them now so the Instances screen is useful without pressing Refresh.
+        if not self._instances:
+            self.refresh_instances(force=True)
         self._scheduler_stop.clear()
         self._scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True, name="AppScheduler")
         self._scheduler_thread.start()
