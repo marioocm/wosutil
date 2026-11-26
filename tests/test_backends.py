@@ -777,6 +777,7 @@ def waydroid_backend_helper(instance_ids=("default",), names=None, logs=None):
     base_dir, names_path = waydroid_instance_helper(instance_ids, names)
     lease_dir = os.path.join(base_dir, "misc")
     os.makedirs(lease_dir, exist_ok=True)
+    window_file = os.path.join(base_dir, "waydroid_windows.json")
     log_func = None
     if logs is not None:
 
@@ -784,7 +785,7 @@ def waydroid_backend_helper(instance_ids=("default",), names=None, logs=None):
             """Collect one log line."""
             logs.append((message, level))
 
-    return backends.WaydroidBackend(log_func=log_func, base_dir=base_dir, lease_dir=lease_dir, names_path=names_path)
+    return backends.WaydroidBackend(log_func=log_func, base_dir=base_dir, lease_dir=lease_dir, names_path=names_path, window_file=window_file)
 
 
 class TestWaydroidDiscovery(unittest.TestCase):
@@ -925,6 +926,49 @@ class TestWaydroidCommands(unittest.TestCase):
         self.assertNotIn(["/usr/bin/kdotool", "windowminimize", "{other}"], calls)
         self.assertIn(["/usr/bin/kdotool", "windowminimize", "{ours}"], calls)
 
+    def test_window_position_parses_the_kdotool_geometry(self):
+        """The position is read from kdotool's getwindowgeometry output."""
+        backend = waydroid_backend_helper(("default",))
+        geometry = "Window {window}\n  Position: 672,18\n  Geometry: 576x1024\n"
+        with (
+            patch.object(backends.shutil, "which", return_value="/usr/bin/kdotool"),
+            patch.object(backend, "_instance_window_ids", return_value=["{window}"]),
+            patch.object(backends, "run_process_robust", return_value=Mock(returncode=0, stdout=geometry)),
+        ):
+            self.assertEqual(backend._window_position(4242), (672, 18))
+
+    def test_remember_window_position_saves_the_current_geometry(self):
+        """Closing an instance stores its position for the next run."""
+        backend = waydroid_backend_helper(("default",))
+        with patch.object(backend, "_matching_processes", return_value=[Mock(pid=4242)]), patch.object(backend, "_window_position", return_value=(123, 45)):
+            self.assertTrue(backend._remember_window_position(0))
+        with open(backend.window_file, encoding="utf-8") as window_file:
+            self.assertEqual(json.load(window_file), {"default": {"x": 123, "y": 45}})
+
+    def test_place_window_uses_the_saved_position(self):
+        """A remembered position wins over the default layout."""
+        backend = waydroid_backend_helper(("default",))
+        with open(backend.window_file, "w", encoding="utf-8") as window_file:
+            json.dump({"default": {"x": 100, "y": 50}}, window_file)
+        with (
+            patch.object(backends.shutil, "which", return_value="/usr/bin/kdotool"),
+            patch.object(backend, "_instance_window_ids", return_value=["{window}"]),
+            patch.object(backends, "run_process_robust", return_value=Mock(returncode=0)) as run,
+        ):
+            self.assertTrue(backend._place_window(0, 4242))
+        run.assert_called_once_with(["/usr/bin/kdotool", "windowmove", "{window}", "100", "50"], timeout=10)
+
+    def test_place_window_falls_back_to_the_instance_slot(self):
+        """Without a saved position the first run keeps the side-by-side layout."""
+        backend = waydroid_backend_helper(("default", "alt"))
+        with (
+            patch.object(backends.shutil, "which", return_value="/usr/bin/kdotool"),
+            patch.object(backend, "_instance_window_ids", return_value=["{window}"]),
+            patch.object(backends, "run_process_robust", return_value=Mock(returncode=0)) as run,
+        ):
+            self.assertTrue(backend._place_window(1, 4242))
+        run.assert_called_once_with(["/usr/bin/kdotool", "windowmove", "{window}", "672", "18"], timeout=10)
+
     def test_already_running_instance_is_minimized_when_enabled(self):
         """The start-minimized preference also applies to a running Waydroid window."""
         backend = waydroid_backend_helper(("default",))
@@ -940,9 +984,10 @@ class TestWaydroidCommands(unittest.TestCase):
     def test_graceful_stop_uses_the_session_stop_of_the_instance(self):
         """Stopping the default instance calls the plain waydroid command."""
         backend = waydroid_backend_helper(("default",))
-        with patch.object(backends, "run_process_robust", return_value=Mock(returncode=0)) as run:
+        with patch.object(backends, "run_process_robust", return_value=Mock(returncode=0)) as run, patch.object(backend, "_remember_window_position") as remember:
             self.assertTrue(backend._graceful_stop(0))
         run.assert_called_once_with(["waydroid", "session", "stop"], timeout=30)
+        remember.assert_called_once_with(0)
 
     def test_container_service_must_be_running_for_a_secondary_instance(self):
         """The tool reports the command instead of requesting root itself."""

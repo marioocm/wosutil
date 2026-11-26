@@ -49,6 +49,7 @@ from wosutil.config import (
     WAYDROID_BOOT_TIMEOUT_SECONDS,
     WAYDROID_LEASE_DIR,
     WAYDROID_NAMES_FILE,
+    WAYDROID_WINDOW_FILE,
     WAYDROID_WINDOW_HEIGHT,
     WAYDROID_WINDOW_STEP,
     WAYDROID_WINDOW_TOP,
@@ -62,7 +63,9 @@ from wosutil.utils import (
     _iter_processes,
     _minimized_startupinfo,
     ensure_directory_exists,
+    load_json_file,
     run_process_robust,
+    save_json_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -904,6 +907,7 @@ class WaydroidBackend(_ConfigBackend):
         base_dir=WAYDROID_BASE_DIR,
         lease_dir=WAYDROID_LEASE_DIR,
         names_path=WAYDROID_NAMES_FILE,
+        window_file=WAYDROID_WINDOW_FILE,
     ):
         """Initialize the Waydroid backend.
 
@@ -914,10 +918,13 @@ class WaydroidBackend(_ConfigBackend):
             base_dir (str): Directory holding the instance data directories.
             lease_dir (str): Directory holding the dnsmasq lease files.
             names_path (str): Waydroid instance names file.
+            window_file (str): JSON file remembering each instance's window
+                position between runs.
         """
         self.base_dir = base_dir
         self.lease_dir = lease_dir
         self.names_path = names_path
+        self.window_file = window_file
         super().__init__(log_func=log_func, adb_path=adb_path)
 
     def _read_instances(self):
@@ -1136,6 +1143,51 @@ class WaydroidBackend(_ConfigBackend):
                 windows.append(window_id)
         return windows
 
+    def _window_positions(self):
+        """Return the remembered ``{instance_id: (x, y)}`` window positions."""
+        if not self.window_file:
+            return {}
+        values = load_json_file(self.window_file, default_value={})
+        if not isinstance(values, dict):
+            return {}
+        positions = {}
+        for instance_id, entry in values.items():
+            if not isinstance(entry, dict):
+                continue
+            x, y = entry.get("x"), entry.get("y")
+            if isinstance(x, int) and not isinstance(x, bool) and isinstance(y, int) and not isinstance(y, bool):
+                positions[str(instance_id)] = (x, y)
+        return positions
+
+    def _window_position(self, pid):
+        """Return the current ``(x, y)`` of the instance's gamescope window."""
+        windows = self._instance_window_ids(pid)
+        if not windows:
+            return None
+        kdotool = shutil.which("kdotool")
+        if kdotool is None:
+            return None
+        result = run_process_robust([kdotool, "getwindowgeometry", windows[0]], timeout=10)
+        if result is None or result.returncode != 0:
+            return None
+        match = re.search(r"Position:\s*(-?\d+),\s*(-?\d+)", result.stdout or "")
+        return (int(match.group(1)), int(match.group(2))) if match else None
+
+    def _remember_window_position(self, instance_index):
+        """Persist the window position of an instance before it is closed."""
+        if not self.window_file:
+            return False
+        instance = self._get_instance(instance_index)
+        processes = self._matching_processes(instance_index)
+        if not processes:
+            return False
+        position = self._window_position(processes[0].pid)
+        if position is None:
+            return False
+        positions = self._window_positions()
+        positions[instance["id"]] = {"x": position[0], "y": position[1]}
+        return save_json_file(self.window_file, positions)
+
     def _minimize_window(self, pid):
         """Minimize the gamescope window owned by ``pid`` (KDE, best effort)."""
         kdotool = shutil.which("kdotool")
@@ -1147,20 +1199,29 @@ class WaydroidBackend(_ConfigBackend):
         return bool(windows)
 
     def _place_window(self, instance_index, pid):
-        """Move the instance's gamescope window to its slot (best effort).
+        """Move the instance's gamescope window to its remembered slot (best effort).
 
-        Windows manipulate windows natively in :mod:`window_utils`; on KDE the
-        ``kdotool`` helper does the same job. When it is not installed the
-        windows keep the position the compositor assigns.
+        The last position saved when the instance was closed wins; the first
+        run (or an instance without a saved position) falls back to the
+        left-to-right layout. Windows manipulate windows natively in
+        :mod:`window_utils`; on KDE the ``kdotool`` helper does the same job.
+        When it is not installed the windows keep the position the compositor
+        assigns.
         """
         kdotool = shutil.which("kdotool")
         if kdotool is None:
             return False
+        instance_id = self._get_instance(instance_index)["id"]
+        saved_position = self._window_positions().get(instance_id)
         for _attempt in range(5):
             windows = self._instance_window_ids(pid)
             if windows:
-                x = int(instance_index) * WAYDROID_WINDOW_STEP
-                run_process_robust([kdotool, "windowmove", windows[0], str(x), str(WAYDROID_WINDOW_TOP)], timeout=10)
+                if saved_position is None:
+                    x = int(instance_index) * WAYDROID_WINDOW_STEP
+                    y = WAYDROID_WINDOW_TOP
+                else:
+                    x, y = saved_position
+                run_process_robust([kdotool, "windowmove", windows[0], str(x), str(y)], timeout=10)
                 return True
             time.sleep(1)
         return False
@@ -1238,11 +1299,12 @@ class WaydroidBackend(_ConfigBackend):
         return True
 
     def _graceful_stop(self, instance_index):
-        """Ask the instance to stop its Android session and its ADB connection."""
+        """Remember the window position and stop the Android session."""
         command = self._session_command(instance_index)
         if command is None:
             return False
         serial = self.get_serial(instance_index)
+        self._remember_window_position(instance_index)
         result = run_process_robust([*command, "session", "stop"], timeout=30)
         if serial:
             self.adb.disconnect(serial)

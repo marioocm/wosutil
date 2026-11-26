@@ -69,6 +69,11 @@ Instances are auto-discovered from `/var/lib/waydroid` (the default instance) an
 dnsmasq lease. Additional instances need the local `waydroid-multi` wrapper on
 `PATH`; the default one uses the regular `waydroid` command.
 
+Each gamescope window is moved back to the position it had when the instance was
+last stopped (stored in `data/waydroid_windows.json`, or the equivalent file
+under `~/.local/share/WosUtil/data/` for the executable). Delete that file to
+reset the layout to the default side-by-side positions.
+
 ## Installation
 
 On Windows, download the latest `WosUtil.exe` from the [Releases](https://github.com/marioocm/WosUtil/releases) page and run it. No installation required.

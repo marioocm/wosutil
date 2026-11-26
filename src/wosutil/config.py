@@ -121,6 +121,7 @@ INSTANCE_SELECTION_FILE = os.path.join(DATA_DIR, "instance_selection.json")
 PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
 PREFERENCES_FILE = os.path.join(DATA_DIR, "preferences.json")
 TASK_SCHEDULE_FILE = os.path.join(DATA_DIR, "task_schedule.json")
+WAYDROID_WINDOW_FILE = os.path.join(DATA_DIR, "waydroid_windows.json")
 
 # Default profile created for new users, containing every available task
 DEFAULT_PROFILE_NAME = "All"
