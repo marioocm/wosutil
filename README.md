@@ -79,22 +79,6 @@ minimized and closed. If a local KWin rule hides the titlebar, delete the
 `Gamescope Waydroid (sin barra)` entry in System Settings > Window Rules.
 Closing the window also stops that instance's Android session.
 
-### Clipboard
-
-Ctrl+V inside a gamescope instance cannot see the host clipboard: gamescope
-isolates the Wayland clipboard and Android has its own. Use the `wosutil-paste`
-helper (or `WosUtil --paste`) instead: it reads the host clipboard through
-Klipper and types it into the focused Waydroid field through ADB.
-
-```bash
-.venv/bin/wosutil-paste        # development
-dist/WosUtil --paste           # executable
-```
-
-Bind it to a KDE shortcut (for example `Meta+V`) in System Settings >
-Shortcuts > Custom Shortcuts, using `wosutil-paste` as the command. Focus the
-game's text field and press the shortcut; the text is typed into it.
-
 ## Installation
 
 On Windows, download the latest `WosUtil.exe` from the [Releases](https://github.com/marioocm/WosUtil/releases) page and run it. No installation required.
