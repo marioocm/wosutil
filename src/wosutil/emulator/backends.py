@@ -12,7 +12,10 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 
@@ -33,10 +36,23 @@ from wosutil.config import (
     LDPLAYER_CONSOLE_PATH,
     LDPLAYER_INSTANCE_CONFIG_DIR,
     LDPLAYER_PLAYER_PATH,
+    LOG_DIR,
     MUMU_ADB_PATH,
     MUMU_BASE_PATH,
     MUMU_INSTANCE_BASE_PATH,
     MUMU_MULTI_PLAYER_PATH,
+    WAYDROID_ADB_PATH,
+    WAYDROID_ADB_PORT,
+    WAYDROID_ANDROID_HEIGHT,
+    WAYDROID_ANDROID_WIDTH,
+    WAYDROID_BASE_DIR,
+    WAYDROID_BOOT_TIMEOUT_SECONDS,
+    WAYDROID_LEASE_DIR,
+    WAYDROID_NAMES_FILE,
+    WAYDROID_WINDOW_HEIGHT,
+    WAYDROID_WINDOW_STEP,
+    WAYDROID_WINDOW_TOP,
+    WAYDROID_WINDOW_WIDTH,
 )
 from wosutil.emulator.window_utils import minimize_process_windows, minimize_windows_by_title
 from wosutil.utils import (
@@ -45,6 +61,7 @@ from wosutil.utils import (
     _is_process_named,
     _iter_processes,
     _minimized_startupinfo,
+    ensure_directory_exists,
     run_process_robust,
 )
 
@@ -54,6 +71,7 @@ logger = logging.getLogger(__name__)
 EMULATOR_MUMU = "mumu"
 EMULATOR_BLUESTACKS = "bluestacks"
 EMULATOR_LDPLAYER = "ldplayer"
+EMULATOR_WAYDROID = "waydroid"
 
 # Instance lifecycle polling. Emulators boot/close asynchronously, so both
 # operations confirm the result by polling their processes.
@@ -68,6 +86,7 @@ _BLUESTACKS_INSTANCE_PORT_RE = re.compile(r"^bst\.instance\.([^.]+)\.status\.adb
 _LDPLAYER_CONFIG_RE = re.compile(r"^leidian(\d+)\.config$")
 _MUMU_INSTANCE_FOLDER_RE = re.compile(r"^MuMuPlayerGlobal-[\d.]+-(\d+)$")
 _MUMU_INSTANCE_SERIES_RE = re.compile(r"^MuMuPlayerGlobal-([\d.]+)-\d+$")
+_WAYDROID_SECONDARY_RE = re.compile(r"^waydroid\.([A-Za-z][A-Za-z0-9_]*)$")
 
 # Executable names whose windows belong to each emulator family (basename,
 # extensionless, case-insensitive). Used to minimize windows that would
@@ -217,6 +236,148 @@ def list_ldplayer_instances(config_dir=LDPLAYER_INSTANCE_CONFIG_DIR):
             }
         )
     return sorted(instances, key=lambda inst: inst["index"])
+
+
+def _read_waydroid_names(names_path):
+    """Return the {instance_id: display_name} map stored by the Waydroid launchers.
+
+    The file (``waydroid-instances.json``) is maintained by the local
+    ``waydroid-install-launchers`` helper and maps the internal instance IDs
+    (``default``, ``alt``, ...) to the visible names (``Mario``, ``Tokyo``).
+    Both ``{"id": {"name": "Mario"}}`` and a flat ``{"id": "Mario"}`` shape are
+    accepted so an older or hand-written file never breaks discovery.
+
+    Args:
+        names_path (str): Path to the JSON names file.
+
+    Returns:
+        dict: Mapping of instance ID to display name.
+    """
+    try:
+        with open(names_path, encoding="utf-8") as names_file:
+            values = json.load(names_file)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(values, dict):
+        return {}
+    names = {}
+    for instance_id, entry in values.items():
+        name = entry.get("name") if isinstance(entry, dict) else entry
+        if isinstance(name, str) and name.strip():
+            names[str(instance_id)] = name.strip()
+    return names
+
+
+def list_waydroid_instances(base_dir=WAYDROID_BASE_DIR, names_path=WAYDROID_NAMES_FILE):
+    """Return the Waydroid instances found under a data directory.
+
+    A real instance always has a ``waydroid.cfg`` file; unrelated folders such
+    as the ``waydroid-nvidia`` staging directory are ignored. The default
+    instance (``/var/lib/waydroid``) is always listed first, followed by the
+    additional ones sorted by their internal ID.
+
+    Args:
+        base_dir (str): Directory holding ``waydroid`` and ``waydroid.<id>``.
+        names_path (str): Path to the visible-names JSON file.
+
+    Returns:
+        list: Instance dicts with 'id', 'path' and 'name' keys.
+    """
+    names = _read_waydroid_names(names_path)
+    instances = []
+
+    def add(instance_id, path):
+        default_name = "Waydroid" if instance_id == "default" else f"Waydroid {instance_id}"
+        instances.append({"id": instance_id, "path": path, "name": names.get(instance_id, default_name)})
+
+    default_path = os.path.join(base_dir, "waydroid")
+    if os.path.isfile(os.path.join(default_path, "waydroid.cfg")):
+        add("default", default_path)
+    try:
+        entries = sorted(os.listdir(base_dir))
+    except OSError:
+        entries = []
+    for entry in entries:
+        match = _WAYDROID_SECONDARY_RE.fullmatch(entry)
+        if not match:
+            continue
+        path = os.path.join(base_dir, entry)
+        if os.path.isfile(os.path.join(path, "waydroid.cfg")):
+            add(match.group(1), path)
+    return instances
+
+
+def waydroid_bridge(instance_id):
+    """Return the network bridge name Waydroid uses for an instance.
+
+    Args:
+        instance_id (str): Internal instance ID ("default", "alt", ...).
+
+    Returns:
+        str: ``waydroid0`` for the default instance, ``waydroid-<id>`` otherwise.
+    """
+    return "waydroid0" if instance_id == "default" else f"waydroid-{instance_id}"
+
+
+def parse_waydroid_leases(leases_path):
+    """Return the most recent IPv4 address from a dnsmasq lease file.
+
+    Waydroid's dnsmasq appends one line per lease:
+    ``expiry mac ip hostname client-id``. When several leases are present, the
+    one with the greatest expiry is the current address.
+
+    Args:
+        leases_path (str): Path to the ``dnsmasq.waydroid*.leases`` file.
+
+    Returns:
+        str: The IPv4 address, or an empty string when the file is missing or
+        holds no usable lease.
+    """
+    best = None
+    try:
+        with open(leases_path, encoding="utf-8") as leases_file:
+            for line in leases_file:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                try:
+                    expiry = int(parts[0])
+                except ValueError:
+                    continue
+                address = parts[2]
+                if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", address):
+                    continue
+                if best is None or expiry > best[0]:
+                    best = (expiry, address)
+    except OSError:
+        return ""
+    return best[1] if best else ""
+
+
+def platform_emulator_codes():
+    """Return the emulator backends usable on the current platform.
+
+    MuMu, BlueStacks and LDPlayer are Windows-only; Waydroid is the Linux
+    backend. Other platforms have no working backend yet.
+
+    Returns:
+        tuple: Supported emulator codes, in preference order.
+    """
+    if sys.platform.startswith("win"):
+        return (EMULATOR_MUMU, EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER)
+    if sys.platform.startswith("linux"):
+        return (EMULATOR_WAYDROID,)
+    return ()
+
+
+def default_emulator_code():
+    """Return the emulator used when none is installed or selected.
+
+    Returns:
+        str: The platform's first backend, or MuMu as a last-resort fallback.
+    """
+    codes = platform_emulator_codes()
+    return codes[0] if codes else EMULATOR_MUMU
 
 
 def _signal_processes(processes, action):
@@ -722,6 +883,341 @@ class LDPlayerBackend(_ConfigBackend):
         return bool(result and result.returncode == 0)
 
 
+class WaydroidBackend(_ConfigBackend):
+    """Waydroid backend for Linux.
+
+    Instances are discovered from ``/var/lib/waydroid`` (the default one) and
+    ``/var/lib/waydroid.<id>`` (the additional ones). ADB is reached over the
+    instance's DHCP address, read from the Waydroid dnsmasq lease file. Each
+    interactive instance runs inside its own gamescope window so Android keeps
+    its 720x1280 resolution while the window fits on screen.
+    """
+
+    name = EMULATOR_WAYDROID
+    window_process_names = ("gamescope",)
+    adb_running_fallback = True
+
+    def __init__(
+        self,
+        log_func=None,
+        adb_path=WAYDROID_ADB_PATH,
+        base_dir=WAYDROID_BASE_DIR,
+        lease_dir=WAYDROID_LEASE_DIR,
+        names_path=WAYDROID_NAMES_FILE,
+    ):
+        """Initialize the Waydroid backend.
+
+        Args:
+            log_func (callable, optional): Logging function.
+            adb_path (str): Host ``adb`` executable (resolved through PATH
+                when it is not an absolute path).
+            base_dir (str): Directory holding the instance data directories.
+            lease_dir (str): Directory holding the dnsmasq lease files.
+            names_path (str): Waydroid instance names file.
+        """
+        self.base_dir = base_dir
+        self.lease_dir = lease_dir
+        self.names_path = names_path
+        super().__init__(log_func=log_func, adb_path=adb_path)
+
+    def _read_instances(self):
+        """Discover the installed instances and expose them as stable slots."""
+        instances = list_waydroid_instances(self.base_dir, self.names_path)
+        return [
+            {
+                "index": index,
+                "id": instance["id"],
+                "name": instance["name"],
+                "display_name": instance["name"],
+            }
+            for index, instance in enumerate(instances)
+        ]
+
+    def _display_name(self, instance_index):
+        """Return the visible instance name (Mario, Tokyo, ...)."""
+        return self._get_instance(instance_index)["display_name"]
+
+    def _session_command(self, instance_index):
+        """Return the Waydroid command that addresses one instance.
+
+        The default instance uses the system ``waydroid`` command; additional
+        instances need the multi-instance wrapper, which is looked up on PATH.
+
+        Returns:
+            list or None: Command prefix, or None when the wrapper is missing.
+        """
+        instance_id = self._get_instance(instance_index)["id"]
+        if instance_id == "default":
+            return ["waydroid"]
+        multi = shutil.which("waydroid-multi")
+        if multi is None:
+            return None
+        return [multi, "--instance", instance_id]
+
+    def _launch_argv(self, instance_index):
+        """Return the argv that starts an instance inside gamescope.
+
+        gamescope is optional: without it Waydroid opens its own window at the
+        Android resolution, which works but does not fit a 1080p monitor.
+        """
+        command = self._session_command(instance_index)
+        if command is None:
+            return []
+        gamescope = shutil.which("gamescope")
+        if gamescope is None:
+            return [*command, "session", "start"]
+        return [
+            gamescope,
+            "--expose-wayland",
+            "-W",
+            str(WAYDROID_WINDOW_WIDTH),
+            "-H",
+            str(WAYDROID_WINDOW_HEIGHT),
+            "-w",
+            str(WAYDROID_ANDROID_WIDTH),
+            "-h",
+            str(WAYDROID_ANDROID_HEIGHT),
+            "--",
+            *command,
+            "session",
+            "start",
+        ]
+
+    def _matching_processes(self, instance_index):
+        """Return the gamescope processes that belong to an instance."""
+        instance_id = self._get_instance(instance_index)["id"]
+        matches = []
+        for proc, _name, cmdline in _iter_processes():
+            if not any(_is_process_named(argument, "gamescope") for argument in cmdline):
+                continue
+            if "session" not in cmdline or "start" not in cmdline:
+                continue
+            has_multi = any(_is_process_named(argument, "waydroid-multi") for argument in cmdline)
+            if instance_id == "default":
+                if has_multi or not any(_is_process_named(argument, "waydroid") for argument in cmdline):
+                    continue
+            elif not has_multi or not _has_process_option(cmdline, "instance", instance_id):
+                continue
+            matches.append(proc)
+        return matches
+
+    def get_serial(self, instance_index):
+        """Return the ADB serial of an instance, read from its DHCP lease."""
+        instance_id = self._get_instance(instance_index)["id"]
+        leases_path = os.path.join(self.lease_dir, f"dnsmasq.{waydroid_bridge(instance_id)}.leases")
+        address = parse_waydroid_leases(leases_path)
+        return f"{address}:{WAYDROID_ADB_PORT}" if address else ""
+
+    def _status(self, instance_index):
+        """Return the ``waydroid status`` output of an instance ('' on failure)."""
+        command = self._session_command(instance_index)
+        if command is None:
+            return ""
+        result = run_process_robust([*command, "status"], timeout=15)
+        if result is None or result.returncode != 0:
+            return ""
+        return result.stdout or ""
+
+    def _session_running(self, instance_index):
+        """Return True when Android reports a running session for the instance."""
+        return bool(re.search(r"^Session:\s*RUNNING", self._status(instance_index), re.MULTILINE))
+
+    def _ensure_container_service(self, instance_index):
+        """Return True when the instance's container service is running.
+
+        Additional instances are backed by a ``waydroid-container@<id>``
+        systemd unit. Starting it needs root, so the tool reports the exact
+        command instead of asking for a password in the middle of a run.
+        """
+        if shutil.which("systemctl") is None:
+            return True
+        instance_id = self._get_instance(instance_index)["id"]
+        service = "waydroid-container.service" if instance_id == "default" else f"waydroid-container@{instance_id}.service"
+        result = run_process_robust(["systemctl", "is-active", "--quiet", service], timeout=10)
+        if result is not None and result.returncode == 0:
+            return True
+        if re.search(r"^Container:\s*RUNNING", self._status(instance_index), re.MULTILINE):
+            return True
+        self.log(f"Waydroid container service '{service}' is not running. Start it with: sudo systemctl start {service}", "error")
+        return False
+
+    def check_adb_access(self):
+        """Return user-facing warnings that block the automation run."""
+        warnings = []
+        if not self._instances:
+            warnings.append(f"No Waydroid instances found under {self.base_dir}. Expected {os.path.join(self.base_dir, 'waydroid')} or {os.path.join(self.base_dir, 'waydroid.<id>')}.")
+        if not self._adb_available():
+            warnings.append(f"ADB executable '{self.adb_path}' was not found. Install android-tools/platform-tools or set the ADB binary path in Preferences.")
+        if warnings:
+            return warnings
+
+        devices = self.adb.devices()
+        unauthorized = []
+        for instance in self._instances:
+            serial = self.get_serial(instance["index"])
+            if serial and devices.get(serial) == "unauthorized":
+                unauthorized.append(instance["display_name"])
+        if unauthorized:
+            warnings.append(
+                "Waydroid denied ADB access for instance(s): "
+                + ", ".join(unauthorized)
+                + ". Authorize the host key (write ~/.android/adbkey.pub to /data/misc/adb/adb_keys in the instance) and restart it."
+            )
+        return warnings
+
+    def _adb_available(self):
+        """Return True when the configured adb executable can be executed."""
+        if os.path.isabs(self.adb_path):
+            return os.path.exists(self.adb_path)
+        return shutil.which(self.adb_path) is not None
+
+    def _boot_completed(self, serial):
+        """Connect to an instance and return whether Android finished booting."""
+        self.adb.connect(serial)
+        result = self.adb.run(serial, ["shell", "getprop", "sys.boot_completed"], timeout=10)
+        return bool(result is not None and result.returncode == 0 and result.stdout.strip() == "1")
+
+    def _wait_until_booted(self, instance_index, process=None, timeout=WAYDROID_BOOT_TIMEOUT_SECONDS):
+        """Poll until Android reports boot_completed or the session process dies.
+
+        Args:
+            instance_index (int): Instance slot.
+            process (subprocess.Popen, optional): Session process, used to fail
+                fast when gamescope or Waydroid exits before booting.
+            timeout (int): Maximum seconds to wait.
+
+        Returns:
+            bool: True when Android booted and ADB answered.
+        """
+        deadline = time.time() + timeout
+        next_notice = time.time() + 15
+        while time.time() < deadline:
+            if process is not None and process.poll() is not None:
+                self.log(f"The Waydroid session process of instance {instance_index} exited with code {process.returncode}.", "error")
+                return False
+            serial = self.get_serial(instance_index)
+            if serial and self._boot_completed(serial):
+                return True
+            if time.time() >= next_notice:
+                self.log(f"Still waiting for instance {self._display_name(instance_index)} to boot...", "debug")
+                next_notice = time.time() + 15
+            time.sleep(POLL_SECONDS)
+        return False
+
+    def _show_ui(self, instance_index):
+        """Show the Android UI of an instance (the game launches over ADB)."""
+        command = self._session_command(instance_index)
+        if command is None:
+            return
+        result = run_process_robust([*command, "show-full-ui"], timeout=20)
+        if result is None or result.returncode != 0:
+            self.log(
+                f"Could not show the Android UI of instance {self._display_name(instance_index)}; the game will still launch over ADB.",
+                "warning",
+            )
+
+    def _place_window(self, instance_index, pid):
+        """Move the instance's gamescope window to its slot (best effort).
+
+        Windows manipulate windows natively in :mod:`window_utils`; on KDE the
+        ``kdotool`` helper does the same job. When it is not installed the
+        windows keep the position the compositor assigns.
+        """
+        kdotool = shutil.which("kdotool")
+        if kdotool is None:
+            return False
+        for _attempt in range(5):
+            result = run_process_robust([kdotool, "search", "--class", "gamescope"], timeout=10)
+            if result is not None and result.returncode == 0:
+                for window_id in result.stdout.split():
+                    pid_result = run_process_robust([kdotool, "getwindowpid", window_id], timeout=10)
+                    if pid_result is None or pid_result.returncode != 0 or pid_result.stdout.strip() != str(pid):
+                        continue
+                    x = int(instance_index) * WAYDROID_WINDOW_STEP
+                    run_process_robust([kdotool, "windowmove", window_id, str(x), str(WAYDROID_WINDOW_TOP)], timeout=10)
+                    return True
+            time.sleep(1)
+        return False
+
+    def _wait_for_session_end(self, instance_index, attempts=15):
+        """Wait until both the session and its gamescope window are gone."""
+        for _attempt in range(attempts):
+            if not self._session_running(instance_index) and not self._matching_processes(instance_index):
+                return True
+            time.sleep(POLL_SECONDS)
+        return False
+
+    def start_instance(self, instance_index):
+        """Start Waydroid inside gamescope and wait for Android to boot.
+
+        A session can outlive its window (gamescope was closed but Android kept
+        running headless). That case is restarted so the instance always has a
+        visible window again.
+        """
+        name = self._display_name(instance_index)
+        if self._matching_processes(instance_index):
+            self.log(f"Instance {name} is already running.", "info")
+            self._minimize_windows(start_minimized_enabled(), name)
+            return True
+        if self._session_running(instance_index):
+            self.log(f"Instance {name} is running without a window; restarting the session...", "warning")
+            self._graceful_stop(instance_index)
+            if not self._wait_for_session_end(instance_index):
+                self.log(f"Could not stop the headless session of instance {name}.", "error")
+                return False
+        if not self._ensure_container_service(instance_index):
+            return False
+
+        argv = self._launch_argv(instance_index)
+        if not argv:
+            self.log(f"Cannot start instance {name}: the waydroid-multi wrapper was not found on PATH.", "error")
+            return False
+
+        instance_id = self._get_instance(instance_index)["id"]
+        log_path = os.path.join(LOG_DIR, f"waydroid-{instance_id}-gamescope.log")
+        ensure_directory_exists(LOG_DIR)
+        self.log(f"Starting instance {name}...", "info")
+        try:
+            with open(log_path, "ab") as log_file:
+                process = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    creationflags=_detached_creation_flags(),
+                    startupinfo=_minimized_startupinfo(),
+                    start_new_session=os.name != "nt",
+                )
+        except OSError as error:
+            self.log(f"Could not launch instance {name}: {error}", "error")
+            return False
+
+        # Reap the session process when it exits: the tool stays alive for
+        # hours and must not leave a zombie behind.
+        threading.Thread(target=process.wait, name=f"Waydroid-{instance_id}-reaper", daemon=True).start()
+
+        self.log(f"Waiting for Android to boot on instance {name}...", "info")
+        if not self._wait_until_booted(instance_index, process=process):
+            self.log(f"Instance {name} did not boot within {WAYDROID_BOOT_TIMEOUT_SECONDS} seconds. Check {log_path}.", "error")
+            return False
+
+        self._show_ui(instance_index)
+        self._place_window(instance_index, process.pid)
+        self.log(f"Instance {name} started.", "success")
+        return True
+
+    def _graceful_stop(self, instance_index):
+        """Ask the instance to stop its Android session and its ADB connection."""
+        command = self._session_command(instance_index)
+        if command is None:
+            return False
+        serial = self.get_serial(instance_index)
+        result = run_process_robust([*command, "session", "stop"], timeout=30)
+        if serial:
+            self.adb.disconnect(serial)
+        return bool(result is not None and result.returncode == 0)
+
+
 def _configured_path(emulator_paths, emulator, key, default):
     """Return one normalized path from persisted emulator settings."""
     if isinstance(emulator_paths, dict):
@@ -741,11 +1237,13 @@ def detect_installed_emulators(emulator_paths=None):
             omitted, the standard installation paths are used.
 
     Returns:
-        list: e.g. ["mumu", "bluestacks", "ldplayer"]; empty if none is detected.
+        list: e.g. ["mumu", "bluestacks", "ldplayer", "waydroid"]; empty if
+        none is detected.
     """
     mumu_base_path = _configured_path(emulator_paths, EMULATOR_MUMU, "base_path", MUMU_BASE_PATH)
     bluestacks_conf = _configured_path(emulator_paths, EMULATOR_BLUESTACKS, "config_path", BLUESTACKS_CONF)
     ldplayer_base_path = _configured_path(emulator_paths, EMULATOR_LDPLAYER, "base_path", LDPLAYER_BASE_PATH)
+    waydroid_base_path = _configured_path(emulator_paths, EMULATOR_WAYDROID, "instances_dir", WAYDROID_BASE_DIR)
     installed = []
     if os.path.exists(os.path.join(mumu_base_path, "MuMuNxMain.exe")):
         installed.append(EMULATOR_MUMU)
@@ -753,6 +1251,8 @@ def detect_installed_emulators(emulator_paths=None):
         installed.append(EMULATOR_BLUESTACKS)
     if os.path.exists(os.path.join(ldplayer_base_path, "ldconsole.exe")):
         installed.append(EMULATOR_LDPLAYER)
+    if os.path.exists(os.path.join(waydroid_base_path, "waydroid", "waydroid.cfg")):
+        installed.append(EMULATOR_WAYDROID)
     return installed
 
 
@@ -760,7 +1260,8 @@ def create_backend(emulator=None, log_func=None, emulator_paths=None):
     """Create an emulator backend by name (defaults to MuMu).
 
     Args:
-        emulator (str, optional): "mumu", "bluestacks", "ldplayer" or None.
+        emulator (str, optional): "mumu", "bluestacks", "ldplayer",
+            "waydroid" or None.
         log_func (callable, optional): Logging function.
         emulator_paths (dict, optional): Configured paths by emulator.
 
@@ -773,6 +1274,8 @@ def create_backend(emulator=None, log_func=None, emulator_paths=None):
     bluestacks_conf = _configured_path(emulator_paths, EMULATOR_BLUESTACKS, "config_path", BLUESTACKS_CONF)
     ldplayer_base_path = _configured_path(emulator_paths, EMULATOR_LDPLAYER, "base_path", LDPLAYER_BASE_PATH)
     ldplayer_config_dir = _configured_path(emulator_paths, EMULATOR_LDPLAYER, "instance_config_dir", LDPLAYER_INSTANCE_CONFIG_DIR)
+    waydroid_base_path = _configured_path(emulator_paths, EMULATOR_WAYDROID, "instances_dir", WAYDROID_BASE_DIR)
+    waydroid_adb_path = _configured_path(emulator_paths, EMULATOR_WAYDROID, "adb_path", WAYDROID_ADB_PATH)
     if emulator == EMULATOR_BLUESTACKS:
         return BlueStacksBackend(
             log_func=log_func,
@@ -787,6 +1290,12 @@ def create_backend(emulator=None, log_func=None, emulator_paths=None):
             console_path=os.path.join(ldplayer_base_path, "ldconsole.exe"),
             adb_path=os.path.join(ldplayer_base_path, "adb.exe"),
             player_path=os.path.join(ldplayer_base_path, "dnplayer.exe"),
+        )
+    if emulator == EMULATOR_WAYDROID:
+        return WaydroidBackend(
+            log_func=log_func,
+            adb_path=waydroid_adb_path,
+            base_dir=waydroid_base_path,
         )
     return MuMuBackend(
         log_func=log_func,

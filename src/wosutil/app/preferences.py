@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from wosutil.emulator.backends import EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER, EMULATOR_MUMU
+from wosutil.emulator.backends import EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER, EMULATOR_MUMU, EMULATOR_WAYDROID
 from wosutil.preferences import (
     BEAR_RALLY_CALL_MARCH_MAX,
     BEAR_RALLY_CALL_MARCH_MIN,
@@ -36,7 +36,7 @@ from wosutil.preferences import (
 )
 from wosutil.utils import safe_int
 
-EMULATOR_LABELS = {EMULATOR_MUMU: "MuMu Player", EMULATOR_BLUESTACKS: "BlueStacks", EMULATOR_LDPLAYER: "LDPlayer"}
+EMULATOR_LABELS = {EMULATOR_MUMU: "MuMu Player", EMULATOR_BLUESTACKS: "BlueStacks", EMULATOR_LDPLAYER: "LDPlayer", EMULATOR_WAYDROID: "Waydroid (Linux)"}
 
 EMULATOR_PATH_FIELDS = {
     EMULATOR_MUMU: (
@@ -50,6 +50,10 @@ EMULATOR_PATH_FIELDS = {
     EMULATOR_LDPLAYER: (
         ("base_path", "Installation folder", "directory"),
         ("instance_config_dir", "Instances config folder (vms\\config)", "directory"),
+    ),
+    EMULATOR_WAYDROID: (
+        ("instances_dir", "Waydroid data folder (/var/lib)", "directory"),
+        ("adb_path", "ADB binary (adb on PATH)", "file"),
     ),
 }
 

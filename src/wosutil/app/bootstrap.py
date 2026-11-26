@@ -10,7 +10,7 @@ from typing import Optional
 from wosutil.app.events import EventBus
 from wosutil.app.log_buffer import LogBuffer
 from wosutil.app.service import WosUtilService
-from wosutil.emulator.backends import EMULATOR_MUMU, create_backend, detect_installed_emulators
+from wosutil.emulator.backends import create_backend, default_emulator_code, detect_installed_emulators, platform_emulator_codes
 from wosutil.emulator.emulator_manager import cleanup_stale_temp_screenshots
 from wosutil.preferences import get_emulator, get_emulator_paths, get_requirements_reminder_seen, load_preferences
 from wosutil.tool.profiles.profile_manager import ProfileManager
@@ -68,12 +68,15 @@ def build_app_context(log_message=None) -> AppContext:
     installed_emulators = detect_installed_emulators(emulator_paths)
     emulator: Optional[str] = get_emulator(preferences)
     needs_emulator_choice = emulator is None
-    if emulator is None:
-        if installed_emulators:
-            emulator = installed_emulators[0]
-        else:
-            emulator = EMULATOR_MUMU
-            log("No emulator detected; falling back to MuMu Player.", "warning")
+    if emulator is not None and emulator not in platform_emulator_codes():
+        fallback = installed_emulators[0] if installed_emulators else default_emulator_code()
+        log(f"Emulator '{emulator}' is not available on this platform; using '{fallback}'.", "warning")
+        emulator = fallback
+        needs_emulator_choice = True
+    elif emulator is None:
+        emulator = installed_emulators[0] if installed_emulators else default_emulator_code()
+        if not installed_emulators:
+            log(f"No emulator detected; falling back to {emulator}.", "warning")
 
     log(f"Initializing emulator backend ({emulator})...", "info")
     backend = create_backend(emulator, log, emulator_paths=emulator_paths)

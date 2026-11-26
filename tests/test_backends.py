@@ -340,12 +340,21 @@ class TestBackendFactory(unittest.TestCase):
             self.assertEqual(backends.detect_installed_emulators(), [backends.EMULATOR_MUMU])
 
     def test_detect_installed_all(self):
-        """All three emulators are listed when all paths exist."""
+        """All four emulators are listed when all paths exist."""
         with patch.object(backends.os.path, "exists", side_effect=lambda path: True):
             self.assertEqual(
                 backends.detect_installed_emulators(),
-                [backends.EMULATOR_MUMU, backends.EMULATOR_BLUESTACKS, backends.EMULATOR_LDPLAYER],
+                [backends.EMULATOR_MUMU, backends.EMULATOR_BLUESTACKS, backends.EMULATOR_LDPLAYER, backends.EMULATOR_WAYDROID],
             )
+
+    def test_detect_installed_waydroid_only(self):
+        """Waydroid is detected from its default instance configuration."""
+
+        def exists(path):
+            return path == os.path.join(backends.WAYDROID_BASE_DIR, "waydroid", "waydroid.cfg")
+
+        with patch.object(backends.os.path, "exists", side_effect=exists):
+            self.assertEqual(backends.detect_installed_emulators(), [backends.EMULATOR_WAYDROID])
 
     def test_detect_installed_ldplayer_only(self):
         """Only LDPlayer is detected when only its console exists."""
@@ -388,10 +397,12 @@ class TestBackendFactory(unittest.TestCase):
 
     def test_create_backend_uses_custom_paths(self):
         """Each backend receives the paths selected in Preferences."""
+        waydroid_base = tempfile.mkdtemp(suffix=".waydroid")
         paths = {
             backends.EMULATOR_MUMU: {"base_path": "D:/MuMu", "instance_base_path": "D:/MuMu/vms"},
             backends.EMULATOR_BLUESTACKS: {"base_path": "E:/BlueStacks", "config_path": "E:/Data/bluestacks.conf"},
             backends.EMULATOR_LDPLAYER: {"base_path": "F:/LDPlayer", "instance_config_dir": "F:/LDPlayer/vms/config"},
+            backends.EMULATOR_WAYDROID: {"instances_dir": waydroid_base, "adb_path": "/usr/bin/adb"},
         }
 
         mumu = backends.create_backend(backends.EMULATOR_MUMU, emulator_paths=paths)
@@ -407,6 +418,10 @@ class TestBackendFactory(unittest.TestCase):
         self.assertEqual(ldplayer.config_dir, os.path.normpath("F:/LDPlayer/vms/config"))
         self.assertEqual(ldplayer.adb_path, os.path.normpath(os.path.join("F:/LDPlayer", "adb.exe")))
         self.assertEqual(ldplayer.console_path, os.path.normpath(os.path.join("F:/LDPlayer", "ldconsole.exe")))
+
+        waydroid = backends.create_backend(backends.EMULATOR_WAYDROID, emulator_paths=paths)
+        self.assertEqual(waydroid.base_dir, os.path.normpath(waydroid_base))
+        self.assertEqual(waydroid.adb_path, os.path.normpath("/usr/bin/adb"))
 
 
 class TestProcessMatching(unittest.TestCase):
@@ -729,6 +744,213 @@ def tempfile_helper(content):
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(content)
     return path
+
+
+def waydroid_instance_helper(instance_ids=("default",), names=None):
+    """Create a temporary Waydroid data tree and return (base_dir, names_path).
+
+    Args:
+        instance_ids (tuple): Internal instance IDs to create.
+        names (dict, optional): Visible names stored in the names file.
+    """
+    base_dir = tempfile.mkdtemp(suffix=".waydroid")
+    for instance_id in instance_ids:
+        folder = "waydroid" if instance_id == "default" else f"waydroid.{instance_id}"
+        directory = os.path.join(base_dir, folder)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "waydroid.cfg"), "w", encoding="utf-8") as config_file:
+            config_file.write("[waydroid]\n")
+    names_path = os.path.join(base_dir, "waydroid-instances.json")
+    with open(names_path, "w", encoding="utf-8") as names_file:
+        json.dump(names or {}, names_file)
+    return base_dir, names_path
+
+
+def waydroid_backend_helper(instance_ids=("default",), names=None, logs=None):
+    """Build a Waydroid backend bound to a temporary instance tree.
+
+    Args:
+        instance_ids (tuple): Internal instance IDs to create.
+        names (dict, optional): Visible names stored in the names file.
+        logs (list, optional): Collects the ``(message, level)`` log lines.
+    """
+    base_dir, names_path = waydroid_instance_helper(instance_ids, names)
+    lease_dir = os.path.join(base_dir, "misc")
+    os.makedirs(lease_dir, exist_ok=True)
+    log_func = None
+    if logs is not None:
+
+        def log_func(message, level="info"):
+            """Collect one log line."""
+            logs.append((message, level))
+
+    return backends.WaydroidBackend(log_func=log_func, base_dir=base_dir, lease_dir=lease_dir, names_path=names_path)
+
+
+class TestWaydroidDiscovery(unittest.TestCase):
+    """Waydroid instances are discovered from their data directories."""
+
+    def test_lists_instances_with_their_visible_names(self):
+        """The default instance comes first and uses the names file."""
+        backend = waydroid_backend_helper(("default", "alt"), {"default": {"name": "Mario"}, "alt": {"name": "Tokyo"}})
+        self.assertEqual(backend.list_instances(), [{"index": 0, "name": "Mario"}, {"index": 1, "name": "Tokyo"}])
+
+    def test_ignores_folders_that_are_not_instances(self):
+        """Staging folders and folders without a config are not instances."""
+        backend = waydroid_backend_helper(("default",), {"default": {"name": "Mario"}})
+        os.makedirs(os.path.join(backend.base_dir, "waydroid-nvidia"))
+        os.makedirs(os.path.join(backend.base_dir, "waydroid.beta"))
+        self.assertEqual(backend.list_instances(), [{"index": 0, "name": "Mario"}])
+
+    def test_serial_reads_the_lease_of_its_own_bridge(self):
+        """Each instance reads its own dnsmasq lease file."""
+        backend = waydroid_backend_helper(("default", "alt"))
+        with open(os.path.join(backend.lease_dir, "dnsmasq.waydroid0.leases"), "w", encoding="utf-8") as leases:
+            leases.write("1795696646 00:16:3e:f9:d3:03 192.168.240.112 WayDroid-x86-64-Device 01:00:16:3e:f9:d3:03\n")
+        with open(os.path.join(backend.lease_dir, "dnsmasq.waydroid-alt.leases"), "w", encoding="utf-8") as leases:
+            leases.write("1795696566 00:16:3e:f9:d3:03 192.168.243.112 WayDroid-x86-64-Device 01:00:16:3e:f9:d3:03\n")
+        self.assertEqual(backend.get_serial(0), "192.168.240.112:5555")
+        self.assertEqual(backend.get_serial(1), "192.168.243.112:5555")
+
+    def test_parse_leases_uses_the_newest_address(self):
+        """A stale lease line does not win over the current address."""
+        fd, path = tempfile.mkstemp(suffix=".leases")
+        with os.fdopen(fd, "w", encoding="utf-8") as leases:
+            leases.write("1795696000 00:16:3e:f9:d3:03 192.168.240.50 WayDroid 01:00:16:3e:f9:d3:03\n")
+            leases.write("1795696646 00:16:3e:f9:d3:03 192.168.240.112 WayDroid 01:00:16:3e:f9:d3:03\n")
+        self.assertEqual(backends.parse_waydroid_leases(path), "192.168.240.112")
+        self.assertEqual(backends.parse_waydroid_leases(os.path.join(tempfile.gettempdir(), "missing.leases")), "")
+
+
+class TestWaydroidCommands(unittest.TestCase):
+    """Waydroid sessions are addressed with the multi-instance wrapper."""
+
+    def test_launch_argv_uses_gamescope_and_the_right_instance(self):
+        """The default instance uses waydroid; others use waydroid-multi."""
+        backend = waydroid_backend_helper(("default", "alt"))
+        with patch.object(backends.shutil, "which", side_effect=lambda name: {"gamescope": "/usr/bin/gamescope", "waydroid-multi": "/usr/local/bin/waydroid-multi"}.get(name)):
+            self.assertEqual(
+                backend._launch_argv(0),
+                [
+                    "/usr/bin/gamescope",
+                    "--expose-wayland",
+                    "-W",
+                    "576",
+                    "-H",
+                    "1024",
+                    "-w",
+                    "720",
+                    "-h",
+                    "1280",
+                    "--",
+                    "waydroid",
+                    "session",
+                    "start",
+                ],
+            )
+            self.assertEqual(
+                backend._launch_argv(1),
+                [
+                    "/usr/bin/gamescope",
+                    "--expose-wayland",
+                    "-W",
+                    "576",
+                    "-H",
+                    "1024",
+                    "-w",
+                    "720",
+                    "-h",
+                    "1280",
+                    "--",
+                    "/usr/local/bin/waydroid-multi",
+                    "--instance",
+                    "alt",
+                    "session",
+                    "start",
+                ],
+            )
+
+    def test_launch_falls_back_to_a_native_window_without_gamescope(self):
+        """Without gamescope Waydroid opens its own window."""
+        backend = waydroid_backend_helper(("default",))
+        with patch.object(backends.shutil, "which", return_value=None):
+            self.assertEqual(backend._launch_argv(0), ["waydroid", "session", "start"])
+
+    def test_secondary_instance_requires_the_wrapper(self):
+        """A missing wrapper is a clear failure for an additional instance."""
+        backend = waydroid_backend_helper(("default", "alt"))
+        with patch.object(backends.shutil, "which", return_value=None):
+            self.assertEqual(backend._launch_argv(1), [])
+
+    def test_matching_processes_select_only_their_instance(self):
+        """Gamescope processes are matched by the wrapped command."""
+        backend = waydroid_backend_helper(("default", "alt"))
+        default_process = object()
+        alt_process = object()
+        decoy_process = object()
+        watcher_process = object()
+        processes = [
+            (default_process, "gamescope", ["gamescope", "--expose-wayland", "--", "waydroid", "session", "start"]),
+            (alt_process, "gamescope", ["gamescope", "--expose-wayland", "--", "/usr/local/bin/waydroid-multi", "--instance", "alt", "session", "start"]),
+            (decoy_process, "gamescope", ["gamescope", "--", "steam", "session", "start"]),
+            (watcher_process, "bash", ["bash", "-c", "waydroid-multi --instance alt session stop"]),
+        ]
+        with patch.object(backends, "_iter_processes", side_effect=lambda: iter(processes)):
+            self.assertEqual(backend._matching_processes(0), [default_process])
+            self.assertEqual(backend._matching_processes(1), [alt_process])
+
+    def test_graceful_stop_uses_the_session_stop_of_the_instance(self):
+        """Stopping the default instance calls the plain waydroid command."""
+        backend = waydroid_backend_helper(("default",))
+        with patch.object(backends, "run_process_robust", return_value=Mock(returncode=0)) as run:
+            self.assertTrue(backend._graceful_stop(0))
+        run.assert_called_once_with(["waydroid", "session", "stop"], timeout=30)
+
+    def test_container_service_must_be_running_for_a_secondary_instance(self):
+        """The tool reports the command instead of requesting root itself."""
+        backend = waydroid_backend_helper(("default", "alt"), logs=[])
+        with patch.object(backends.shutil, "which", return_value="/usr/bin/systemctl"), patch.object(backends, "run_process_robust", return_value=Mock(returncode=3)):
+            self.assertFalse(backend._ensure_container_service(1))
+
+
+class TestWaydroidStart(unittest.TestCase):
+    """The start flow waits for Android before reporting success."""
+
+    def _start_with(self, booted):
+        """Run start_instance with the session process mocked."""
+        logs = []
+        backend = waydroid_backend_helper(("default",), logs=logs)
+        with (
+            tempfile.TemporaryDirectory() as log_dir,
+            patch.object(backends, "LOG_DIR", log_dir),
+            patch.object(backends.shutil, "which", return_value="/usr/bin/gamescope"),
+            patch.object(backend, "_matching_processes", return_value=[]),
+            patch.object(backend, "_session_running", return_value=False),
+            patch.object(backend, "_ensure_container_service", return_value=True),
+            patch.object(backend, "_wait_until_booted", return_value=booted) as wait,
+            patch.object(backend, "_show_ui") as show_ui,
+            patch.object(backend, "_place_window") as place_window,
+            patch.object(backends.subprocess, "Popen") as popen,
+        ):
+            popen.return_value.pid = 4242
+            popen.return_value.poll.return_value = None
+            result = backend.start_instance(0)
+        return result, wait, show_ui, place_window, logs
+
+    def test_start_waits_for_boot_then_shows_the_ui_and_places_the_window(self):
+        """A successful boot shows Android and moves the gamescope window."""
+        result, wait, show_ui, place_window, _logs = self._start_with(booted=True)
+        self.assertTrue(result)
+        wait.assert_called_once()
+        show_ui.assert_called_once_with(0)
+        place_window.assert_called_once_with(0, 4242)
+
+    def test_start_fails_when_android_does_not_boot(self):
+        """A boot timeout is reported and the UI is never shown."""
+        result, _wait, show_ui, _place_window, logs = self._start_with(booted=False)
+        self.assertFalse(result)
+        show_ui.assert_not_called()
+        self.assertTrue(any("did not boot" in message for message, _level in logs))
 
 
 if __name__ == "__main__":

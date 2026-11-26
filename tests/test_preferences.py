@@ -20,6 +20,7 @@ from wosutil.preferences import (
     MYSTERY_SHOP_LEVELS,
     get_bear_rally_call_march,
     get_bear_trap_marches,
+    get_emulator,
     get_emulator_paths,
     get_gather_resource,
     get_intel_mode,
@@ -66,6 +67,14 @@ class TestPreferences(unittest.TestCase):
     def test_emulator_paths_default_to_standard_locations(self):
         """Missing emulator path settings use the standard locations."""
         self.assertEqual(get_emulator_paths({}), DEFAULT_EMULATOR_PATHS)
+
+    def test_waydroid_is_a_known_emulator_with_linux_defaults(self):
+        """Waydroid preferences resolve to the Linux paths and adb on PATH."""
+        paths = get_emulator_paths({})
+        self.assertEqual(paths["waydroid"]["instances_dir"], os.path.normpath("/var/lib"))
+        self.assertEqual(paths["waydroid"]["adb_path"], os.path.normpath("adb"))
+        self.assertEqual(get_emulator({"emulator": "waydroid"}), "waydroid")
+        self.assertIsNone(get_emulator({"emulator": "unknown"}))
 
     def test_emulator_paths_normalize_valid_values_and_ignore_invalid_values(self):
         """Custom paths are normalized while malformed values use defaults."""

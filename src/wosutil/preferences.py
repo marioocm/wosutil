@@ -15,8 +15,10 @@ from wosutil.config import (
     MUMU_BASE_PATH,
     MUMU_INSTANCE_BASE_PATH,
     PREFERENCES_FILE,
+    WAYDROID_ADB_PATH,
+    WAYDROID_BASE_DIR,
 )
-from wosutil.emulator.backends import EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER, EMULATOR_MUMU
+from wosutil.emulator.backends import EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER, EMULATOR_MUMU, EMULATOR_WAYDROID
 from wosutil.utils import load_json_file, safe_int, save_json_file
 
 KILL_BEAST_MARCH_MIN = 1
@@ -60,6 +62,10 @@ DEFAULT_EMULATOR_PATHS = {
     EMULATOR_LDPLAYER: {
         "base_path": LDPLAYER_BASE_PATH,
         "instance_config_dir": LDPLAYER_INSTANCE_CONFIG_DIR,
+    },
+    EMULATOR_WAYDROID: {
+        "instances_dir": WAYDROID_BASE_DIR,
+        "adb_path": WAYDROID_ADB_PATH,
     },
 }
 
@@ -240,7 +246,7 @@ def get_bear_rally_call_march(preferences=None):
 
 
 def get_emulator(preferences=None):
-    """Get the stored emulator mode ("mumu", "bluestacks" or "ldplayer").
+    """Get the stored emulator mode ("mumu", "bluestacks", "ldplayer" or "waydroid").
 
     Args:
         preferences (dict, optional): Preferences data. If None, loads from disk.
@@ -251,7 +257,7 @@ def get_emulator(preferences=None):
     if preferences is None:
         preferences = load_preferences()
     emulator = preferences.get("emulator")
-    if emulator not in (EMULATOR_MUMU, EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER):
+    if emulator not in (EMULATOR_MUMU, EMULATOR_BLUESTACKS, EMULATOR_LDPLAYER, EMULATOR_WAYDROID):
         return None
     return emulator
 
@@ -259,7 +265,7 @@ def get_emulator(preferences=None):
 def get_emulator_paths(preferences=None):
     """Return normalized executable and instance paths for every emulator.
 
-    Missing or malformed persisted values fall back to the standard Windows
+    Missing or malformed persisted values fall back to the standard
     installation paths, so older preference files remain fully compatible.
 
     Args:
@@ -352,7 +358,8 @@ def save_emulator(emulator):
     """Persist the selected emulator mode.
 
     Args:
-        emulator (str): Emulator mode, "mumu", "bluestacks" or "ldplayer".
+        emulator (str): Emulator mode, "mumu", "bluestacks", "ldplayer" or
+            "waydroid".
 
     Returns:
         bool: True if saved successfully.
