@@ -45,7 +45,7 @@ class ApplyPreferencesTests(unittest.TestCase):
             saved={"bear_trap_marches": [1, 2, 3, 4, 5, 6]},
         )
         self.assertTrue(result.ok)
-        self.assertEqual(saved["kill_beast_march"], 1)
+        self.assertEqual(saved["kill_beast_march"], 8)
         self.assertEqual(saved["bear_trap_marches"], [1, 2, 3, 4, 5, 6])
         self.assertTrue(any("between" in message for message, _level in logs))
 

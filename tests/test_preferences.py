@@ -54,11 +54,11 @@ class TestPreferences(unittest.TestCase):
         """Missing settings fall back to the safe defaults."""
         self.assertEqual(get_task_priorities({}), {})
         self.assertTrue(get_start_minimized({}))
-        self.assertEqual(get_kill_beast_march({}), 1)
+        self.assertEqual(get_kill_beast_march({}), 8)
         self.assertIsNone(get_kill_beast_march_assignment({}))
         self.assertEqual(get_gather_resource({}), "meat")
         self.assertEqual(get_intel_mode({}), INTEL_MODE_EXECUTE_ALL)
-        self.assertEqual(get_bear_trap_marches({}), [1, 2, 3, 4, 5, 6])
+        self.assertEqual(get_bear_trap_marches({}), [2, 3, 4, 5, 6, 7])
         self.assertEqual(get_bear_rally_call_march({}), 1)
         self.assertEqual(get_mystery_shop_level({}), MYSTERY_SHOP_LEVEL_FREE)
         self.assertFalse(get_requirements_reminder_seen({}))
@@ -124,7 +124,7 @@ class TestPreferences(unittest.TestCase):
         self.assertEqual(get_kill_beast_march({"kill_beast_march": 0}), 1)
         self.assertEqual(get_kill_beast_march({"kill_beast_march": -3}), 1)
         self.assertEqual(get_kill_beast_march({"kill_beast_march": 20}), 12)
-        self.assertEqual(get_kill_beast_march({"kill_beast_march": "invalid"}), 1)
+        self.assertEqual(get_kill_beast_march({"kill_beast_march": "invalid"}), 8)
 
     def test_kill_beast_march_assignment_valid_and_invalid(self):
         """An explicit assignment is honored, invalid values yield None."""
@@ -178,11 +178,12 @@ class TestPreferences(unittest.TestCase):
             self.assertTrue(BEAR_TRAP_MARCH_MIN <= march <= BEAR_TRAP_MARCH_MAX)
 
     def test_bear_trap_marches_padded_when_short(self):
-        """Fewer than six marches are padded with unused numbers."""
+        """Fewer than six marches are padded from the defaults, not with march 1."""
         marches = get_bear_trap_marches({"bear_trap_marches": [12]})
         self.assertEqual(len(marches), BEAR_TRAP_MARCH_COUNT)
         self.assertEqual(marches[0], 12)
         self.assertEqual(len(set(marches)), BEAR_TRAP_MARCH_COUNT)
+        self.assertNotIn(1, marches)
 
     def test_bear_trap_marches_truncated_when_long(self):
         """More than six marches are truncated to six."""

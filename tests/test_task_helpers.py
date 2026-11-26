@@ -89,40 +89,29 @@ class TestKillBeast(unittest.TestCase):
         self.find_text_center.return_value = (True, (552, 1216))
         self.addCleanup(lambda: [p.stop() for p in self.patchers])
 
-    def _run_kill_beast(self, march, timer=100):
-        with patch("wosutil.tool.tasks.task_helpers.get_kill_beast_march_assignment", return_value=march):
+    def _run_kill_beast(self, march=8, timer=100):
+        with patch("wosutil.tool.tasks.task_helpers.get_kill_beast_march", return_value=march):
             self.read_screen_time.return_value = timer
             return kill_beast(0)
 
-    def test_no_assignment_keeps_default_behavior(self):
-        """Test that without a march assignment only the two original clicks happen."""
-        result = self._run_kill_beast(None, timer=100)
-
-        self.assertEqual(result, min(100 * 2, INTEL_BEAST_MAX_WAIT_SECONDS))
-        self.assertEqual(self.click_on_coordinates.call_count, 2)
-        self.click_on_coordinates.assert_any_call(360, 620, 0)
-        self.click_on_coordinates.assert_any_call(552, 1216, 0)
-        self.scroll_screen.assert_not_called()
-        self.take_screenshot.assert_called_once_with(0)
-
-    def test_no_assignment_no_timer_returns_none(self):
-        """Test that without a march assignment, no timer and no Deploy button None is returned."""
+    def test_no_timer_returns_none(self):
+        """Test that without a timer and without the Deploy button None is returned."""
         self.find_text_center.return_value = (False, None)
-        result = self._run_kill_beast(None, timer=None)
+        result = self._run_kill_beast(timer=None)
 
         self.assertIsNone(result)
 
     def test_no_timer_with_no_troops_returns_false(self):
         """Test that when no timer is read and no troops remain the kill is skipped."""
         self.no_troops_left.return_value = True
-        result = self._run_kill_beast(None, timer=None)
+        result = self._run_kill_beast(timer=None)
 
         self.assertFalse(result)
         self.no_troops_left.assert_called_once_with(0, "no_troops_left", screenshot_path="/tmp/shot.png")
 
     def test_no_timer_with_deploy_returns_short_wait(self):
         """Test that with no timer but the Deploy button on screen the march is sent."""
-        result = self._run_kill_beast(None, timer=None)
+        result = self._run_kill_beast(timer=None)
 
         self.assertEqual(result, INTEL_BEAST_MARCH_SENT_WAIT_SECONDS)
         self.click_on_coordinates.assert_any_call(552, 1216, 0)
@@ -131,7 +120,7 @@ class TestKillBeast(unittest.TestCase):
     def test_no_timer_without_deploy_does_not_send(self):
         """Test that without timer and without the Deploy button the march is not sent."""
         self.find_text_center.return_value = (False, None)
-        result = self._run_kill_beast(None, timer=None)
+        result = self._run_kill_beast(timer=None)
 
         self.assertIsNone(result)
         calls = [c.args[:2] for c in self.click_on_coordinates.call_args_list]
@@ -139,18 +128,19 @@ class TestKillBeast(unittest.TestCase):
 
     def test_timer_success_ignores_no_troops_check(self):
         """Test that a successful timer read never checks the no-troops template."""
-        result = self._run_kill_beast(None, timer=100)
+        result = self._run_kill_beast(timer=100)
 
         self.assertEqual(result, min(100 * 2, INTEL_BEAST_MAX_WAIT_SECONDS))
         self.no_troops_left.assert_not_called()
         self.click_on_coordinates.assert_any_call(552, 1216, 0)
 
-    def test_assigned_march_clicked_before_timer_read(self):
-        """Test that an assigned march is selected right after the first click."""
+    def test_configured_march_clicked_before_timer_read(self):
+        """Test that the configured march is selected right after the first click."""
         for march in range(1, 9):
             with self.subTest(march=march):
                 self.click_on_coordinates.reset_mock()
-                self._run_kill_beast(march, timer=100)
+                result = self._run_kill_beast(march, timer=100)
+                self.assertEqual(result, min(100 * 2, INTEL_BEAST_MAX_WAIT_SECONDS))
                 calls = [c.args[:2] for c in self.click_on_coordinates.call_args_list]
                 self.assertIn(KILL_BEAST_MARCH_POSITIONS[march], calls)
                 self.assertEqual(self.click_on_coordinates.call_count, 3)
