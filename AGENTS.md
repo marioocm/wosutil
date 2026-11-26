@@ -41,7 +41,7 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - OCR runs in-process through RapidOCR (`src/wosutil/emulator/ocr.py`) and ONNX Runtime; no system OCR installation is required. The models and YAML routing tables are package data bundled by `wosutil.spec`.
 - In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil` on Windows and `$XDG_DATA_HOME/WosUtil` on Linux.
 - Virtual env at `.venv/`.
-- Every change PR bumps `version` in `pyproject.toml` (in the same branch). The Windows exe is built automatically by the Release workflow when a `v*` tag is pushed (see `.github/workflows/release.yml`); the Linux binary is built with `scripts/build.sh` until a Linux release job is added.
+- Every change PR bumps `version` in `pyproject.toml` (in the same branch). The Windows exe and the Linux binary are built automatically by the Release workflow when a `v*` tag is pushed (see `.github/workflows/release.yml`); the Linux job uploads both the raw binary and a `.tar.gz` that preserves the executable bit.
 - Templates and ROIs are defined in `src/wosutil/config.py` (TEMPLATE_PATHS, COORDINATES, ROI).
 
 ## Commands
