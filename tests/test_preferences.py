@@ -66,7 +66,8 @@ class TestPreferences(unittest.TestCase):
 
     def test_emulator_paths_default_to_standard_locations(self):
         """Missing emulator path settings use the standard locations."""
-        self.assertEqual(get_emulator_paths({}), DEFAULT_EMULATOR_PATHS)
+        expected = {emulator: {key: os.path.normpath(value) for key, value in fields.items()} for emulator, fields in DEFAULT_EMULATOR_PATHS.items()}
+        self.assertEqual(get_emulator_paths({}), expected)
 
     def test_waydroid_is_a_known_emulator_with_linux_defaults(self):
         """Waydroid preferences resolve to the Linux paths and adb on PATH."""
