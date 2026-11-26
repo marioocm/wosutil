@@ -38,6 +38,7 @@ where = ["src"]
 [project.scripts]
 wosutil = "wosutil.ui.main:run"
 wosutil-web = "wosutil.ui.main:run"
+wosutil-paste = "wosutil.emulator.clipboard:main"
 template-creator = "wosutil.ui.main:run_template"
 
 [tool.pytest.ini_options]
