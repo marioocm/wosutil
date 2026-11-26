@@ -34,7 +34,7 @@ from wosutil.emulator.image_utils import (
     read_screen_time,
     read_text_lines_on_screen,
 )
-from wosutil.preferences import GATHER_RESOURCES, get_bear_rally_call_march, get_kill_beast_march_assignment
+from wosutil.preferences import GATHER_RESOURCES, get_bear_rally_call_march, get_kill_beast_march
 from wosutil.stop import stop_signal
 from wosutil.tool.tasks.navigation import (
     _click_leftmost_template,
@@ -668,11 +668,12 @@ def select_march(instance_index, march):
 
 
 def kill_beast(instance_index):
-    """Kills a beast with the default march if the beast is already clicked and centered on the screen.
+    """Kills a beast with the configured march if the beast is already clicked and centered on the screen.
 
-    If the user assigned a march in the preferences, that formation is selected
-    on the march row (scrolling horizontally first when needed) before attacking.
-    The march itself is deployed by :func:`send_march`.
+    The march comes from the preferences, falling back to the default march.
+    That formation is selected on the march row (scrolling horizontally first
+    when needed) before attacking. The march itself is deployed by
+    :func:`send_march`.
 
     Args:
         instance_index (int): Emulator instance index.
@@ -684,11 +685,7 @@ def kill_beast(instance_index):
         None: If the send-march screen could not be confirmed (not on the correct screen).
     """
     click_on_coordinates(360, 620, instance_index)
-
-    march = get_kill_beast_march_assignment()
-    if march is not None:
-        select_march(instance_index, march)
-
+    select_march(instance_index, get_kill_beast_march())
     return send_march(instance_index)
 
 

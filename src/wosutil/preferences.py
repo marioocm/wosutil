@@ -23,12 +23,12 @@ from wosutil.utils import load_json_file, safe_int, save_json_file
 
 KILL_BEAST_MARCH_MIN = 1
 KILL_BEAST_MARCH_MAX = 12
-DEFAULT_KILL_BEAST_MARCH = 1
+DEFAULT_KILL_BEAST_MARCH = 8
 
 BEAR_TRAP_MARCH_COUNT = 6
 BEAR_TRAP_MARCH_MIN = 1
 BEAR_TRAP_MARCH_MAX = 12
-DEFAULT_BEAR_TRAP_MARCHES = [1, 2, 3, 4, 5, 6]
+DEFAULT_BEAR_TRAP_MARCHES = [2, 3, 4, 5, 6, 7]
 
 BEAR_RALLY_CALL_MARCH_MIN = 1
 BEAR_RALLY_CALL_MARCH_MAX = 12
@@ -178,10 +178,11 @@ def get_kill_beast_march(preferences=None):
 
 
 def get_kill_beast_march_assignment(preferences=None):
-    """Get the march used to kill beasts only if explicitly assigned by the user.
+    """Get the march explicitly assigned to kill beasts, if any.
 
-    Unlike get_kill_beast_march, this returns None when the user has not
-    assigned a march, so callers can keep their default behavior.
+    Unlike get_kill_beast_march, which always returns the effective march
+    (the default when unset), this returns None unless the user picked one.
+    Views use it to tell whether the value must be persisted.
 
     Args:
         preferences (dict, optional): Preferences data. If None, loads from disk.
@@ -221,8 +222,11 @@ def get_bear_trap_marches(preferences=None):
         march = safe_int(value, 0)
         if BEAR_TRAP_MARCH_MIN <= march <= BEAR_TRAP_MARCH_MAX:
             cleaned.append(march)
+    # Fill missing slots with the default marches first, so a short or corrupt
+    # list does not reuse march 1 (kept for calling our own rally).
+    padding = DEFAULT_BEAR_TRAP_MARCHES + [march for march in range(BEAR_TRAP_MARCH_MIN, BEAR_TRAP_MARCH_MAX + 1) if march not in DEFAULT_BEAR_TRAP_MARCHES]
     while len(cleaned) < BEAR_TRAP_MARCH_COUNT:
-        for candidate in range(BEAR_TRAP_MARCH_MIN, BEAR_TRAP_MARCH_MAX + 1):
+        for candidate in padding:
             if candidate not in cleaned:
                 cleaned.append(candidate)
                 break
