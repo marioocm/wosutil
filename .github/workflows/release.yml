@@ -41,11 +41,22 @@ jobs:
       - name: Build exe
         run: .\scripts\build.ps1
 
+      - name: Rename the Windows executable
+        shell: pwsh
+        run: Rename-Item dist/WosUtil.exe WosUtil-Windows-x64.exe
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          files: dist/WosUtil.exe
+          body: |
+            ## Downloads
+
+            - **Windows (x64)**: `WosUtil-Windows-x64.exe` — run it, no installation needed.
+            - **Linux (x86_64)**: `WosUtil-Linux-x86_64.tar.gz` — extract it; the tarball keeps the executable permission.
+
+            Windows users only need the `.exe`. The Linux build needs the system WebKitGTK 4.1/PyGObject libraries (`python3-gi`, `gir1.2-webkit2-4.1`), `adb`, `gamescope` and the Waydroid setup described in the README.
+          files: dist/WosUtil-Windows-x64.exe
 
   linux:
     needs: release
@@ -68,9 +79,9 @@ jobs:
         run: ./scripts/build.sh
 
       - name: Package the Linux binary
-        run: tar -czf dist/WosUtil-linux-x86_64.tar.gz -C dist WosUtil
+        run: tar -czf dist/WosUtil-Linux-x86_64.tar.gz -C dist WosUtil
 
       - name: Attach the Linux binary to the release
-        run: gh release upload "${{ github.ref_name }}" dist/WosUtil dist/WosUtil-linux-x86_64.tar.gz --clobber
+        run: gh release upload "${{ github.ref_name }}" dist/WosUtil-Linux-x86_64.tar.gz --clobber
         env:
           GH_TOKEN: ${{ github.token }}
