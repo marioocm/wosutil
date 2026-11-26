@@ -24,21 +24,22 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - The preferences screen reads `GET /api/preferences` (values, task catalog, labels and bounds come from the Python constants) and asks `POST /api/pick-path` for native folder/file dialogs. Clients that edit one emulator's paths keep the others untouched.
 - The shell is portable (Windows/macOS/Linux). On Windows the active backends are MuMu, BlueStacks and LDPlayer; on Linux the active backend is Waydroid (Android 13+, 720x1280, ADB over the instance's dnsmasq lease, optional gamescope 576x1024 window). macOS has no backend yet.
 - Waydroid instances are discovered from `/var/lib/waydroid` (default) and `/var/lib/waydroid.<id>`; a real instance must contain `waydroid.cfg`. Visible names come from `~/.config/waydroid-instances.json`, and additional instances need the local `waydroid-multi` wrapper on `PATH`.
-- `src/wosutil/emulator/backends.py` holds `WaydroidBackend` too; it starts sessions inside gamescope, waits for `sys.boot_completed`, shows the Android UI and places windows with `kdotool` when available. Secondary container services (`waydroid-container@<id>.service`) must already be running; the tool never asks for root.
-- PyInstaller bundles the fetched UI as `webui`, pywebview/WebView2 through the hooks-contrib hooks, and excludes Tkinter (`wosutil.spec`); `scripts/build.ps1` runs the fetch step first.
+- `src/wosutil/emulator/backends.py` holds `WaydroidBackend` too; it starts sessions inside gamescope, waits for `sys.boot_completed`, shows the Android UI and places/minimizes windows with `kdotool` when available. Secondary container services (`waydroid-container@<id>.service`) must already be running; the tool never asks for root.
+- PyInstaller bundles the fetched UI as `webui`, the native webview backend (WebView2 on Windows, WebKitGTK on Linux through PyGObject) and RapidOCR/ONNX Runtime, and excludes Tkinter (`wosutil.spec` is cross-platform). `scripts/build.ps1` builds the Windows exe; `scripts/build.sh` builds the Linux binary `dist/WosUtil` (it still needs the system GTK/WebKitGTK libraries at runtime).
 - `data/*` is gitignored; the `data/` directory and its JSON files are auto-created at runtime (`save_json_file` in `src/wosutil/utils.py`).
 - Linting/formatter: ruff, typechecking: mypy (see `pyproject.toml`).
 - Agents **must run** full check after code changes.
 - `src/wosutil/adb.py` is the pure ADB transport (`AdbClient`); it knows nothing about emulators. Each emulator backend owns one client and only supplies the ADB serial per instance.
 - All emulator-specific code (instance discovery, start/stop, ADB serial and command shape) lives in `src/wosutil/emulator/backends.py`; add a new emulator by implementing `EmulatorBackend` and registering it in `create_backend`. `src/wosutil/emulator/emulator_manager.py` only exposes game/ADB actions on the active backend.
+- Scrolling with a held finger uses `input touchscreen motionevent` on every backend; the explicit `touchscreen` source is required on Waydroid (the bare `input motionevent` form raises). The swipe+hold fallback stays for Android builds without `motionevent`.
 - `src/wosutil/tool/tool_instances_controller.py` schedules due instances: an instance is opened when its next task is within `TASK_STARTUP_WINDOW_SECONDS` and closed when the next one is farther than `INSTANCE_KEEPALIVE_WINDOW_SECONDS`. There is no shared queue to maintain; add scheduling behavior there. The controller receives a plain `(instance_index, profile_name)` selection and does not depend on a UI toolkit.
 - `ProfileManager` only owns persisted profiles; per-instance runtime state is `InstanceState` wrapped by `InstanceRuntime` in the controller.
 - Instance status and tooltip formatting lives in `src/wosutil/app/presentation.py` (no GUI toolkit), so it can be tested without a window.
 - Emulator paths hardcoded to default installs (MuMu at `C:\Program Files\Netease\MuMuPlayer\`, BlueStacks at `C:\Program Files\BlueStacks_nxt\`, LDPlayer at `C:\LDPlayer\LDPlayer14\`).
 - OCR runs in-process through RapidOCR (`src/wosutil/emulator/ocr.py`) and ONNX Runtime; no system OCR installation is required. The models and YAML routing tables are package data bundled by `wosutil.spec`.
-- In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil`.
+- In frozen (PyInstaller) mode `config.py` resolves templates from `sys._MEIPASS` and writes data/logs/debug to `%LOCALAPPDATA%\WosUtil` on Windows and `$XDG_DATA_HOME/WosUtil` on Linux.
 - Virtual env at `.venv/`.
-- Every change PR bumps `version` in `pyproject.toml` (in the same branch). The exe is built automatically by the Release workflow when a `v*` tag is pushed (see `.github/workflows/release.yml`).
+- Every change PR bumps `version` in `pyproject.toml` (in the same branch). The Windows exe is built automatically by the Release workflow when a `v*` tag is pushed (see `.github/workflows/release.yml`); the Linux binary is built with `scripts/build.sh` until a Linux release job is added.
 - Templates and ROIs are defined in `src/wosutil/config.py` (TEMPLATE_PATHS, COORDINATES, ROI).
 
 ## Commands
@@ -53,7 +54,9 @@ Python automation tool for Whiteout Survival mobile game using Android emulators
 - Typecheck: `.venv/bin/mypy src/wosutil/`
 - Tests: `.venv/bin/python -m pytest` (all) or `.venv/bin/python -m pytest tests/test_utils.py` (specific)
 - Full check (required after changes): run all three above
-- Build: `python -m build`
+- Build wheel: `python -m build`
+- Build Windows exe: `.\scripts\build.ps1`
+- Build Linux binary: `./scripts/build.sh` (`dist/WosUtil`)
 
 ## Testing policy
 - Add a test for observable behavior or for a regression that actually happened, not for every getter, default or private branch.

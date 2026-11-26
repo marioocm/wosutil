@@ -46,7 +46,7 @@ The distributed `WosUtil.exe` bundles RapidOCR (PP-OCR models and ONNX Runtime),
 - Android set to **720x1280** portrait (the templates are captured at that size)
 - `adb` on `PATH` (package `android-tools` on Arch/CachyOS, `adb` on Debian/Ubuntu)
 - `gamescope` recommended: it scales the 720x1280 Android surface into a 576x1024 window that fits a 1080p monitor
-- `kdotool` optional: the tool uses it to place each instance window side by side on KDE Plasma
+- `kdotool` optional: the tool uses it to place each instance window side by side and to minimize it on KDE Plasma
 - Python 3.11+ and a source checkout:
 
 ```bash
@@ -76,6 +76,23 @@ On Windows, download the latest `WosUtil.exe` from the [Releases](https://github
 For non-default emulator installations, open the Preferences tab, select the required folders or configuration file with the `Browse...` buttons, and click `Save Preferences`.
 
 On Linux there is no prebuilt executable yet: install it from source with the commands above and run `.venv/bin/python main.py` (or `.venv/bin/wosutil` after the editable install).
+
+### Build the Linux executable
+
+With the development dependencies installed (`pip install -e ".[dev]"`), build the
+single-file binary with:
+
+```bash
+./scripts/build.sh
+# dist/WosUtil
+```
+
+The executable bundles Python, the UI, the templates and the OCR runtime. It
+still uses the system GTK/WebKitGTK libraries (through PyGObject) for the
+native window, so the target machine needs `python-gobject` and
+`webkit2gtk-4.1` (plus `gamescope`, `adb` and the Waydroid setup described
+above). When those libraries are missing, run the source checkout and let the
+shell fall back to the browser.
 
 ## Usage
 

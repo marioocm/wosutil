@@ -1,12 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-r"""PyInstaller spec: single-file, windowed WosUtil.exe.
+r"""PyInstaller spec: single-file WosUtil executable.
 
-The native pywebview/WebView2 shell, the UI bundle, RapidOCR models, ONNX
-Runtime binaries and the templates folder are bundled. data/, logs/ and debug/
-are written to %LOCALAPPDATA%\WosUtil at runtime (see config._app_dir).
+The native pywebview shell, the UI bundle, RapidOCR models, ONNX Runtime
+binaries and the templates folder are bundled. data/, logs/ and debug/ are
+written to %LOCALAPPDATA%\WosUtil on Windows and to $XDG_DATA_HOME/WosUtil on
+Linux at runtime (see config._app_dir).
 """
 
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files
 
@@ -16,6 +18,25 @@ rapidocr_datas = collect_data_files("rapidocr")
 
 webui_dir = os.path.join(ROOT_DIR, "src", "wosutil", "webui", "static")
 webui_datas = [(webui_dir, "webui")] if os.path.isdir(webui_dir) else []
+
+# pywebview loads its GUI backend dynamically, so PyInstaller cannot see it.
+if sys.platform.startswith("win"):
+    platform_hiddenimports = [
+        "webview.platforms.winforms",
+        "webview.platforms.edgechromium",
+        "clr",
+        "clr_loader",
+    ]
+elif sys.platform.startswith("linux"):
+    platform_hiddenimports = [
+        "webview.platforms.gtk",
+        "gi",
+        "gi.repository.Gtk",
+        "gi.repository.Gdk",
+        "gi.repository.WebKit2",
+    ]
+else:
+    platform_hiddenimports = []
 
 a = Analysis(
     [os.path.join(ROOT_DIR, "main.py")],
@@ -28,10 +49,7 @@ a = Analysis(
     ],
     hiddenimports=[
         "webview",
-        "webview.platforms.winforms",
-        "webview.platforms.edgechromium",
-        "clr",
-        "clr_loader",
+        *platform_hiddenimports,
     ],
     hookspath=[],
     hooksconfig={},
@@ -39,6 +57,10 @@ a = Analysis(
     excludes=[
         "tkinter",
         "_tkinter",
+        "PyQt5",
+        "PyQt6",
+        "PySide2",
+        "PySide6",
         "rapidocr.inference_engine.mnn",
         "rapidocr.inference_engine.openvino",
         "rapidocr.inference_engine.paddle",
