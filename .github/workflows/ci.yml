@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -23,3 +24,24 @@ jobs:
         run: mypy src/wosutil/
       - name: Run tests with pytest
         run: pytest
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+      - name: Run tests with pytest
+        run: pytest
+      - name: Build the Windows executable
+        run: .\scripts\build.ps1
+      - name: Upload the Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: WosUtil-windows
+          path: dist/WosUtil.exe
+          if-no-files-found: error
+
