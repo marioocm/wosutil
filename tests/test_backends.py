@@ -899,6 +899,27 @@ class TestWaydroidCommands(unittest.TestCase):
             self.assertEqual(backend._matching_processes(0), [default_process])
             self.assertEqual(backend._matching_processes(1), [alt_process])
 
+    def test_minimize_window_uses_kdotool_with_the_process_id(self):
+        """The gamescope window is minimized through kdotool on KDE."""
+        backend = waydroid_backend_helper(("default",))
+        replies = [Mock(returncode=0, stdout="{window}\n"), Mock(returncode=0)]
+        with patch.object(backends.shutil, "which", return_value="/usr/bin/kdotool"), patch.object(backends, "run_process_robust", side_effect=replies) as run:
+            self.assertTrue(backend._minimize_window(4242))
+        self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/kdotool", "search", "--pid", "4242"])
+        self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/kdotool", "windowminimize", "{window}"])
+
+    def test_already_running_instance_is_minimized_when_enabled(self):
+        """The start-minimized preference also applies to a running Waydroid window."""
+        backend = waydroid_backend_helper(("default",))
+        process = Mock(pid=4242)
+        with (
+            patch.object(backend, "_matching_processes", return_value=[process]),
+            patch.object(backend, "_minimize_window") as minimize,
+            patch.object(backends, "start_minimized_enabled", return_value=True),
+        ):
+            self.assertTrue(backend.start_instance(0))
+        minimize.assert_called_once_with(4242)
+
     def test_graceful_stop_uses_the_session_stop_of_the_instance(self):
         """Stopping the default instance calls the plain waydroid command."""
         backend = waydroid_backend_helper(("default",))
@@ -930,24 +951,27 @@ class TestWaydroidStart(unittest.TestCase):
             patch.object(backend, "_wait_until_booted", return_value=booted) as wait,
             patch.object(backend, "_show_ui") as show_ui,
             patch.object(backend, "_place_window") as place_window,
+            patch.object(backend, "_minimize_window") as minimize,
+            patch.object(backends, "start_minimized_enabled", return_value=False),
             patch.object(backends.subprocess, "Popen") as popen,
         ):
             popen.return_value.pid = 4242
             popen.return_value.poll.return_value = None
             result = backend.start_instance(0)
-        return result, wait, show_ui, place_window, logs
+        return result, wait, show_ui, place_window, minimize, logs
 
     def test_start_waits_for_boot_then_shows_the_ui_and_places_the_window(self):
         """A successful boot shows Android and moves the gamescope window."""
-        result, wait, show_ui, place_window, _logs = self._start_with(booted=True)
+        result, wait, show_ui, place_window, minimize, _logs = self._start_with(booted=True)
         self.assertTrue(result)
         wait.assert_called_once()
         show_ui.assert_called_once_with(0)
         place_window.assert_called_once_with(0, 4242)
+        minimize.assert_not_called()
 
     def test_start_fails_when_android_does_not_boot(self):
         """A boot timeout is reported and the UI is never shown."""
-        result, _wait, show_ui, _place_window, logs = self._start_with(booted=False)
+        result, _wait, show_ui, _place_window, _minimize, logs = self._start_with(booted=False)
         self.assertFalse(result)
         show_ui.assert_not_called()
         self.assertTrue(any("did not boot" in message for message, _level in logs))

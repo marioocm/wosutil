@@ -1116,6 +1116,19 @@ class WaydroidBackend(_ConfigBackend):
                 "warning",
             )
 
+    def _minimize_window(self, pid):
+        """Minimize the gamescope window owned by ``pid`` (KDE, best effort)."""
+        kdotool = shutil.which("kdotool")
+        if kdotool is None:
+            return False
+        result = run_process_robust([kdotool, "search", "--pid", str(pid)], timeout=10)
+        if result is None or result.returncode != 0:
+            return False
+        windows = result.stdout.split()
+        for window_id in windows:
+            run_process_robust([kdotool, "windowminimize", window_id], timeout=10)
+        return bool(windows)
+
     def _place_window(self, instance_index, pid):
         """Move the instance's gamescope window to its slot (best effort).
 
@@ -1155,9 +1168,12 @@ class WaydroidBackend(_ConfigBackend):
         visible window again.
         """
         name = self._display_name(instance_index)
-        if self._matching_processes(instance_index):
+        processes = self._matching_processes(instance_index)
+        if processes:
             self.log(f"Instance {name} is already running.", "info")
-            self._minimize_windows(start_minimized_enabled(), name)
+            if start_minimized_enabled():
+                for process in processes:
+                    self._minimize_window(process.pid)
             return True
         if self._session_running(instance_index):
             self.log(f"Instance {name} is running without a window; restarting the session...", "warning")
@@ -1203,6 +1219,8 @@ class WaydroidBackend(_ConfigBackend):
 
         self._show_ui(instance_index)
         self._place_window(instance_index, process.pid)
+        if start_minimized_enabled():
+            self._minimize_window(process.pid)
         self.log(f"Instance {name} started.", "success")
         return True
 
