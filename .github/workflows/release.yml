@@ -67,7 +67,10 @@ jobs:
       - name: Build the Linux binary
         run: ./scripts/build.sh
 
+      - name: Package the Linux binary
+        run: tar -czf dist/WosUtil-linux-x86_64.tar.gz -C dist WosUtil
+
       - name: Attach the Linux binary to the release
-        run: gh release upload "${{ github.ref_name }}" dist/WosUtil --clobber
+        run: gh release upload "${{ github.ref_name }}" dist/WosUtil dist/WosUtil-linux-x86_64.tar.gz --clobber
         env:
           GH_TOKEN: ${{ github.token }}

@@ -85,7 +85,7 @@ On Windows, download the latest `WosUtil.exe` from the [Releases](https://github
 
 For non-default emulator installations, open the Preferences tab, select the required folders or configuration file with the `Browse...` buttons, and click `Save Preferences`.
 
-On Linux there is no prebuilt executable yet: install it from source with the commands above and run `.venv/bin/python main.py` (or `.venv/bin/wosutil` after the editable install).
+On Linux, download `WosUtil-linux-x86_64.tar.gz` from the [Releases](https://github.com/marioocm/WosUtil/releases) page and extract it; the tarball preserves the executable permission. If you use the raw `WosUtil` asset instead, run `chmod +x WosUtil`. It needs the system WebKitGTK 4.1/PyGObject libraries (`python3-gi`, `gir1.2-webkit2-4.1`), `adb`, `gamescope` and the Waydroid setup described above. The source checkout remains the development option.
 
 ### Build the Linux executable
 
