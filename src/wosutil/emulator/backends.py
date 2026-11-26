@@ -76,6 +76,10 @@ EMULATOR_BLUESTACKS = "bluestacks"
 EMULATOR_LDPLAYER = "ldplayer"
 EMULATOR_WAYDROID = "waydroid"
 
+# Seconds between window-position saves while an instance is open, so a manual
+# close (titlebar X / Alt+F4) still remembers the last position.
+POSITION_SAVE_SECONDS = 15
+
 # Instance lifecycle polling. Emulators boot/close asynchronously, so both
 # operations confirm the result by polling their processes.
 POLL_SECONDS = 2
@@ -1185,6 +1189,8 @@ class WaydroidBackend(_ConfigBackend):
         if position is None:
             return False
         positions = self._window_positions()
+        if positions.get(instance["id"]) == position:
+            return True
         positions[instance["id"]] = {"x": position[0], "y": position[1]}
         return save_json_file(self.window_file, positions)
 
@@ -1234,6 +1240,23 @@ class WaydroidBackend(_ConfigBackend):
             time.sleep(POLL_SECONDS)
         return False
 
+    def _watch_session(self, instance_index, process):
+        """Save the window position and stop Android if the window is closed.
+
+        Runs for the whole session: while gamescope is alive it remembers the
+        current position (so closing the titlebar X still keeps the last one),
+        and when gamescope exits on its own it stops the Android session so it
+        never stays running without a window.
+        """
+        while process.poll() is None:
+            self._remember_window_position(instance_index)
+            time.sleep(POSITION_SAVE_SECONDS)
+        process.wait()
+        if not self._session_running(instance_index):
+            return
+        self.log(f"The window of instance {self._display_name(instance_index)} was closed; stopping its Android session.", "info")
+        self._graceful_stop(instance_index)
+
     def start_instance(self, instance_index):
         """Start Waydroid inside gamescope and wait for Android to boot.
 
@@ -1282,9 +1305,9 @@ class WaydroidBackend(_ConfigBackend):
             self.log(f"Could not launch instance {name}: {error}", "error")
             return False
 
-        # Reap the session process when it exits: the tool stays alive for
-        # hours and must not leave a zombie behind.
-        threading.Thread(target=process.wait, name=f"Waydroid-{instance_id}-reaper", daemon=True).start()
+        # Watch the session for its whole lifetime: keep the last window
+        # position and stop Android when the window is closed by the user.
+        threading.Thread(target=self._watch_session, args=(instance_index, process), name=f"Waydroid-{instance_id}-watch", daemon=True).start()
 
         self.log(f"Waiting for Android to boot on instance {name}...", "info")
         if not self._wait_until_booted(instance_index, process=process):

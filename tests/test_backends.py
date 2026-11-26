@@ -1014,6 +1014,7 @@ class TestWaydroidStart(unittest.TestCase):
             patch.object(backend, "_show_ui") as show_ui,
             patch.object(backend, "_place_window") as place_window,
             patch.object(backend, "_minimize_window") as minimize,
+            patch.object(backend, "_watch_session"),
             patch.object(backends, "start_minimized_enabled", return_value=False),
             patch.object(backends.subprocess, "Popen") as popen,
         ):
@@ -1037,6 +1038,34 @@ class TestWaydroidStart(unittest.TestCase):
         self.assertFalse(result)
         show_ui.assert_not_called()
         self.assertTrue(any("did not boot" in message for message, _level in logs))
+
+
+class TestWaydroidWatcher(unittest.TestCase):
+    """The session watcher keeps the position and reacts to a manual close."""
+
+    def test_watch_session_saves_the_position_and_stops_a_manual_close(self):
+        """Closing the titlebar X stops Android instead of leaving it headless."""
+        backend = waydroid_backend_helper(("default",))
+        process = Mock()
+        process.poll.side_effect = [None, None, 0]
+        with (
+            patch.object(backends.time, "sleep"),
+            patch.object(backend, "_remember_window_position") as remember,
+            patch.object(backend, "_session_running", return_value=True),
+            patch.object(backend, "_graceful_stop") as stop,
+        ):
+            backend._watch_session(0, process)
+        self.assertEqual(remember.call_count, 2)
+        stop.assert_called_once_with(0)
+
+    def test_watch_session_does_not_stop_an_already_ended_session(self):
+        """A normal session stop makes the watcher exit without a second stop."""
+        backend = waydroid_backend_helper(("default",))
+        process = Mock()
+        process.poll.return_value = 0
+        with patch.object(backend, "_session_running", return_value=False), patch.object(backend, "_graceful_stop") as stop:
+            backend._watch_session(0, process)
+        stop.assert_not_called()
 
 
 if __name__ == "__main__":
