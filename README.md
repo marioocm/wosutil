@@ -38,7 +38,7 @@ The project is open to any suggestion. Feel free to open an [issue](https://gith
 - 720p portrait resolution (`720x1280`) in every instance
 - Whiteout Survival installed and set to English (`com.gof.global`)
 
-The distributed `WosUtil.exe` bundles RapidOCR (PP-OCR models and ONNX Runtime), so nothing else needs to be installed.
+The distributed Windows executable bundles RapidOCR (PP-OCR models and ONNX Runtime), so nothing else needs to be installed.
 
 ### Linux with Waydroid
 
@@ -81,11 +81,18 @@ Closing the window also stops that instance's Android session.
 
 ## Installation
 
-On Windows, download the latest `WosUtil.exe` from the [Releases](https://github.com/marioocm/WosUtil/releases) page and run it. No installation required.
+Download the file for your platform from the [Releases](https://github.com/marioocm/WosUtil/releases) page:
+
+| Platform | File |
+| --- | --- |
+| Windows 10/11 (x64) | `WosUtil-Windows-x64.exe` |
+| Linux (x86_64) | `WosUtil-Linux-x86_64.tar.gz` |
+
+On Windows, run the `.exe`; no installation required.
 
 For non-default emulator installations, open the Preferences tab, select the required folders or configuration file with the `Browse...` buttons, and click `Save Preferences`.
 
-On Linux, download `WosUtil-linux-x86_64.tar.gz` from the [Releases](https://github.com/marioocm/WosUtil/releases) page and extract it; the tarball preserves the executable permission. If you use the raw `WosUtil` asset instead, run `chmod +x WosUtil`. It needs the system WebKitGTK 4.1/PyGObject libraries (`python3-gi`, `gir1.2-webkit2-4.1`), `adb`, `gamescope` and the Waydroid setup described above. The source checkout remains the development option.
+On Linux, extract the tarball (it preserves the executable permission) and run `WosUtil`. It needs the system WebKitGTK 4.1/PyGObject libraries (`python3-gi`, `gir1.2-webkit2-4.1`), `adb`, `gamescope` and the Waydroid setup described above. The source checkout remains the development option.
 
 ### Build the Linux executable
 
