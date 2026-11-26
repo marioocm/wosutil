@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from wosutil.ui.native_window import run_native_window
+from wosutil.ui.native_window import _preferred_gui, run_native_window
 
 
 class FakeWindow:
@@ -57,6 +57,22 @@ class NativeWindowTests(unittest.TestCase):
         self.assertTrue(fake.start.call_args.kwargs["debug"])
         self.assertFalse(fake.start.call_args.kwargs["private_mode"])
         self.assertTrue(Path(fake.start.call_args.kwargs["storage_path"]).is_dir())
+
+    def test_forces_gtk_when_available(self):
+        """An available WebKitGTK backend is passed to pywebview explicitly."""
+        fake = SimpleNamespace(create_window=MagicMock(return_value=FakeWindow()), start=MagicMock())
+        with (
+            patch.dict(sys.modules, {"webview": fake}),
+            patch("wosutil.ui.native_window.cache_dir", return_value=Path(self._temp.name)),
+            patch("wosutil.ui.native_window._preferred_gui", return_value="gtk"),
+        ):
+            self.assertTrue(run_native_window("http://127.0.0.1/", lambda: None))
+        self.assertEqual(fake.start.call_args.kwargs["gui"], "gtk")
+
+    def test_preferred_gui_is_none_off_linux(self):
+        """Other platforms keep pywebview's automatic backend choice."""
+        with patch("wosutil.ui.native_window.sys.platform", "win32"):
+            self.assertIsNone(_preferred_gui())
 
     def test_create_window_failure_falls_back(self):
         """A failed window creation returns False without starting the loop."""
